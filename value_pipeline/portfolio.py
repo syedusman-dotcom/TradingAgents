@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import csv
 import json
+import math
 import shutil
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime
@@ -75,9 +76,17 @@ class TradeError(ValueError):
     """A recorded trade that cannot have happened (more shares sold than held, ...)."""
 
 
+def _finite(**values: float) -> None:
+    """NaN slips through every comparison (nan > x is False), so it would pass the cash checks."""
+    for name, v in values.items():
+        if not math.isfinite(v):
+            raise TradeError(f"{name} must be a finite number, not {v}")
+
+
 def apply_buy(pf: Portfolio, ticker: str, shares: float, price: float, fees: float = 0.0,
               on: str | None = None, thesis: str = "", intrinsic_value: float | None = None) -> Position:
     ticker = ticker.upper()
+    _finite(shares=shares, price=price, fees=fees)
     if shares <= 0 or price <= 0 or fees < 0:
         raise TradeError("shares and price must be positive, fees not negative")
     cost = shares * price + fees
@@ -108,6 +117,7 @@ def apply_sell(pf: Portfolio, ticker: str, shares: float, price: float, fees: fl
     held = pf.position(ticker)
     if held is None:
         raise TradeError(f"no position in {ticker}")
+    _finite(shares=shares, price=price, fees=fees)
     if shares <= 0 or price <= 0 or fees < 0:
         raise TradeError("shares and price must be positive, fees not negative")
     if shares > held.shares + _DUST:
@@ -121,6 +131,7 @@ def apply_sell(pf: Portfolio, ticker: str, shares: float, price: float, fees: fl
 
 
 def apply_deposit(pf: Portfolio, amount: float, on: str | None = None) -> None:
+    _finite(amount=amount)
     if amount == 0:
         raise TradeError("amount must not be zero")
     if pf.cash + amount < -1e-6:

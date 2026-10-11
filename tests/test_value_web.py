@@ -18,6 +18,7 @@ def _client(tmp_path, **kw):
     kw.setdefault("price_fn", {"HRB": 44.0, "ADBE": 240.0}.get)
     kw.setdefault("series_fn", lambda p: [])
     kw.setdefault("benchmark_fn", lambda *a: None)
+    kw.setdefault("allowed_hosts", ("127.0.0.1", "localhost", "testserver"))
     app = create_app(paths, config_path=tmp_path / "config.yaml", **kw)
     return TestClient(app), app, paths
 
@@ -284,3 +285,43 @@ def test_settings_validate_and_back_up(tmp_path):
     r = _post(client, app, "/settings", text="review:\n  cost_per_run: 3.0\n")
     assert r.status_code == 303 and "3.0" in cfg.read_text()
     assert list(paths.backups.glob("config_*.yaml"))[0].read_text() == "review:\n  cost_per_run: 2.0\n"
+
+
+@pytest.mark.unit
+def test_forms_refuse_nan_and_inf(tmp_path):
+    client, app, paths = _client(tmp_path)
+    ops.init_portfolio(paths, 1000.0)
+    for field in ("shares", "fees", "price"):
+        data = {"ticker": "HRB", "shares": "1", "price": "44", "fees": "0", "date": "", "note": "", field: "nan"}
+        assert _post(client, app, "/trade/buy", **data).status_code == 400
+    assert _post(client, app, "/trade/deposit", amount="inf", date="").status_code == 400
+    assert pfmod.load(paths).cash == 1000.0
+
+
+@pytest.mark.unit
+def test_requests_for_another_host_name_are_refused(tmp_path):
+    """DNS rebinding: a hostile page whose name now points at 127.0.0.1 must not reach the site."""
+    client, app, paths = _client(tmp_path)
+    assert client.get("/", headers={"host": "evil.example"}).status_code == 400
+    assert client.get("/", headers={"host": "localhost:8765"}).status_code == 200
+
+
+@pytest.mark.unit
+def test_settings_refuse_a_config_that_would_break_reviews(tmp_path):
+    client, app, paths = _client(tmp_path)
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("review:\n  cost_per_run: 2.0\n")
+    r = _post(client, app, "/settings", text="review: 5\n")
+    assert r.status_code == 400 and cfg.read_text() == "review:\n  cost_per_run: 2.0\n"
+
+
+@pytest.mark.unit
+def test_jobs_left_running_by_a_stopped_server_show_as_interrupted(tmp_path):
+    from value_pipeline.web.jobs import JobRunner
+
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    (logs / "jobs.json").write_text(json.dumps([{"name": "job_1_review", "kind": "review", "started": "x",
+                                                 "ended": None, "status": "running", "message": "", "log": "x.log"}]))
+    job = JobRunner(logs).history()[0]
+    assert job["status"] == "interrupted" and "stopped" in job["message"]

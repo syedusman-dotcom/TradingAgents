@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import secrets
 from datetime import date, datetime
 from pathlib import Path
@@ -12,6 +13,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from markdown_it import MarkdownIt
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from value_pipeline import (
     benchmark,
@@ -21,7 +23,7 @@ from value_pipeline import (
     portfolio as pfmod,
     review as reviewmod,
 )
-from value_pipeline.config import CONFIG_PATH, Paths, load_config
+from value_pipeline.config import CONFIG_PATH, Paths, load_config, validate_config
 from value_pipeline.web import charts, views
 from value_pipeline.web.jobs import JobBusy, JobRunner
 
@@ -34,9 +36,12 @@ class FormError(ValueError):
 
 def parse_number(text, field: str) -> float:
     try:
-        return float(str(text).strip())
+        value = float(str(text).strip())
     except ValueError:
         raise FormError(f"{field}: '{text}' is not a number (use a dot for decimals, e.g. 1.5)") from None
+    if not math.isfinite(value):
+        raise FormError(f"{field}: '{text}' is not a usable number")
+    return value
 
 
 def _markdown(text: str) -> str:
@@ -60,8 +65,11 @@ def _default_job_funcs() -> dict:
 
 def create_app(paths: Paths, *, config_path: Path = CONFIG_PATH, price_fn=market_data.latest_price,
                series_fn=history.fetch_value_series, benchmark_fn=benchmark.compare, runner=None,
-               job_funcs: dict | None = None) -> FastAPI:
+               job_funcs: dict | None = None, allowed_hosts: tuple[str, ...] = ("127.0.0.1", "localhost")) -> FastAPI:
     app = FastAPI(title="Value pipeline", docs_url=None, redoc_url=None, openapi_url=None)
+    # A hostile page can point its own domain at 127.0.0.1 (DNS rebinding) and then read and
+    # post as if it were this site; it cannot make the browser send Host: 127.0.0.1.
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(allowed_hosts))
     app.state.paths, app.state.config_path = paths, config_path
     app.state.price_fn, app.state.series_fn, app.state.benchmark_fn = price_fn, series_fn, benchmark_fn
     app.state.runner = runner or JobRunner(paths.root / "logs")
@@ -275,7 +283,7 @@ def create_app(paths: Paths, *, config_path: Path = CONFIG_PATH, price_fn=market
             check = cfg_path.with_suffix(".yaml.check")
             check.write_text(text, encoding="utf-8")
             try:
-                load_config(check)
+                validate_config(load_config(check))
             finally:
                 check.unlink(missing_ok=True)
         except (yaml.YAMLError, ValueError, TypeError) as exc:

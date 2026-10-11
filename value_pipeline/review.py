@@ -243,7 +243,12 @@ def run(paths: Paths, cfg: dict, *, yes: bool = False, dry_run: bool = False,
 
 
 def _record_ratings(paths: Paths, pf: pfmod.Portfolio, actions, today: str) -> None:
-    """Store each holding's rating, review date, Underweight streak and value estimate."""
+    """Store each holding's rating, review date, Underweight streak and value estimate.
+
+    The portfolio is read again here, not reused from the start of the review: a
+    review can run for an hour, and a trade recorded meanwhile must survive.
+    """
+    pf = pfmod.load(paths)
     for a in actions:
         held = pf.position(a.ticker)
         if held is None:

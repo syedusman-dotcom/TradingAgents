@@ -58,6 +58,24 @@ def _merge(base: dict, override: dict) -> dict:
     return out
 
 
+def validate_config(cfg: dict) -> None:
+    """Raise ValueError when a section or value has the wrong shape for the pipeline to use."""
+    for section, defaults in DEFAULTS.items():
+        values = cfg.get(section)
+        if not isinstance(values, dict):
+            raise ValueError(f"'{section}' must be a section of settings, not {values!r}")
+        for key, default in defaults.items():
+            value = values.get(key)
+            if isinstance(default, bool):
+                ok = isinstance(value, bool)
+            elif isinstance(default, (int, float)):
+                ok = isinstance(value, (int, float)) and not isinstance(value, bool)
+            else:
+                ok = isinstance(value, type(default))
+            if not ok:
+                raise ValueError(f"{section}.{key} must be a {type(default).__name__}, not {value!r}")
+
+
 def load_config(path: Path | None = None) -> dict:
     path = path or CONFIG_PATH
     if path.exists():

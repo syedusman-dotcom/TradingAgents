@@ -117,7 +117,8 @@ def cmd_web(args, paths: Paths, cfg) -> None:
     from value_pipeline.web import create_app
 
     url = f"http://127.0.0.1:{args.port}"
-    console.print(f"Value pipeline website at {url} (this Mac only). Stop with Ctrl+C.")
+    console.print(f"Value pipeline website at {url} (this Mac only). Stop with Ctrl+C; "
+                  "that also stops a screen or review still running from the Run page.")
     if not args.no_browser:
         threading.Timer(1.0, webbrowser.open, (url,)).start()
     uvicorn.run(create_app(paths), host="127.0.0.1", port=args.port, log_level="warning")

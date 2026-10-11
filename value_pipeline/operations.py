@@ -103,8 +103,10 @@ def undo_last(paths: Paths) -> str:
     if info["fingerprint"] != _fingerprint(paths):
         raise UndoUnavailable("The portfolio changed since that entry (a review or another edit), "
                               "so undoing it would roll that back too. Record a correcting trade instead.")
-    pfmod.backup(paths)
     saved = Path(info["backup"])
+    if not (saved / paths.portfolio.name).exists():
+        raise UndoUnavailable(f"The backup this undo needs ({saved}) is gone, so nothing was changed.")
+    pfmod.backup(paths)
     for f in (paths.portfolio, paths.trades):
         if (saved / f.name).exists():
             shutil.copy2(saved / f.name, f)

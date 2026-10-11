@@ -115,3 +115,54 @@ def test_value_series_replays_cash_shares_and_the_spy_shadow():
     assert [round(x["portfolio"], 2) for x in s] == [1000.0, 1000.0, 1100.0]
     assert [round(x["spy"], 2) for x in s] == [1000.0, 1000.0, 1050.0]   # 500 of SPY at 100 -> 110
     assert s[0]["date"] == "2026-01-02"
+
+
+@pytest.mark.unit
+def test_review_ratings_do_not_wipe_a_trade_recorded_while_it_ran(paths):
+    """A review loads the portfolio at the start and stores ratings an hour later."""
+    from value_pipeline.actions import Action, Decision
+
+    ops.record_buy(paths, "HRB", 1, 44.0)
+    stale = pfmod.load(paths)                         # what the review loaded
+    ops.record_buy(paths, "ADBE", 0.5, 240.0)         # recorded on the website meanwhile
+    d = Decision("HRB", "Hold", price=44.0, held_shares=1, intrinsic_value=55.0)
+    review._record_ratings(paths, stale, [Action("HRB", True, "Hold", "KEEP", "", decision=d)], "2026-10-11")
+    pf = pfmod.load(paths)
+    assert pf.position("ADBE") is not None and pf.cash == pytest.approx(1000 - 44 - 120)
+    assert pf.position("HRB").last_rating == "Hold" and pf.position("HRB").intrinsic_value_estimate == 55.0
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("bad", [float("nan"), float("inf")])
+def test_trades_refuse_non_finite_numbers(paths, bad):
+    before = pfmod.load(paths).to_dict()
+    for trade in (lambda: ops.record_buy(paths, "HRB", bad, 44.0), lambda: ops.record_buy(paths, "HRB", 1, 44.0, fees=bad),
+                  lambda: ops.record_deposit(paths, bad)):
+        with pytest.raises(pfmod.TradeError):
+            trade()
+    assert pfmod.load(paths).to_dict() == before
+
+
+@pytest.mark.unit
+def test_undo_refuses_when_its_backup_is_gone(paths):
+    import shutil
+
+    ops.record_buy(paths, "HRB", 2, 44.0)
+    ops.record_buy(paths, "HRB", 1, 44.0)
+    shutil.rmtree(paths.backups)
+    with pytest.raises(ops.UndoUnavailable, match="backup"):
+        ops.undo_last(paths)
+    assert paths.portfolio.exists() and len(pfmod.read_trades(paths)) == 2
+
+
+@pytest.mark.unit
+def test_config_with_a_wrong_shape_is_rejected(tmp_path):
+    from value_pipeline.config import load_config, validate_config
+
+    for text in ("review: 5\n", "sizing:\n  max_position_weight: [1]\n", "screen:\n  top_n: ten\n"):
+        f = tmp_path / "c.yaml"
+        f.write_text(text)
+        with pytest.raises((ValueError, TypeError)):
+            validate_config(load_config(f))
+    f.write_text("review:\n  cost_per_run: 3\n")
+    validate_config(load_config(f))                    # an int where a float is expected is fine

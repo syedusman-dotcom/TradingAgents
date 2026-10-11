@@ -25,6 +25,17 @@ class JobRunner:
         self.log_dir = log_dir
         self._lock = threading.Lock()
         self._current: dict | None = None
+        self._mark_interrupted()
+
+    def _mark_interrupted(self) -> None:
+        """A job still 'running' in the index belonged to a server that was stopped mid-job."""
+        if not self._index.exists():
+            return
+        jobs = self._read()
+        for j in jobs:
+            if j["status"] == "running":
+                j.update(status="interrupted", message="the website was stopped while this job ran")
+        self._index.write_text(json.dumps(jobs, indent=1), encoding="utf-8")
 
     @property
     def _index(self) -> Path:
