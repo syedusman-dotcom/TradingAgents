@@ -1,5 +1,6 @@
 """The local website: pages, forms, files and jobs (no network, agents faked)."""
 
+import json
 from datetime import date
 
 import pytest
@@ -122,3 +123,54 @@ def test_trade_page_without_a_portfolio_offers_to_start_one(tmp_path):
     client, app, paths = _client(tmp_path)
     assert "Start your portfolio" in client.get("/trade").text
     assert "Start your portfolio" in client.get("/trades").text
+
+
+def _review(paths, folder, rows, actions="# Value review\n\n- Cost of this review: ~$4.00\n"):
+    d = paths.reports / folder
+    (d / "HRB").mkdir(parents=True)
+    (d / "HRB" / "complete_report.html").write_text("<p>HRB report</p>")
+    (d / "ACTIONS.html").write_text("<p>actions</p>")
+    (d / "ACTIONS.md").write_text(actions)
+    (d / "results.json").write_text(json.dumps(rows))
+
+
+ROW = {"ticker": "HRB", "rating": "Overweight", "intrinsic_value": 55.0, "margin_of_safety": 0.2,
+       "error": None, "report": "HRB/complete_report.html", "thesis": "t"}
+
+
+@pytest.mark.unit
+def test_reviews_list_and_report_files(tmp_path):
+    client, app, paths = _client(tmp_path)
+    ops.init_portfolio(paths, 1000.0)
+    _review(paths, "2026-10-11", [ROW])
+    _review(paths, "2026-10-11-2", [dict(ROW, rating="Hold")])
+    r = client.get("/reviews")
+    assert r.status_code == 200 and "$4.00" in r.text
+    assert r.text.index("/reports/2026-10-11-2/ACTIONS.html") < r.text.index("/reports/2026-10-11/ACTIONS.html")
+    assert client.get("/reports/2026-10-11/HRB/complete_report.html").text == "<p>HRB report</p>"
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("path", ["../portfolio.json", "2026-10-11/../../portfolio.json", "%2e%2e/portfolio.json",
+                                  "2026-10-11/missing.html"])
+def test_report_files_stay_inside_the_reports_folder(tmp_path, path):
+    client, app, paths = _client(tmp_path)
+    ops.init_portfolio(paths, 1000.0)
+    _review(paths, "2026-10-11", [ROW])
+    r = client.get(f"/reports/{path}")
+    assert r.status_code == 404 and '"cash"' not in r.text
+
+
+@pytest.mark.unit
+def test_stock_page_shows_rating_history_and_trades(tmp_path):
+    client, app, paths = _client(tmp_path)
+    ops.init_portfolio(paths, 1000.0)
+    ops.record_buy(paths, "HRB", 1, 44.0, on="2026-10-12")
+    _review(paths, "2026-10-11", [ROW])
+    _review(paths, "2026-11-07", [dict(ROW, rating="Hold", intrinsic_value=58.0)])
+    r = client.get("/stock/hrb")
+    assert r.status_code == 200
+    ratings = r.text[r.text.index("<h2>Ratings</h2>"):]
+    assert ratings.index("2026-11-07") < ratings.index("2026-10-11")    # newest first
+    assert "<svg" in r.text                                              # value-over-time chart
+    assert "Overweight" in r.text and "58.00" in r.text and "2026-10-12" in r.text

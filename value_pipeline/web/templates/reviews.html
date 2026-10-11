@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Reviews</h1>
+<div class="table"><table>
+<tr><th>Review</th><th>Cost</th><th>Ratings</th><th>Action list</th></tr>
+{% for r in reviews %}
+<tr><td>{{ r.folder }}</td><td>{{ r.cost or "–" }}</td>
+<td>{% for x in r.results %}<a href="/stock/{{ x.ticker }}">{{ x.ticker }}</a> {{ x.rating }}{% if x.report %} (<a href="/reports/{{ r.folder }}/{{ x.report }}">report</a>){% endif %}{% if not loop.last %} · {% endif %}{% endfor %}</td>
+<td><a href="/reports/{{ r.folder }}/ACTIONS.html">actions</a></td></tr>
+{% else %}<tr><td colspan="4" class="muted">No reviews yet. Start one from <a href="/run">Run</a>.</td></tr>{% endfor %}
+</table></div>
+{% endblock %}

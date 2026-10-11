@@ -8,7 +8,7 @@ from pathlib import Path
 from urllib.parse import quote_plus
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from markdown_it import MarkdownIt
 
@@ -155,5 +155,24 @@ def create_app(paths: Paths, *, config_path: Path = CONFIG_PATH, price_fn=market
         except ops.UndoUnavailable as exc:
             msg = str(exc)
         return RedirectResponse(f"/trades?msg={quote_plus(msg)}", status_code=303)
+
+    @app.get("/reviews", response_class=HTMLResponse)
+    def reviews(request: Request):
+        return render(request, "reviews.html", reviews=views.reviews_index(paths))
+
+    @app.get("/reports/{rel:path}")
+    def report_file(rel: str):
+        target = views.safe_report_path(paths, rel)
+        if target is None:
+            return HTMLResponse("Not found", status_code=404)
+        return FileResponse(target)
+
+    @app.get("/stock/{ticker}", response_class=HTMLResponse)
+    def stock(request: Request, ticker: str):
+        data = views.stock_history(paths, ticker)
+        valued = [r for r in reversed(data["reviews"]) if r.get("intrinsic_value")]
+        chart = charts.line_chart([r["folder"] for r in valued],
+                                  {"Intrinsic value": [r["intrinsic_value"] for r in valued]})
+        return render(request, "stock.html", data=data, chart=chart, price=app.state.price_fn(data["ticker"]))
 
     return app
