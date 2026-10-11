@@ -27,6 +27,7 @@ DEFAULTS: dict = {
     "review": {
         "candidates": 5,
         "analysts": ["market", "news", "fundamentals"],
+        "statement_vendor": "yfinance",
         "cost_per_run": 2.0,
         "max_cost_per_review": 40.0,
     },

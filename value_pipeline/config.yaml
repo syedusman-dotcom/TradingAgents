@@ -21,6 +21,9 @@ screen:
 review:
   candidates: 5            # top screen candidates (not held) to analyse each review
   analysts: [market, news, fundamentals]
+  # Financial statements for the agents. yfinance: ~5 years with every line (debt,
+  # interest, PP&E, buybacks, dividends). sec_edgar: ~20 years of top-line rows only.
+  statement_vendor: yfinance
   cost_per_run: 2.0        # USD per TradingAgents run, for the estimate
   max_cost_per_review: 40.0
 

@@ -41,11 +41,31 @@ class RunResult:
 
 # --- running the agents ---------------------------------------------------------
 
-def make_graph(analysts: list[str]):
+STATEMENT_TOOLS = ("get_income_statement", "get_balance_sheet", "get_cashflow")
+
+
+def graph_config(statement_vendor: str | None) -> dict:
+    """DEFAULT_CONFIG (with your .env), reading statements from ``statement_vendor``.
+
+    The default chain starts with SEC EDGAR: about 20 years, but only the top-line
+    rows (no debt, interest, PP&E, retained earnings, buybacks or dividends).
+    A review always analyses today, so Yahoo's fuller, shorter statements carry
+    no look-ahead risk and serve the F-Score, Z-Score and capital-allocation checks.
+    """
+    import copy
+
     from tradingagents.default_config import DEFAULT_CONFIG
+
+    cfg = copy.deepcopy(DEFAULT_CONFIG)
+    if statement_vendor:
+        cfg["tool_vendors"] = {**cfg.get("tool_vendors", {}), **dict.fromkeys(STATEMENT_TOOLS, statement_vendor)}
+    return cfg
+
+
+def make_graph(analysts: list[str], statement_vendor: str | None = None):
     from tradingagents.graph.trading_graph import TradingAgentsGraph
 
-    return TradingAgentsGraph(selected_analysts=tuple(analysts), config=DEFAULT_CONFIG.copy())
+    return TradingAgentsGraph(selected_analysts=tuple(analysts), config=graph_config(statement_vendor))
 
 
 def run_agents(ta, ticker: str, day: str, portfolio_ctx, out_dir: Path) -> RunResult:
@@ -135,7 +155,7 @@ def run(paths: Paths, cfg: dict, *, yes: bool = False, dry_run: bool = False,
     if dry_run:
         results = [fake_run(t, i, t in owned, prices[t]) for i, t in enumerate(tickers)]
     else:
-        ta = make_graph(rcfg["analysts"])
+        ta = make_graph(rcfg["analysts"], rcfg.get("statement_vendor"))
         print("Scoring past decisions (memory log)...")
         ta.settle_all_pending()
         ctx = pf.to_context()

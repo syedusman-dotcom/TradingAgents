@@ -80,6 +80,8 @@ The first screen of a week fetches every ticker (roughly 20-40 minutes); later r
 7. Writes `ACTIONS.md` and `ACTIONS.html` (one self-contained page that works on a phone) and prints the list.
 8. Updates each holding's `last_rating`, `last_review_date`, `consecutive_underweight` and `intrinsic_value_estimate` in `portfolio.json`. It does not touch positions or cash.
 
+The agents read financial statements from Yahoo (`review.statement_vendor`): about 5 years with every line (debt, interest, PP&E, buybacks, dividends). The repo's default, SEC EDGAR, has about 20 years but only top-line rows, and stays the default for the `tradingagents` CLI.
+
 The intrinsic value comes from the Portfolio Manager's **Price Target** field (its prompt asks for the per-share intrinsic value there), or else from an "intrinsic value … $X" phrase in the decision.
 
 `--dry-run` skips the agents and the memory log, uses made-up ratings, writes to `data/reports/<date>-dry-run/`, and leaves `portfolio.json` untouched.

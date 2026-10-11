@@ -366,3 +366,15 @@ def test_config_reads_numbers_yaml_leaves_as_strings(tmp_path):
     assert cfg["filters"]["min_market_cap"] == 2.0e9
     assert cfg["filters"]["min_fscore"] == 7
     assert cfg["filters"]["min_altman_z"] == DEFAULTS["filters"]["min_altman_z"]
+
+
+@pytest.mark.unit
+def test_review_reads_statements_from_the_configured_vendor_only():
+    from tradingagents.default_config import DEFAULT_CONFIG
+    from value_pipeline.review import STATEMENT_TOOLS, graph_config
+
+    cfg = graph_config("yfinance")
+    assert all(cfg["tool_vendors"][t] == "yfinance" for t in STATEMENT_TOOLS)
+    assert "get_insider_transactions" not in cfg["tool_vendors"]
+    assert DEFAULT_CONFIG["tool_vendors"].get("get_balance_sheet") is None   # the shared default is untouched
+    assert graph_config(None)["tool_vendors"] == DEFAULT_CONFIG["tool_vendors"]
