@@ -5,13 +5,21 @@ from __future__ import annotations
 import secrets
 from datetime import date
 from pathlib import Path
+from urllib.parse import quote_plus
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from markdown_it import MarkdownIt
 
-from value_pipeline import benchmark, history, market_data, operations as ops
+from value_pipeline import (
+    benchmark,
+    history,
+    market_data,
+    operations as ops,
+    portfolio as pfmod,
+    review as reviewmod,
+)
 from value_pipeline.config import CONFIG_PATH, Paths
 from value_pipeline.web import charts, views
 
@@ -76,5 +84,76 @@ def create_app(paths: Paths, *, config_path: Path = CONFIG_PATH, price_fn=market
         except (FormError, ops.PortfolioExists, ValueError) as exc:
             return render(request, "start.html", status=400, error=str(exc))
         return RedirectResponse("/?msg=Portfolio+started", status_code=303)
+
+    def trade_page(request: Request, status: int = 200, error: str | None = None,
+                   values: dict | None = None, posted: str | None = None):
+        if not paths.portfolio.exists():
+            return render(request, "start.html")
+        values = values or {}
+        pf = pfmod.load(paths)
+        ticker = (request.query_params.get("ticker") or values.get("ticker") or "").strip().upper()
+        info = None
+        if ticker:
+            info = {"ticker": ticker, "price": app.state.price_fn(ticker),
+                    "result": reviewmod.latest_result(paths, ticker), "position": pf.position(ticker)}
+        return render(request, "trade.html", status=status, error=error, pf=pf, info=info,
+                      values=values, posted=posted)
+
+    @app.get("/trade", response_class=HTMLResponse)
+    def trade(request: Request):
+        return trade_page(request)
+
+    @app.post("/trade/{kind}")
+    async def record(request: Request, kind: str):
+        form = await checked_form(request)
+        values = {k: str(v) for k, v in form.items() if k != "token"}
+        on = values.get("date") or None
+        try:
+            if on:
+                on = date.fromisoformat(on).isoformat()
+            if kind in ("buy", "sell"):
+                ticker = values.get("ticker", "").strip().upper()
+                if not ticker:
+                    raise FormError("Ticker is required")
+                shares = parse_number(values.get("shares", ""), "Shares")
+                price = parse_number(values.get("price", ""), "Price")
+                fees = parse_number(values.get("fees") or "0", "Fees")
+                note = values.get("note", "")
+                if kind == "buy":
+                    held, pf = ops.record_buy(paths, ticker, shares, price, fees, on=on, note=note)
+                    msg = f"Recorded: bought {shares:g} {ticker} @ {price:,.2f}. Now {held.shares:g} sh; cash {pf.cash:,.2f}"
+                else:
+                    gain, pf = ops.record_sell(paths, ticker, shares, price, fees, on=on, note=note)
+                    msg = f"Recorded: sold {shares:g} {ticker} @ {price:,.2f} (realised {gain:+,.2f}); cash {pf.cash:,.2f}"
+            elif kind == "deposit":
+                pf = ops.record_deposit(paths, parse_number(values.get("amount", ""), "Amount"), on=on)
+                msg = f"Recorded. Cash is now {pf.cash:,.2f}"
+            else:
+                return HTMLResponse("Unknown trade type", status_code=404)
+        except ValueError as exc:      # FormError, TradeError and a malformed date are all ValueErrors
+            return trade_page(request, status=400, error=str(exc), values=values, posted=kind)
+        return RedirectResponse(f"/trades?msg={quote_plus(msg)}", status_code=303)
+
+    @app.get("/trades", response_class=HTMLResponse)
+    def trades(request: Request):
+        if not paths.portfolio.exists():
+            return render(request, "start.html")
+        rows = pfmod.read_trades(paths)
+        entries = [{**t, "kind": t["action"], "gain": g, "amount": None}
+                   for t, g in zip(rows, ops.realised_gains(rows), strict=True)]
+        entries += [{"date": d["date"], "kind": "DEPOSIT" if float(d["amount"]) > 0 else "WITHDRAW",
+                     "ticker": "", "shares": "", "price": "", "fees": "", "note": "",
+                     "amount": abs(float(d["amount"])), "gain": None} for d in pfmod.load(paths).deposits]
+        entries.sort(key=lambda e: e["date"], reverse=True)
+        return render(request, "trades.html", entries=entries, undo=ops.undo_info(paths))
+
+    @app.post("/trades/undo")
+    async def undo(request: Request):
+        await checked_form(request)
+        try:
+            msg = f"Undone: {ops.undo_last(paths)}"
+        except ops.UndoUnavailable as exc:
+            msg = str(exc)
+        return RedirectResponse(f"/trades?msg={quote_plus(msg)}", status_code=303)
 
     return app
