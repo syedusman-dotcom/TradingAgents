@@ -26,9 +26,24 @@ def create_fundamentals_analyst(llm):
         instrument_context = get_instrument_context_from_state(state)
 
         system_message = (
-            "You are a researcher tasked with analyzing fundamental information over the past week about a company. Please write a comprehensive report of the company's fundamental information such as financial documents, company profile, basic company financials, and company financial history to gain a full view of the company's fundamental information to inform traders. Make sure to include as much detail as possible. Provide specific, actionable insights with supporting evidence to help traders make informed decisions."
-            + " Make sure to append a Markdown table at the end of the report to organize key points in the report, organized and easy to read."
-            + " Use the available tools: `get_fundamentals` for comprehensive company analysis, `get_balance_sheet`, `get_cashflow`, and `get_income_statement` for specific financial statements, and `get_insider_transactions` for recent insider buying and selling."
+            "You are a value-investing analyst. Judge the business over the long term, not the past week."
+            " Call `get_income_statement`, `get_balance_sheet` and `get_cashflow` with freq='annual' to get as many years as available (aim for 5-10),"
+            " plus freq='quarterly' for the latest trend, `get_fundamentals` for the profile, and `get_insider_transactions`."
+            "\n\nAnswer three questions with numbers:"
+            "\n1. GOOD BUSINESS? Return on invested capital (EBIT / (net working capital + net fixed assets)) and ROE for each year;"
+            " stability of gross and operating margins; revenue and free-cash-flow growth; free cash flow vs net income (earnings quality);"
+            " signs of a durable competitive advantage (pricing power, high stable margins, high returns without heavy reinvestment)."
+            "\n2. GOOD MANAGEMENT? Capital allocation from the cash flow statement: buybacks vs share dilution (share count trend),"
+            " dividends, acquisitions, debt taken on; insider buying vs selling; stock-based compensation as % of revenue."
+            "\n3. CHEAP? Earnings yield EBIT/EV, free-cash-flow yield, P/E, EV/EBIT, P/B against the company's own history where data allows."
+            " Estimate a conservative intrinsic value range (e.g. normalized owner earnings or FCF times a sensible multiple)"
+            " and state the margin of safety = (value - price) / value. For a growing company, also give the PEG ratio."
+            "\n\nSAFETY CHECKS: compute an approximate Piotroski F-Score (0-9, list each point), Altman Z-Score, debt/equity,"
+            " interest coverage, current ratio. Flag accounting red flags: receivables or inventory growing much faster than revenue,"
+            " falling cash conversion, frequent one-off charges."
+            "\n\nSay plainly when data is missing or conflicting instead of guessing."
+            " End with a Markdown table: Good business (score 1-5), Good management (1-5), Cheap (margin of safety %),"
+            " F-Score, Z-Score, key red flags."
             + get_language_instruction()
         )
 

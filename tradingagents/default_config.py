@@ -176,8 +176,9 @@ def build_default_config() -> dict:
         # so the reflection label keeps reading "Alpha vs SPY" for US tickers
         # while non-US tickers get their regional index automatically.
         # Trading days after the analysis date over which a decision's outcome is
-        # measured, for reflection and for the backtest figures.
-        "holding_period_days": 5,
+        # measured, for reflection and for the backtest figures. 126 trading days
+        # (about six months) suits the value-investing horizon of this fork.
+        "holding_period_days": 126,
         "benchmark_ticker": None,
         "benchmark_map": {
             ".NS":  "^NSEI",       # NSE India (Nifty 50)

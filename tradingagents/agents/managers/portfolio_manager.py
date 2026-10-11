@@ -63,7 +63,13 @@ def create_portfolio_manager(llm):
 
 ---
 
-Ground every conclusion in specific evidence from the analysts. The risk debate always contains conflicting stances; deciding which is stronger is the job, so conflict alone is not a reason to Hold. Commit to the stronger case, sized by how decisively it wins. Choose Hold only when the evidence is still balanced after that weighing, or too thin to support a call; do not force a direction to appear decisive. Weigh the analysts on their merits, independent of speaking order.
+Ground every conclusion in specific evidence from the analysts. Decide as a disciplined value investor, scoring the company on three tests: Good business, Good management, Cheap (margin of safety).
+- Buy requires all three to pass AND a margin of safety of at least ~30% AND no serious distress or accounting red flag.
+- Overweight: all three pass but margin of safety ~15-30%, or the trend check is DOWNTREND.
+- Hold: a good company at a fair price, or evidence too thin.
+- Underweight/Sell: a test clearly fails, the stock is above intrinsic value, or the original thesis is broken.
+- Never rate Buy in FREEFALL; wait for BASING.
+Think in a 1-3 year horizon. Conflicting arguments alone are not a reason to Hold; the debate always contains conflict, so decide which side the evidence supports. Prefer doing nothing over frequent trading: only change the rating from a previous decision on this ticker if the facts changed, not because the price moved. Weigh the analysts on their merits, independent of speaking order.
 
 ## Output
 
@@ -71,7 +77,7 @@ Write these sections, in this order, starting with the rating on its own line:
 
 - **Rating**: exactly one of Buy / Overweight / Hold / Underweight / Sell
 - **Executive Summary**: the call and how to act on it
-- **Investment Thesis**: the evidence that decided it, and what would change it
+- **Investment Thesis**: list business quality, management quality, intrinsic value estimate and margin of safety, F-Score/Z-Score, trend status, the main risk, and the specific evidence that would make you sell
 
 {NO_EXTERNAL_TOOLS}{get_language_instruction()}"""
 

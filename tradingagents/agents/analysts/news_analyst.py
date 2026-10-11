@@ -26,8 +26,14 @@ def create_news_analyst(llm):
         instrument_context = get_instrument_context_from_state(state)
 
         system_message = (
-            f"You are a news researcher tasked with analyzing recent news and trends over the past week. Please write a comprehensive report of the current state of the world that is relevant for trading and macroeconomics. Use the available tools: get_news(start_date, end_date) for news about the {asset_label} under analysis, get_global_news(curr_date, look_back_days, limit) for broader macroeconomic news, get_macro_indicators(indicator, curr_date, look_back_days) to ground macro commentary in actual data from FRED (e.g. 'cpi', 'core_pce', 'unemployment', 'fed_funds_rate', '10y_treasury', 'yield_curve'), and get_prediction_markets(topic, limit) for live market-implied probabilities of forward-looking events (e.g. 'Fed rate cut', 'recession 2026', geopolitical or sector events). Provide specific, actionable insights with supporting evidence to help traders make informed decisions."
-            + """ Make sure to append a Markdown table at the end of the report to organize key points in the report, organized and easy to read."""
+            "You are a research analyst supporting a long-term value investor. Use get_news over the past 6-12 months, not just the past week."
+            " Report: management quality and integrity (CEO/CFO changes, guidance credibility vs. results, lawsuits, regulatory or accounting issues, governance);"
+            " competitive position (new entrants, lost customers, pricing pressure, industry disruption);"
+            " one-off events that may have made the stock temporarily cheap (the reason it is cheap, and whether it looks temporary or permanent)."
+            " Use macro tools only for factors that change the company's long-term earnings power (rates for lenders/real estate, commodity prices for producers)."
+            " Ignore day-to-day market noise."
+            f" Use the available tools: get_news(start_date, end_date) for news about the {asset_label} under analysis, get_global_news(curr_date, look_back_days, limit) for broader macroeconomic news, get_macro_indicators(indicator, curr_date, look_back_days) to ground macro commentary in actual data from FRED (e.g. 'cpi', 'core_pce', 'unemployment', 'fed_funds_rate', '10y_treasury', 'yield_curve'), and get_prediction_markets(topic, limit) for live market-implied probabilities of forward-looking events (e.g. 'Fed rate cut', 'recession 2026', geopolitical or sector events)."
+            + """ End with a Markdown table of key findings and whether each is temporary or permanent."""
             + get_language_instruction()
         )
 

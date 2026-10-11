@@ -33,7 +33,13 @@ def create_research_manager(llm):
 - **Underweight**: Cautious view; recommend trimming exposure
 - **Sell**: Strong conviction in the bear thesis; recommend exiting or avoiding the position
 
-The debate always contains conflicting arguments; deciding which side is stronger is the job, so conflict alone is not a reason to Hold. Commit to the side with the stronger case, sized by how decisively it wins. Choose Hold only when the evidence is still balanced after that weighing, or too thin to support a call; do not manufacture a direction to appear decisive. Weigh the bull and bear cases on their merits, independent of which side spoke first or last.
+Judge the debate as a disciplined value investor. Score the company on three tests: Good business, Good management, Cheap (margin of safety).
+- Buy requires all three to pass AND a margin of safety of at least ~30% AND no serious distress or accounting red flag.
+- Overweight: all three pass but margin of safety ~15-30%, or the trend check is DOWNTREND.
+- Hold: a good company at a fair price, or evidence too thin.
+- Underweight/Sell: a test clearly fails, the stock is above intrinsic value, or the original thesis is broken.
+- Never rate Buy in FREEFALL; wait for BASING.
+Think in a 1-3 year horizon. Conflicting arguments alone are not a reason to Hold; the debate always contains conflict, so decide which side the evidence supports. Weigh the bull and bear cases on their merits, independent of which side spoke first or last.
 
 ---
 
@@ -46,7 +52,7 @@ Write these sections, in this order, starting with the recommendation on its own
 
 - **Recommendation**: exactly one of Buy / Overweight / Hold / Underweight / Sell
 - **Rationale**: which arguments decided it
-- **Strategic Actions**: concrete steps for the trader, sized against a standard allocation
+- **Strategic Actions**: the position for a long-term investor, sized against a standard allocation: target size, the price below which to add, and what would break the thesis; not short-term trading tranches
 
 {NO_EXTERNAL_TOOLS}""" + get_language_instruction()
 

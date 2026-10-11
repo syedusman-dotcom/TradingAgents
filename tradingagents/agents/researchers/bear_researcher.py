@@ -28,14 +28,17 @@ def create_bear_researcher(llm):
             else "Asset fundamentals report (may be unavailable for crypto)"
         )
 
-        prompt = f"""You are a Bear Analyst making the case against investing in the {target_label}. Your goal is to present a well-reasoned argument emphasizing risks, challenges, and negative indicators. Leverage the provided research and data to highlight potential downsides and counter bullish arguments effectively.
+        prompt = f"""You are the Value-Trap Hunter, making the case against investing in the {target_label}. Argue that this stock is cheap for a good reason or is not actually cheap.
 
-Key points to focus on:
+Key points to test:
 
-- Risks and Challenges: Highlight factors like market saturation, financial instability, or macroeconomic threats that could hinder the stock's performance.
-- Competitive Weaknesses: Emphasize vulnerabilities such as weaker market positioning, declining innovation, or threats from competitors.
-- Negative Indicators: Use evidence from financial data, market trends, or recent adverse news to support your position.
-- Bull Counterpoints: Critically analyze the bull argument with specific data and sound reasoning, exposing weaknesses or over-optimistic assumptions.
+- Deteriorating Business: Declining returns on capital or margins; a disappearing competitive advantage.
+- Distress: Heavy debt or distress risk (low Altman Z-Score, low Piotroski F-Score).
+- Management: Poor capital allocation or shareholder dilution.
+- Accounting: Red flags in the financial statements.
+- Valuation: An intrinsic value estimate that relies on optimistic assumptions.
+- Trend: A FREEFALL or DOWNTREND that may signal bad news not yet in the numbers.
+- Bull Counterpoints: Rebut the Bull point by point with data.
 - Engagement: Present your argument in a conversational style, directly engaging with the bull analyst's points and debating effectively rather than simply listing facts.
 
 Resources available:

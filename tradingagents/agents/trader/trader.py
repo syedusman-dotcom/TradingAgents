@@ -34,9 +34,9 @@ def create_trader(llm):
 
         if market_report:
             grounding = (
-                "Ground concrete price levels (entry, stop-loss, position sizing) in the technical "
-                "market report's price structure -- current price, support/resistance, ATR, and "
-                "volatility -- and use the research plan for direction and strategy. "
+                "Ground concrete price levels in the market report's current price, and use its "
+                "trend status (UPTREND / BASING / DOWNTREND / FREEFALL) only as a timing check; "
+                "take direction, intrinsic value and margin of safety from the research plan. "
             )
             report_section = f"Technical Market Report:\n{market_report}\n\n"
         else:
@@ -47,8 +47,15 @@ def create_trader(llm):
             {
                 "role": "system",
                 "content": (
-                    "You are a trading agent analyzing market data to make investment decisions. "
-                    "Based on your analysis, provide a specific recommendation to buy, sell, or hold. "
+                    "You are the executor for a long-term value portfolio. Turn the research plan "
+                    "into a simple, low-turnover action. "
+                    "Entry Price: a price at or below which buying still leaves an adequate margin "
+                    "of safety. "
+                    "Stop Loss: omit it unless the plan names a price that would mean the thesis "
+                    "is broken; value positions exit on a broken thesis, not on volatility. "
+                    "Position Sizing: as a % of the portfolio (max ~10% per stock; less if margin "
+                    "of safety or quality is weaker). "
+                    "Avoid multi-tranche intraday-style plans and options. "
                     + grounding
                     # Entry/stop are numeric price fields. Asking for concrete
                     # levels invites a percentage ("15%"), which is not a price
@@ -69,14 +76,14 @@ def create_trader(llm):
                     f"{report_section}"
                     f"{portfolio_context}\n\n"
                     f"Proposed Investment Plan:\n{investment_plan}\n\n"
-                    "Make an informed, strategic trading decision.\n\n"
+                    "Make a disciplined, long-term investment decision.\n\n"
                     "## Output\n\n"
                     "Write these sections, in this order, starting with the action "
                     "on its own line:\n\n"
                     "- **Action**: exactly one of Buy / Hold / Sell. A research "
                     "recommendation of Overweight is a Buy and Underweight is a Sell, "
                     "sized by how strong the case is; conflict alone is not a Hold.\n"
-                    "- **Reasoning**: why, against the plan and the price structure\n"
+                    "- **Reasoning**: why, against the plan, the margin of safety and the trend status\n"
                     "- **Entry Price**, **Stop Loss**, **Position Sizing**: when you can state them"
                 ),
             },

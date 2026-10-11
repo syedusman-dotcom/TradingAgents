@@ -311,7 +311,8 @@ def test_past_decisions_settle_alongside_the_analysts(tmp_path, monkeypatch, off
     from tradingagents.memory import settlement
 
     model = TimedModel()
-    graph = _graph(tmp_path, monkeypatch, model)
+    # The fake closes span 10 trading days, so measure over 5 rather than the default.
+    graph = _graph(tmp_path, monkeypatch, model, holding_period_days=5)
     graph.memory_log.store_decision("NVDA", "2026-01-02", "Rating: Buy\n\nBuy NVDA.")
     closes = pd.Series([100.0 + i for i in range(10)], index=pd.bdate_range("2026-01-02", periods=10))
     monkeypatch.setattr(settlement, "get_closes", lambda *a, **k: closes)
@@ -354,7 +355,7 @@ def test_the_run_settles_other_tickers_due_decisions_too(tmp_path, monkeypatch, 
     """A ticker a scheduler stopped analysing still gets its decisions settled (#1445)."""
     from tradingagents.memory import settlement
 
-    graph = _graph(tmp_path, monkeypatch, ScriptedModel(structured=True))
+    graph = _graph(tmp_path, monkeypatch, ScriptedModel(structured=True), holding_period_days=5)
     graph.memory_log.store_decision("MSFT", "2026-01-02", "Rating: Buy\n\nBuy MSFT.")
     closes = pd.Series([100.0 + i for i in range(10)], index=pd.bdate_range("2026-01-02", periods=10))
     monkeypatch.setattr(settlement, "get_closes", lambda *a, **k: closes)
@@ -371,7 +372,7 @@ def test_the_memory_step_reads_lessons_as_of_the_trade_date_and_settles_once(tmp
     that re-runs the step settles nothing twice."""
     from tradingagents.memory import settlement
 
-    graph = _graph(tmp_path, monkeypatch, ScriptedModel(structured=True))
+    graph = _graph(tmp_path, monkeypatch, ScriptedModel(structured=True), holding_period_days=5)
     graph.memory_log.store_decision("NVDA", "2026-01-02", "Rating: Buy\n\nBuy NVDA.")
     closes = pd.Series([100.0 + i for i in range(10)], index=pd.bdate_range("2026-01-02", periods=10))
     monkeypatch.setattr(settlement, "get_closes", lambda *a, **k: closes)
