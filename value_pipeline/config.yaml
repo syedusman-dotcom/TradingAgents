@@ -1,0 +1,31 @@
+# Value pipeline settings. Every key is optional; missing keys fall back to the
+# defaults in value_pipeline/config.py.
+
+universe:
+  indexes: [sp500, sp400]
+  # The screen's metrics (EBIT/EV, ROIC, Z-Score) don't describe these businesses.
+  exclude_sectors: [Financials, Real Estate, Utilities]
+
+filters:
+  min_market_cap: 2000000000   # USD
+  min_fscore: 6
+  min_altman_z: 1.8
+  require_positive_fcf: true
+  min_interest_coverage: 4
+
+screen:
+  top_n: 10
+  cache_days: 7
+  throttle_seconds: 0.3   # pause between tickers, to stay polite to Yahoo
+
+review:
+  candidates: 5            # top screen candidates (not held) to analyse each review
+  analysts: [market, news, fundamentals]
+  cost_per_run: 2.0        # USD per TradingAgents run, for the estimate
+  max_cost_per_review: 40.0
+
+sizing:
+  max_position_weight: 0.10   # never target more than 10% of the portfolio per stock
+  min_holdings: 5             # equal weight assumes at least this many holdings
+  overweight_size_factor: 0.5 # Overweight gets half the target size
+  min_trade_amount: 25        # don't suggest buys smaller than this (USD)

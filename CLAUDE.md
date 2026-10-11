@@ -4,6 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Fork of TauricResearch/TradingAgents (LangGraph multi-agent trading pipeline). Work targets the fork (`origin`); do not open PRs or push to `upstream`.
 
+- The agent prompts are rewritten for long-term quality value investing (see `VALUE_INVESTING.md`). When editing prompts, keep the output section labels, the five rating words, f-string variables and `get_language_instruction()`; parsers and tests depend on them.
+- `value_pipeline/` is a personal monthly screen → review → action-list tool on top of the graph (see its README). Run it with `uv run python -m value_pipeline <command>`. It must never place trades. `value_pipeline/data/` holds real holdings and is gitignored; use `--data-dir` with a scratch folder when testing.
+
 ## Setup and commands
 
 - Dev env: `python -m venv .venv && source .venv/bin/activate && pip install -e ".[dev]"` (Python >=3.11; CI tests 3.11–3.14).
