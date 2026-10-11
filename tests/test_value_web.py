@@ -1,6 +1,8 @@
 """The local website: pages, forms, files and jobs (no network, agents faked)."""
 
 import json
+import threading
+import time
 from datetime import date
 
 import pytest
@@ -193,3 +195,77 @@ def test_screen_page_shows_the_latest_screen(tmp_path):
     for text in ("2026-10-11", "HRB", "50%", "XYZ", "F-Score", "JPM", "no annual statements", "Industrials"):
         assert text in r.text, text
     assert r.text.index("HRB") < r.text.index("XYZ")          # ranked first, unranked last
+
+
+def _wait(runner):
+    for _ in range(200):
+        if runner.current() is None:
+            return
+        time.sleep(0.02)
+    raise AssertionError("job did not finish")
+
+
+@pytest.mark.unit
+def test_job_runner_runs_one_job_at_a_time_and_logs_output(tmp_path):
+    from value_pipeline.web.jobs import JobBusy, JobRunner
+
+    runner = JobRunner(tmp_path / "logs")
+    release = threading.Event()
+
+    def slow():
+        print("working on it")
+        release.wait(5)
+
+    job = runner.start("screen", slow)
+    with pytest.raises(JobBusy):
+        runner.start("watch", lambda: None)
+    release.set()
+    _wait(runner)
+    done = runner.history()[0]
+    assert done["name"] == job["name"] and done["status"] == "done"
+    assert "working on it" in runner.log_text(done["name"])
+    assert runner.log_text("../jobs") is None
+
+
+@pytest.mark.unit
+def test_failed_job_keeps_its_message(tmp_path):
+    from value_pipeline.web.jobs import JobRunner
+
+    runner = JobRunner(tmp_path / "logs")
+
+    def boom():
+        raise SystemExit("Estimated cost $50.00 exceeds max_cost_per_review $40.00")
+
+    runner.start("review", boom)
+    _wait(runner)
+    assert runner.history()[0]["status"] == "failed"
+    assert "exceeds" in runner.history()[0]["message"]
+
+
+@pytest.mark.unit
+def test_review_needs_a_confirmed_preview(tmp_path):
+    calls = []
+    client, app, paths = _client(tmp_path, job_funcs={"review": lambda paths, cfg, **kw: calls.append(kw)})
+    ops.init_portfolio(paths, 1000.0)
+    r = client.post("/run/preview", data={"kind": "review", "tickers": "hog, ingr", "token": app.state.token})
+    assert r.status_code == 200 and "2 runs" in r.text and "$4.00" in r.text and "HOG, INGR" in r.text
+    assert calls == []
+    r = _post(client, app, "/run/start", kind="review", tickers="HOG,INGR")          # not confirmed
+    assert r.status_code == 303 and calls == []
+    r = _post(client, app, "/run/start", kind="review", tickers="HOG,INGR", confirm="yes")
+    assert r.status_code == 303
+    _wait(app.state.runner)
+    assert calls == [{"only": ["HOG", "INGR"], "dry_run": False}]
+    assert client.get("/run").status_code == 200
+
+
+@pytest.mark.unit
+def test_review_over_the_cost_cap_cannot_be_started(tmp_path):
+    calls = []
+    client, app, paths = _client(tmp_path, job_funcs={"review": lambda paths, cfg, **kw: calls.append(kw)})
+    ops.init_portfolio(paths, 1000.0)
+    many = ",".join(f"T{i}" for i in range(30))       # 30 x $2 > $40
+    r = client.post("/run/preview", data={"kind": "review", "tickers": many, "token": app.state.token})
+    assert "exceeds" in r.text and 'name="confirm"' not in r.text
+    r = _post(client, app, "/run/start", kind="review", tickers=many, confirm="yes")
+    assert r.status_code == 303 and "exceeds" in r.headers["location"].replace("+", " ") and calls == []

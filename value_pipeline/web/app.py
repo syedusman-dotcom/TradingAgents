@@ -20,8 +20,9 @@ from value_pipeline import (
     portfolio as pfmod,
     review as reviewmod,
 )
-from value_pipeline.config import CONFIG_PATH, Paths
+from value_pipeline.config import CONFIG_PATH, Paths, load_config
 from value_pipeline.web import charts, views
+from value_pipeline.web.jobs import JobBusy, JobRunner
 
 TEMPLATES = Path(__file__).parent / "templates"
 
@@ -41,12 +42,29 @@ def _markdown(text: str) -> str:
     return MarkdownIt("commonmark", {"html": False}).enable("table").render(text)
 
 
+def _default_job_funcs() -> dict:
+    """What each Run-page button runs: the same functions as the commands."""
+    from value_pipeline import screener, watch
+
+    def owned(paths: Paths) -> set[str]:
+        return {p.ticker for p in pfmod.load(paths).positions} if paths.portfolio.exists() else set()
+
+    return {
+        "screen": lambda paths, cfg, **kw: screener.run(paths, cfg, owned(paths)),
+        "review": lambda paths, cfg, only=None, dry_run=False: reviewmod.run(
+            paths, cfg, yes=True, dry_run=dry_run, only=only),
+        "watch": lambda paths, cfg, **kw: watch.run(paths, cfg, notify=False),
+    }
+
+
 def create_app(paths: Paths, *, config_path: Path = CONFIG_PATH, price_fn=market_data.latest_price,
-               series_fn=history.fetch_value_series, benchmark_fn=benchmark.compare, runner=None) -> FastAPI:
+               series_fn=history.fetch_value_series, benchmark_fn=benchmark.compare, runner=None,
+               job_funcs: dict | None = None) -> FastAPI:
     app = FastAPI(title="Value pipeline", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.paths, app.state.config_path = paths, config_path
     app.state.price_fn, app.state.series_fn, app.state.benchmark_fn = price_fn, series_fn, benchmark_fn
-    app.state.runner = runner
+    app.state.runner = runner or JobRunner(paths.root / "logs")
+    app.state.job_funcs = job_funcs or _default_job_funcs()
     app.state.token = secrets.token_urlsafe(24)
     templates = Jinja2Templates(directory=str(TEMPLATES))
     templates.env.filters["markdown"] = _markdown
@@ -178,5 +196,64 @@ def create_app(paths: Paths, *, config_path: Path = CONFIG_PATH, price_fn=market
     @app.get("/screen", response_class=HTMLResponse)
     def screen(request: Request):
         return render(request, "screen.html", screen=views.screen_table(paths))
+
+    def tickers_from(form) -> list[str] | None:
+        raw = str(form.get("tickers") or "")
+        names = [t.strip().upper() for t in raw.replace(" ", ",").split(",") if t.strip()]
+        return names or None
+
+    @app.get("/run", response_class=HTMLResponse)
+    def run_page(request: Request):
+        return render(request, "run.html", current=app.state.runner.current(), jobs=app.state.runner.history())
+
+    @app.get("/run/status")
+    def run_status():
+        from fastapi.responses import JSONResponse
+
+        cur = app.state.runner.current()
+        log = app.state.runner.log_text(cur["name"]) if cur else None
+        return JSONResponse({"current": cur, "log_tail": (log or "")[-6000:]})
+
+    @app.get("/run/log/{name}", response_class=HTMLResponse)
+    def run_log(request: Request, name: str):
+        text = app.state.runner.log_text(name)
+        if text is None:
+            return HTMLResponse("Not found", status_code=404)
+        return render(request, "run.html", current=None, jobs=app.state.runner.history(), log=text)
+
+    @app.post("/run/preview", response_class=HTMLResponse)
+    async def run_preview(request: Request):
+        form = await checked_form(request)
+        if not paths.portfolio.exists():
+            return render(request, "start.html")
+        only = tickers_from(form)
+        plan = reviewmod.preview(paths, load_config(app.state.config_path), only)
+        return render(request, "run_preview.html", plan=plan, tickers=",".join(only or []),
+                      dry_run=form.get("dry_run") == "yes")
+
+    @app.post("/run/start")
+    async def run_start(request: Request):
+        form = await checked_form(request)
+        kind = str(form.get("kind"))
+        func = app.state.job_funcs.get(kind)
+        if func is None:
+            return HTMLResponse("Unknown job", status_code=404)
+        cfg = load_config(app.state.config_path)
+        kw = {}
+        if kind == "review":
+            if form.get("confirm") != "yes":
+                return RedirectResponse("/run?msg=Preview+and+confirm+the+review+first", status_code=303)
+            only, dry = tickers_from(form), form.get("dry_run") == "yes"
+            plan = reviewmod.preview(paths, cfg, only)
+            if plan["blocked"] and not dry:
+                msg = (f"Estimated cost ${plan['estimate']:,.2f} exceeds max_cost_per_review "
+                       f"${plan['limit']:,.2f}; nothing was started")
+                return RedirectResponse(f"/run?msg={quote_plus(msg)}", status_code=303)
+            kw = {"only": only, "dry_run": dry}
+        try:
+            app.state.runner.start(kind, lambda: func(paths, cfg, **kw))
+        except JobBusy as exc:
+            return RedirectResponse(f"/run?msg={quote_plus(str(exc))}", status_code=303)
+        return RedirectResponse(f"/run?msg={quote_plus(kind.capitalize() + ' started')}", status_code=303)
 
     return app

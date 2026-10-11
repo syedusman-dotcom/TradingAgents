@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Review preview{% if dry_run %} (dry run){% endif %}</h1>
+<p><b>{{ plan.tickers | length }} runs</b> ({{ plan.n_held }} holdings + {{ plan.n_new }} candidates): {{ plan.tickers | join(", ") or "none" }}</p>
+<p>Estimated cost: <b>${{ "{:,.2f}".format(0 if dry_run else plan.estimate) }}</b>
+  <span class="muted">(${{ "{:,.2f}".format(plan.cost_per_run) }}/run, limit ${{ "{:,.2f}".format(plan.limit) }})</span></p>
+{% if not plan.tickers %}
+<p class="error">Nothing to review: no holdings and no screen candidates. Run a screen first.</p>
+{% elif plan.blocked and not dry_run %}
+<p class="error">${{ "{:,.2f}".format(plan.estimate) }} exceeds max_cost_per_review (${{ "{:,.2f}".format(plan.limit) }}). Name fewer tickers or raise the limit in <a href="/settings">Settings</a>.</p>
+{% else %}
+<form method="post" action="/run/start"><input type="hidden" name="token" value="{{ token }}">
+  <input type="hidden" name="kind" value="review"><input type="hidden" name="tickers" value="{{ tickers }}">
+  {% if dry_run %}<input type="hidden" name="dry_run" value="yes">{% endif %}
+  <input type="hidden" name="confirm" value="yes">
+  <button>Start the review</button> <a href="/run">Cancel</a></form>
+{% endif %}
+{% endblock %}

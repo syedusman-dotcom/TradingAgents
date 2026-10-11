@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Run</h1>
+<fieldset><legend>Start a job</legend>
+<form method="post" action="/run/start" class="inline"><input type="hidden" name="token" value="{{ token }}"><input type="hidden" name="kind" value="screen"><button>Run screen</button></form>
+<span class="muted">about 25 min the first time each week, then minutes</span>
+<hr style="border:0; border-top:1px solid var(--line); margin:12px 0">
+<form method="post" action="/run/preview"><input type="hidden" name="token" value="{{ token }}"><input type="hidden" name="kind" value="review">
+  <label>Tickers (optional, e.g. HOG, INGR) <input name="tickers" size="24"></label>
+  <label><input type="checkbox" name="dry_run" value="yes"> Dry run (fake ratings, free)</label>
+  <button>Preview review…</button></form>
+<span class="muted">No tickers: every holding plus the top screen candidates. You confirm the cost before anything runs.</span>
+<hr style="border:0; border-top:1px solid var(--line); margin:12px 0">
+<form method="post" action="/run/start" class="inline"><input type="hidden" name="token" value="{{ token }}"><input type="hidden" name="kind" value="watch"><button class="secondary">Run weekly watch</button></form>
+<span class="muted">prices only, free</span>
+</fieldset>
+<h2>Current job</h2>
+{% if current %}<p><b>{{ current.kind }}</b> running since {{ current.started }}. It keeps running if you close this page.</p>{% else %}<p class="muted">Nothing running.</p>{% endif %}
+<pre class="log" id="log" {% if not current and not log %}hidden{% endif %}>{{ log or "" }}</pre>
+<h2>Recent jobs</h2>
+<div class="table"><table><tr><th>Started</th><th>Job</th><th>Status</th><th>Message</th><th>Log</th></tr>
+{% for j in jobs %}<tr><td>{{ j.started }}</td><td>{{ j.kind }}</td><td class="{{ 'bad' if j.status == 'failed' }}">{{ j.status }}</td><td>{{ j.message }}</td><td><a href="/run/log/{{ j.name }}">log</a></td></tr>
+{% else %}<tr><td colspan="5" class="muted">No jobs yet.</td></tr>{% endfor %}</table></div>
+{% if current %}
+<script>
+(async function poll() {
+  const r = await fetch("/run/status"); const s = await r.json();
+  const log = document.getElementById("log"); log.hidden = false; log.textContent = s.log_tail; log.scrollTop = log.scrollHeight;
+  if (s.current) { setTimeout(poll, 3000); } else { location.href = "/run?msg=Job+finished"; }
+})();
+</script>
+{% endif %}
+{% endblock %}
