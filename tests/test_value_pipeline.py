@@ -468,3 +468,11 @@ def test_review_folders_newest_first_without_dry_runs(tmp_path):
         (paths.reports / name).mkdir(parents=True)
     (paths.reports / "watch_2026-10-17.md").write_text("x")
     assert [f.name for f in review_dirs(paths)] == ["2026-10-11-10", "2026-10-11-2", "2026-10-11", "2026-09-05"]
+
+
+@pytest.mark.unit
+def test_labelled_margin_of_safety_beats_a_threshold_in_prose():
+    text = ("A ~20% margin of safety, not 30%+, so Overweight.\\n\\n"
+            "**Investment Thesis**: ... Margin of safety: 20% at $44 ...")
+    assert parse.margin_of_safety(text) == pytest.approx(0.20)
+    assert parse.margin_of_safety("a margin of safety near 25% here") == pytest.approx(0.25)

@@ -32,9 +32,17 @@ def intrinsic_value(decision: str) -> float | None:
 
 
 def margin_of_safety(decision: str) -> float | None:
-    """'Margin of safety: 32%' as 0.32."""
-    m = re.search(r"margin of safety[^%\d\n-]{0,40}(-?\d+(?:\.\d+)?)\s*%", decision, re.I)
-    return float(m.group(1)) / 100 if m else None
+    """'Margin of safety: 32%' as 0.32.
+
+    The labelled form the Portfolio Manager is asked for wins; a looser phrase is
+    the fallback, since prose also mentions thresholds ("a margin of safety, not 30%+").
+    """
+    for pattern in (r"margin of safety\s*[:=]\s*\**\s*(-?\d+(?:\.\d+)?)\s*%",
+                    r"margin of safety[^%\d\n-]{0,40}(-?\d+(?:\.\d+)?)\s*%"):
+        m = re.search(pattern, decision, re.I)
+        if m:
+            return float(m.group(1)) / 100
+    return None
 
 
 def thesis_summary(decision: str, limit: int = 300) -> str:
