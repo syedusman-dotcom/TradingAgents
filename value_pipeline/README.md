@@ -26,6 +26,18 @@ uv run python -m value_pipeline buy ABC 2.5 140.20 --fees 1
 uv run python -m value_pipeline status
 ```
 
+## Website
+
+`uv run python -m value_pipeline web` opens http://127.0.0.1:8765. It does everything the commands do, on the same files, so the two always agree. It never trades, and it can only be reached from this Mac.
+
+- **Dashboard**: value, cash, return vs SPY with a chart, holdings, the latest weekly watch, the next review date.
+- **Trade**: record buys, sells and deposits; looking up a ticker shows its price and last rating.
+- **History**: every trade and deposit with realised gains, and undo for the last entry. Undo is refused once something else, such as a review, has changed the files since.
+- **Reviews** and **Stock**: past reviews and agent reports, and each ticker's ratings and values over time.
+- **Screen**: the latest screen, sortable and filterable.
+- **Run**: start a screen, a review or a watch. A review shows its run count and cost first and starts only when you confirm. One job runs at a time, and it keeps running if you close the page.
+- **Settings**: edit `config.yaml`, validated and backed up on every save.
+
 ## Commands
 
 | Command | What it does |
@@ -35,6 +47,7 @@ uv run python -m value_pipeline status
 | `buy TICKER SHARES PRICE [--fees X] [--date D] [--note T]` | Record a buy: updates shares, average price (fees included) and cash; appends to `trades.csv`. Fractional shares work. A new position takes its thesis and intrinsic value from the latest review of that ticker. |
 | `sell TICKER SHARES PRICE [--fees X] [--date D] [--note T]` | Record a sale and print the realised gain. Selling everything closes the position. |
 | `status` | Each holding's price, value, gain, weight, last rating and days held; total value and return vs SPY. |
+| `web [--port 8765] [--no-browser]` | Open the local website (this Mac only): dashboard, trades, history with undo, reviews and reports, stock pages, the screen, running jobs and settings. Stop with Ctrl+C. |
 | `screen [--top N]` | Rank the universe; writes `data/screens/screen_YYYY-MM-DD.csv`. |
 | `review [--yes] [--dry-run] [--candidates N]` | Run the agents and write the action list. |
 | `run-all [--yes] [--dry-run]` | `screen`, then `review`. |
