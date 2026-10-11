@@ -131,6 +131,40 @@ def get_value_metrics(
 
 
 @tool
+def get_financial_history(
+    ticker: Annotated[str, InjectedState("company_of_interest")],
+    curr_date: Annotated[str, "current date you are trading at, yyyy-mm-dd"],
+    trade_date: Annotated[str, InjectedState("trade_date")] = "",
+) -> str:
+    """
+    Retrieve up to about 20 years of annual income statement, balance sheet and cash flow
+    figures as filed with the SEC (top-line rows only), for the full-cycle record.
+    Args:
+        curr_date (str): Current date you are trading at, yyyy-mm-dd
+    Returns:
+        str: The three annual statements as CSV tables
+    """
+    return route_to_vendor("get_financial_history", ticker, as_of(curr_date, trade_date))
+
+
+@tool
+def get_annual_report(
+    ticker: Annotated[str, InjectedState("company_of_interest")],
+    curr_date: Annotated[str, "current date you are trading at, yyyy-mm-dd"],
+    trade_date: Annotated[str, InjectedState("trade_date")] = "",
+) -> str:
+    """
+    Retrieve the risk factors (Item 1A) and management's discussion and analysis (Item 7)
+    from the latest annual report (10-K) filed by the current date.
+    Args:
+        curr_date (str): Current date you are trading at, yyyy-mm-dd
+    Returns:
+        str: The two sections, each cut to a manageable length
+    """
+    return route_to_vendor("get_annual_report", ticker, as_of(curr_date, trade_date))
+
+
+@tool
 def get_balance_sheet(
     ticker: Annotated[str, InjectedState("company_of_interest")],
     freq: Annotated[str, "reporting frequency: annual/quarterly"] = "quarterly",

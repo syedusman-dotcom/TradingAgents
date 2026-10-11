@@ -287,7 +287,8 @@ def test_trend_needs_enough_history():
 # --- screen filters -----------------------------------------------------------------------
 
 GOOD = {"ticker": "GOOD", "market_cap": 5e9, "fscore": 7, "altman_z": 3.0, "free_cash_flow": 1e8,
-        "interest_coverage": 10, "earnings_yield": 0.1, "roic": 0.3, "fcf_yield": 0.05, "trend": "UPTREND"}
+        "interest_coverage": 10, "earnings_yield_avg": 0.1, "roic_ranked": 0.3, "roic_min": 0.2,
+        "dilution_per_year": 0.0, "fcf_yield": 0.05, "trend": "UPTREND"}
 
 
 @pytest.mark.unit
@@ -300,9 +301,9 @@ def test_hard_filters():
 
 @pytest.mark.unit
 def test_rank_drops_owned_and_freefall_from_the_top_list():
-    rows = [dict(GOOD, ticker="A", earnings_yield=0.2, fail_reasons=[]),
-            dict(GOOD, ticker="B", earnings_yield=0.15, trend="FREEFALL", fail_reasons=[]),
-            dict(GOOD, ticker="C", earnings_yield=0.1, fail_reasons=[]),
+    rows = [dict(GOOD, ticker="A", earnings_yield_avg=0.2, fail_reasons=[]),
+            dict(GOOD, ticker="B", earnings_yield_avg=0.15, trend="FREEFALL", fail_reasons=[]),
+            dict(GOOD, ticker="C", earnings_yield_avg=0.1, fail_reasons=[]),
             dict(GOOD, ticker="D", fail_reasons=["F-Score"])]
     res = screener.rank(rows, DEFAULTS["filters"], owned={"A"}, top_n=10)
     assert [r["ticker"] for r in res["top"]] == ["C"]
@@ -388,3 +389,71 @@ def test_agents_value_far_from_the_formula_is_flagged():
     flag = value_gap_flag(_new("Buy", intrinsic_value=150.0, formula_value=100.0))
     assert flag and "+50%" in flag
     assert any("vs formula" in f for f in base_action(_held("Hold", intrinsic_value=50.0, formula_value=100.0)).flags)
+
+
+@pytest.mark.unit
+def test_normalized_figures_average_years_and_measure_dilution():
+    years = [
+        {"ebit": 300, "current_assets": 500, "cash": 100, "current_liabilities": 200, "net_ppe": 300, "shares": 121},
+        {"ebit": 100, "current_assets": 500, "cash": 100, "current_liabilities": 200, "net_ppe": 300, "shares": 110},
+        {"ebit": 200, "current_assets": 500, "cash": 100, "current_liabilities": 200, "net_ppe": 300, "shares": 100},
+    ]
+    n = metrics.normalized(years)
+    assert n["ebit_avg"] == pytest.approx(200)
+    assert n["roic_avg"] == pytest.approx(200 / 500) and n["roic_min"] == pytest.approx(100 / 500)
+    assert n["dilution_per_year"] == pytest.approx(0.10)      # 100 -> 121 over two years
+
+
+@pytest.mark.unit
+def test_screen_ranks_on_averages_and_caps_roic():
+    peak = {"fiscal_year_end": "2025-12-31", "ebit": 500, "current_assets": 400, "cash": 0,
+            "current_liabilities": 200, "net_ppe": 100, "shares": 100, "total_debt": 0}
+    trough = dict(peak, ebit=100)
+    data = {"ticker": "CYC", "years": [peak, trough, trough, trough, trough], "market_cap": 2000,
+            "enterprise_value": 2000, "price": 20, "closes": []}
+    row = screener.evaluate(data, normalize_years=5, roic_cap=1.0)
+    assert row["earnings_yield"] == pytest.approx(0.25)            # the peak year alone
+    assert row["earnings_yield_avg"] == pytest.approx(180 / 2000)  # what the rank uses
+    assert row["roic_avg"] == pytest.approx((500 / 300 + 4 * 100 / 300) / 5)
+    assert row["roic_ranked"] == pytest.approx(row["roic_avg"])    # 60%: under the cap
+    asset_light = dict(data, years=[dict(peak, net_ppe=1)] * 5)
+    assert screener.evaluate(asset_light, roic_cap=1.0)["roic_ranked"] == 1.0
+
+
+@pytest.mark.unit
+def test_unstable_roic_and_dilution_fail_the_filters():
+    f = DEFAULTS["filters"]
+    assert "ROIC unstable" in screener.failed_filters(dict(GOOD, roic_min=0.02), f)
+    assert "dilution" in screener.failed_filters(dict(GOOD, dilution_per_year=0.06), f)
+    assert screener.failed_filters(dict(GOOD, roic_min=None, dilution_per_year=None), f) == []
+
+
+@pytest.mark.unit
+def test_sector_cap_limits_buys_and_counts_sales():
+    sizing = {**SIZING, "max_sector_weight": 0.30, "max_position_weight": 0.5}
+    held = [Decision("T1", "Hold", price=100.0, held_shares=25, sector="Tech")]       # 2,500 of 10,000
+    new = [Decision("T2", "Buy", price=10.0, sector="Tech"), Decision("H1", "Buy", price=10.0, sector="Health")]
+    actions, _ = plan([*held, *new], cash=7_500.0, sizing=sizing)
+    by = {a.ticker: a for a in actions}
+    assert by["T2"].amount == pytest.approx(500.0) and "sector cap" in by["T2"].reason   # 3,000 - 2,500
+    assert by["H1"].amount == pytest.approx(2_000.0)                                     # target 1/5 of 10,000
+    # Selling the Tech holding frees the cap for the new Tech buy.
+    actions, _ = plan([Decision("T1", "Sell", price=100.0, held_shares=25, sector="Tech"), new[0]],
+                      cash=7_500.0, sizing=sizing)
+    assert actions[1].amount == pytest.approx(2_000.0)
+
+
+@pytest.mark.unit
+def test_weekly_watch_alerts():
+    from value_pipeline.watch import alerts
+
+    holdings = [{"ticker": "RICH", "intrinsic_value": 100.0}, {"ticker": "FALL", "intrinsic_value": 100.0},
+                {"ticker": "OK", "intrinsic_value": 100.0}]
+    ideas = [{"ticker": "CHEAP", "rating": "Buy", "intrinsic_value": 100.0},
+             {"ticker": "KNIFE", "rating": "Buy", "intrinsic_value": 100.0},
+             {"ticker": "HOLDER", "rating": "Hold", "intrinsic_value": 100.0},
+             {"ticker": "FAIR", "rating": "Overweight", "intrinsic_value": 100.0}]
+    prices = {"RICH": 110.0, "FALL": 60.0, "OK": 90.0, "CHEAP": 65.0, "KNIFE": 50.0, "HOLDER": 50.0, "FAIR": 80.0}
+    trends = {"FALL": "FREEFALL", "KNIFE": "FREEFALL"}
+    got = {(a.ticker, a.kind) for a in alerts(holdings, ideas, prices, trends, buy_mos=0.30)}
+    assert got == {("RICH", "REACHED VALUE"), ("FALL", "FREEFALL"), ("CHEAP", "BUY RANGE")}

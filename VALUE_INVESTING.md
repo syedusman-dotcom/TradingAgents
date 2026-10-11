@@ -40,7 +40,21 @@ The fundamentals analyst first calls `get_value_metrics`, which computes the fig
 
   The base value is at 3% growth. A reverse DCF shows the growth today's price already assumes.
 
+Two more tools come from SEC EDGAR, as filed by the analysis date:
+- `get_financial_history`: up to about 20 years of annual statements, for the full-cycle record.
+- `get_annual_report`: the latest 10-K's risk factors (Item 1A) and management's discussion (Item 7).
+
+The analyst cites these for events instead of recalling them, and must label anything from memory as unverified.
+
 The analyst starts from that range, picks the growth rate the business can sustain, adjusts only for identified one-offs or cycle effects, and states each change. Ratings therefore move with the facts, not with a fresh guess each month. The tool is withheld for past-dated runs, which would otherwise see today's data.
+
+## Holding versus buying
+
+Buying and selling have different bars (hysteresis). The Portfolio Manager is told:
+- For a stock already held, a margin of safety that has shrunk but is still positive means stop adding (Hold).
+- Underweight or Sell only when the price is above intrinsic value or the thesis is broken.
+
+This keeps noise in the valuation from turning into trades.
 
 ## Config
 
@@ -64,4 +78,6 @@ ta = TradingAgentsGraph(selected_analysts=("market", "news", "fundamentals"), co
 final_state, rating = ta.propagate("AAPL", "2026-10-09")
 ```
 
-A deep-thinking model matters more here than usual: the fundamentals analyst computes ratios across many years of statements.
+The deep-thinking model matters most: the managers weigh the debate and set the rating. The analysts make most of the calls, so a cheaper quick-thinking model (`TRADINGAGENTS_QUICK_THINK_LLM`) cuts the cost per run with little loss, now that the numbers come from code rather than from the model.
+
+Add a free FRED key (`FRED_API_KEY` in `.env`, from fred.stlouisfed.org) so the news analyst can use real interest-rate and inflation data, which matter for lenders, real estate and anything bought with debt.

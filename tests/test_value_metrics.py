@@ -95,3 +95,60 @@ def test_vendor_drops_price_figures_when_currencies_differ(monkeypatch):
     report = yahoo_vm.get_value_metrics("TSM", "2026-10-11")
     assert "quote is in USD but the statements are in TWD" in report
     assert "Price: not available" in report and "## By fiscal year" in report
+
+
+SAMPLE_10K = """
+Table of Contents
+Item 1A. Risk Factors 12
+Item 1B. Unresolved Staff Comments 30
+Item 7. Management's Discussion and Analysis of Financial Condition and Results of Operations 35
+Item 7A. Quantitative and Qualitative Disclosures About Market Risk 60
+For risks, refer to Item 1A. Risk Factors in this report.
+Item 1A. Risk Factors
+""" + "Demand for our drinks may fall. " * 40 + """
+Item 1B. Unresolved Staff Comments
+None.
+Item 7. Management's Discussion and Analysis of Financial Condition and Results of Operations
+""" + "Revenue grew on pricing. " * 40 + """
+Item 7A. Quantitative and Qualitative Disclosures About Market Risk
+Rates.
+"""
+
+
+@pytest.mark.unit
+def test_10k_sections_skip_the_table_of_contents_and_cross_references():
+    from tradingagents.dataflows.vendors.sec_filings import section_spans
+
+    found = section_spans(SAMPLE_10K)
+    risks = found["Risk factors (Item 1A)"]
+    mdna = found["Management's discussion and analysis (Item 7)"]
+    assert risks.startswith("Demand for our drinks may fall.") and "Unresolved" not in risks
+    assert mdna.startswith("Revenue grew on pricing.") and "Rates." not in mdna
+
+
+@pytest.mark.unit
+def test_10k_text_keeps_one_line_per_block():
+    from tradingagents.dataflows.vendors.sec_filings import _plain_text
+
+    html = b"<html><body><div>Item 1A.&#160;Risk Factors</div><p>Risk one <b>bold</b>.</p></body></html>"
+    assert _plain_text(html).splitlines() == ["Item 1A. Risk Factors", "Risk one bold."]
+
+
+@pytest.mark.unit
+def test_annual_report_picks_the_latest_10k_filed_by_the_date(monkeypatch):
+    from tradingagents.dataflows.vendors import sec_filings
+
+    submissions = {"filings": {"recent": {
+        "form": ["10-Q", "10-K", "10-K", "8-K"],
+        "filingDate": ["2026-05-01", "2026-02-20", "2025-02-21", "2026-03-01"],
+        "accessionNumber": ["a-1", "a-2", "a-3", "a-4"],
+        "primaryDocument": ["q.htm", "k26.htm", "k25.htm", "e.htm"],
+    }}}
+    monkeypatch.setattr(sec_filings.sec_edgar, "cik_for", lambda t: "0000021344")
+    monkeypatch.setattr(sec_filings.sec_edgar, "_cached_json", lambda url, name: submissions)
+    seen = []
+    monkeypatch.setattr(sec_filings, "_sections",
+                        lambda cik, filing: seen.append(filing) or {"Risk factors (Item 1A)": "x" * 600})
+    out = sec_filings.get_annual_report("KO", "2026-01-31")
+    assert seen[0]["accession"] == "a-3"                 # the 2026 10-K was not filed yet
+    assert "filed 2025-02-21" in out and "## Risk factors (Item 1A)" in out

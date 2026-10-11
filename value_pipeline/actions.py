@@ -24,6 +24,7 @@ class Decision:
     margin_of_safety: float | None = None   # fraction, 0.3 = 30%
     fscore: int | None = None
     formula_value: float | None = None      # the screen's base value (3% growth)
+    sector: str | None = None
 
     @property
     def held(self) -> bool:
@@ -115,6 +116,15 @@ def plan(decisions: list[Decision], cash: float, sizing: dict) -> tuple[list[Act
             a.amount = round(a.shares * d.price, 2)
     available = cash + sum(a.amount or 0.0 for a in actions if a.action in ("SELL", "TRIM"))
 
+    # Money per sector after the sells and trims on this list, for the sector cap.
+    sector_value: dict[str, float] = {}
+    for a in actions:
+        d = a.decision
+        if d.held and d.sector and d.price is not None:
+            sector_value[d.sector] = sector_value.get(d.sector, 0.0) + d.held_shares * d.price - (
+                a.amount or 0.0 if a.action in ("SELL", "TRIM") else 0.0)
+    sector_cap = sizing.get("max_sector_weight", 1.0) * total_value
+
     n_positions = sum(1 for a in actions if a.held and a.action != "SELL") + \
         sum(1 for a in actions if a.action == "BUY")
     weight = target_weight(n_positions, sizing)
@@ -141,21 +151,31 @@ def plan(decisions: list[Decision], cash: float, sizing: dict) -> tuple[list[Act
 
     for _, a, wanted in wants:
         d = a.decision
-        amount = round(min(wanted, available), 2)
+        room = sector_cap - sector_value.get(d.sector, 0.0) if d.sector else float("inf")
+        amount = round(min(wanted, available, max(room, 0.0)), 2)
+        capped = room < min(wanted, available)
         if d.price is None:
             a.reason += "; no current price, size it yourself"
             if a.action == "BUY":
                 a.amount = amount
                 available -= amount
             continue
+        limit = f"{d.sector} at the {sizing.get('max_sector_weight', 1.0):.0%} sector cap" if capped \
+            else f"not enough cash (have {available:,.2f})"
         if amount < sizing["min_trade_amount"]:
             if a.action == "BUY":
                 a.action = "SKIP"
-                a.reason += f"; not enough cash (have {available:,.2f})"
+                a.reason += f"; {limit}"
+            elif capped:
+                a.reason += f"; no add, {limit}"
             continue
         a.amount = amount
         a.shares = round(amount / d.price, 4)
         available -= amount
+        if d.sector:
+            sector_value[d.sector] = sector_value.get(d.sector, 0.0) + amount
+        if capped:
+            a.reason += f"; reduced, {limit}"
         if a.action == "KEEP":
             a.action = "ADD"
             a.reason += f"; below target {weight:.0%}"

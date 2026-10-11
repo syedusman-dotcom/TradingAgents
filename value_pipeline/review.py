@@ -183,6 +183,7 @@ def run(paths: Paths, cfg: dict, *, yes: bool = False, dry_run: bool = False,
             margin_of_safety=parse.margin_of_safety(r.decision),
             fscore=int(fscore) if fscore is not None and not pd.isna(fscore) else None,
             formula_value=_float(row.get("value_base")) if row else None,
+            sector=row.get("sector") if row and isinstance(row.get("sector"), str) else None,
         ))
     actions, summary = plan(decisions, pf.cash, cfg["sizing"])
     failures = [f"{r.ticker}: {r.error}" for r in results if r.error]

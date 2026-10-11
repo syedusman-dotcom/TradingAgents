@@ -12,11 +12,15 @@ filters:
   min_altman_z: 1.8
   require_positive_fcf: true
   min_interest_coverage: 4
+  min_roic_worst_year: 0.08     # ROIC at least 8% in every year: stable quality, not one good year
+  max_dilution_per_year: 0.03   # share count may grow at most 3% a year
 
 screen:
   top_n: 10
   cache_days: 7
   throttle_seconds: 0.3   # pause between tickers, to stay polite to Yahoo
+  normalize_years: 5      # rank on EBIT and ROIC averaged over up to this many years
+  roic_cap: 1.0           # ROIC above 100% ranks as 100%, so asset-light outliers don't dominate
 
 review:
   candidates: 5            # top screen candidates (not held) to analyse each review
@@ -32,3 +36,9 @@ sizing:
   min_holdings: 5             # equal weight assumes at least this many holdings
   overweight_size_factor: 0.5 # Overweight gets half the target size
   min_trade_amount: 25        # don't suggest buys smaller than this (USD)
+  max_sector_weight: 0.30     # buys and adds stop at 30% of the portfolio in one sector
+
+watch:
+  # The weekly check flags a stock the agents rated Buy/Overweight once its price
+  # is at least this far below their intrinsic value.
+  buy_margin_of_safety: 0.30

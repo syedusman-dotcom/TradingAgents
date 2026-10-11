@@ -15,7 +15,13 @@ from value_pipeline.config import Paths
 log = logging.getLogger(__name__)
 
 
-def evaluate(data: dict) -> dict:
+# The Magic Formula ranks on these: multi-year averages, so a cyclical peak does
+# not pass as a bargain, and ROIC capped so asset-light outliers (ROIC in the
+# thousands of percent) cannot buy the top of the list on one ratio.
+EY_KEY, ROIC_KEY = "earnings_yield_avg", "roic_ranked"
+
+
+def evaluate(data: dict, normalize_years: int = 5, roic_cap: float = 1.0) -> dict:
     """Every screen metric for one ticker's fetched data (see market_data.fundamentals)."""
     years = data["years"]
     if len(years) < 2:
@@ -27,6 +33,7 @@ def evaluate(data: dict) -> dict:
     net_debt = (metrics.num(cur.get("total_debt")) or 0.0) - (metrics.num(cur.get("cash")) or 0.0)
     value = metrics.formula_value(years, data.get("price"), data.get("shares") or cur.get("shares"), net_debt) or {}
     tr = metrics.trend(data.get("closes") or [])
+    norm = metrics.normalized(years, normalize_years)
     row = {
         "ticker": data["ticker"],
         "fiscal_year_end": cur["fiscal_year_end"],
@@ -35,6 +42,11 @@ def evaluate(data: dict) -> dict:
         "enterprise_value": ev,
         "earnings_yield": metrics.earnings_yield(cur.get("ebit"), ev),
         "roic": metrics.roic(cur),
+        "earnings_yield_avg": metrics.earnings_yield(norm["ebit_avg"], ev),
+        "roic_avg": norm["roic_avg"],
+        "roic_min": norm["roic_min"],
+        "roic_ranked": None if norm["roic_avg"] is None else min(norm["roic_avg"], roic_cap),
+        "dilution_per_year": norm["dilution_per_year"],
         "fcf_yield": metrics.fcf_yield(cur.get("free_cash_flow"), mcap),
         "free_cash_flow": cur.get("free_cash_flow"),
         "fscore": fs["score"],
@@ -72,15 +84,21 @@ def failed_filters(row: dict, filters: dict) -> list[str]:
         reasons.append("FCF")
     if below("interest_coverage", filters["min_interest_coverage"]):
         reasons.append("interest coverage")
-    if row.get("earnings_yield") is None or row.get("roic") is None:
+    if row.get(EY_KEY) is None or row.get(ROIC_KEY) is None:
         reasons.append("no EBIT/EV or ROIC")
+    floor = filters.get("min_roic_worst_year")
+    if floor is not None and row.get("roic_min") is not None and row["roic_min"] < floor:
+        reasons.append("ROIC unstable")
+    cap = filters.get("max_dilution_per_year")
+    if cap is not None and row.get("dilution_per_year") is not None and row["dilution_per_year"] > cap:
+        reasons.append("dilution")
     return reasons
 
 
 def rank(rows: list[dict], filters: dict, owned: set[str], top_n: int) -> dict:
     """Split evaluated rows into the ranked list, the top picks and the falling knives."""
     passing = [r for r in rows if not r["fail_reasons"]]
-    ranked = metrics.magic_formula_rank(passing)
+    ranked = metrics.magic_formula_rank(passing, EY_KEY, ROIC_KEY)
     for i, r in enumerate(ranked, 1):
         r["mf_position"] = i
     not_owned = [r for r in ranked if r["ticker"] not in owned]
@@ -120,7 +138,7 @@ def run(paths: Paths, cfg: dict, owned: set[str], today: str | None = None) -> d
             data = market_data.fundamentals(rec.ticker, paths, cfg["screen"]["cache_days"])
             if not data.get("from_cache"):
                 market_data.throttle(cfg["screen"]["throttle_seconds"])
-            row = evaluate(data)
+            row = evaluate(data, cfg["screen"]["normalize_years"], cfg["screen"]["roic_cap"])
         except market_data.DataUnavailable as exc:
             log.info("skip %s: %s", rec.ticker, exc)
             skipped.append({"ticker": rec.ticker, "reason": str(exc)})

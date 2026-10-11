@@ -3,8 +3,10 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from tradingagents.agents.analysts.turn import take_turn
 from tradingagents.agents.context import get_instrument_context_from_state, get_language_instruction
 from tradingagents.agents.tools import (
+    get_annual_report,
     get_balance_sheet,
     get_cashflow,
+    get_financial_history,
     get_fundamentals,
     get_income_statement,
     get_insider_transactions,
@@ -14,6 +16,8 @@ from tradingagents.agents.tools import (
 # The tools this analyst is offered; its tool node is built from the same tuple.
 TOOLS = (
     get_value_metrics,
+    get_financial_history,
+    get_annual_report,
     get_fundamentals,
     get_balance_sheet,
     get_cashflow,
@@ -33,10 +37,12 @@ def create_fundamentals_analyst(llm):
             " dividends, leverage, yields, the Piotroski F-Score point by point, the Altman Z-Score and the formula valuation)"
             " are computed in code from the statements: quote them and do not recompute or estimate them yourself."
             " If it is not available for this date, compute what you can from the statements and say so."
-            " Then call `get_income_statement`, `get_balance_sheet` and `get_cashflow` with freq='annual' for as many years as available"
-            " (aim for 5-10) to judge the longer record and explain one-offs, plus freq='quarterly' for the latest trend,"
-            " `get_fundamentals` for the profile, and `get_insider_transactions`."
-            " Never state a figure from memory as fact; if you rely on background knowledge, label it as unverified."
+            " Then call `get_income_statement`, `get_balance_sheet` and `get_cashflow` with freq='annual'"
+            " to explain one-offs, plus freq='quarterly' for the latest trend, `get_fundamentals` for the profile,"
+            " and `get_insider_transactions`. Call `get_financial_history` for up to 20 years of revenue, margins and"
+            " cash flow, to judge the business across a full cycle, and `get_annual_report` for management's own account"
+            " of its risks and results; cite it for events such as lawsuits, tax disputes or acquisitions."
+            " Never state a figure or event from memory as fact; if you rely on background knowledge, label it as unverified."
             "\n\nAnswer three questions with numbers:"
             "\n1. GOOD BUSINESS? Return on invested capital (EBIT / (net working capital + net fixed assets)) and ROE for each year;"
             " stability of gross and operating margins; revenue and free-cash-flow growth; free cash flow vs net income (earnings quality);"

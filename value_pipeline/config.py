@@ -22,8 +22,10 @@ DEFAULTS: dict = {
         "min_altman_z": 1.8,
         "require_positive_fcf": True,
         "min_interest_coverage": 4,
+        "min_roic_worst_year": 0.08,
+        "max_dilution_per_year": 0.03,
     },
-    "screen": {"top_n": 10, "cache_days": 7, "throttle_seconds": 0.3},
+    "screen": {"top_n": 10, "cache_days": 7, "throttle_seconds": 0.3, "normalize_years": 5, "roic_cap": 1.0},
     "review": {
         "candidates": 5,
         "analysts": ["market", "news", "fundamentals"],
@@ -31,11 +33,13 @@ DEFAULTS: dict = {
         "cost_per_run": 2.0,
         "max_cost_per_review": 40.0,
     },
+    "watch": {"buy_margin_of_safety": 0.30},
     "sizing": {
         "max_position_weight": 0.10,
         "min_holdings": 5,
         "overweight_size_factor": 0.5,
         "min_trade_amount": 25,
+        "max_sector_weight": 0.30,
     },
 }
 

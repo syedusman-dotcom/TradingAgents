@@ -29,14 +29,38 @@ TRENDS = ("UPTREND", "BASING", "DOWNTREND", "FREEFALL")
 _FLAT = 0.005
 
 
-def magic_formula_rank(rows: list[dict]) -> list[dict]:
+def normalized(years: list[dict], n: int = 5) -> dict:
+    """Multi-year figures that keep one good (or bad) year from deciding the rank.
+
+    ``ebit_avg`` and ``roic_avg`` average up to ``n`` years; ``roic_min`` is the
+    worst of them (a stable business never had a bad year); ``dilution_per_year``
+    is the compound annual change in share count over the same years.
+    """
+    recent = years[:n]
+    ebits = [v for v in (num(y.get("ebit")) for y in recent) if v is not None]
+    roics = [v for v in (roic(y) for y in recent) if v is not None]
+    shares = [(i, num(y.get("shares"))) for i, y in enumerate(recent) if num(y.get("shares"))]
+    dilution = None
+    if len(shares) >= 2:
+        (i_new, new), (i_old, old) = shares[0], shares[-1]
+        dilution = (new / old) ** (1 / (i_old - i_new)) - 1
+    return {
+        "ebit_avg": sum(ebits) / len(ebits) if ebits else None,
+        "roic_avg": sum(roics) / len(roics) if roics else None,
+        "roic_min": min(roics) if roics else None,
+        "roic_years": len(roics),
+        "dilution_per_year": dilution,
+    }
+
+
+def magic_formula_rank(rows: list[dict], ey_key: str = "earnings_yield", roic_key: str = "roic") -> list[dict]:
     """Rank by earnings yield and by ROIC (1 = best), sum the ranks, lower is better.
 
     Ties on the combined rank go to the higher FCF yield. Rows missing either
     metric are left out. Returns new dicts with ey_rank, roic_rank, mf_score.
     """
-    eligible = [dict(r) for r in rows if r.get("earnings_yield") is not None and r.get("roic") is not None]
-    for key, rank_key in (("earnings_yield", "ey_rank"), ("roic", "roic_rank")):
+    eligible = [dict(r) for r in rows if r.get(ey_key) is not None and r.get(roic_key) is not None]
+    for key, rank_key in ((ey_key, "ey_rank"), (roic_key, "roic_rank")):
         ordered = sorted(eligible, key=lambda r: -r[key])
         for i, r in enumerate(ordered):
             # Equal values share the better rank.

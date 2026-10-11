@@ -69,7 +69,7 @@ Ground every conclusion in specific evidence from the analysts. Decide as a disc
 - Hold: a good company at a fair price, or evidence too thin.
 - Underweight/Sell: a test clearly fails, the stock is above intrinsic value, or the original thesis is broken.
 - Never rate Buy in FREEFALL; wait for BASING.
-Think in a 1-3 year horizon. Conflicting arguments alone are not a reason to Hold; the debate always contains conflict, so decide which side the evidence supports. Prefer doing nothing over frequent trading: only change the rating from a previous decision on this ticker if the facts changed, not because the price moved. Weigh the analysts on their merits, independent of speaking order.
+Think in a 1-3 year horizon. Conflicting arguments alone are not a reason to Hold; the debate always contains conflict, so decide which side the evidence supports. Prefer doing nothing over frequent trading: only change the rating from a previous decision on this ticker if the facts changed, not because the price moved. For a stock already held, buying and selling have different bars: a margin of safety that has shrunk but is still positive means stop adding (Hold), not sell; rate a holding Underweight or Sell only when the price is above intrinsic value or the thesis is broken. Weigh the analysts on their merits, independent of speaking order.
 
 ## Output
 

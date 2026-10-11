@@ -38,6 +38,7 @@ uv run python -m value_pipeline status
 | `screen [--top N]` | Rank the universe; writes `data/screens/screen_YYYY-MM-DD.csv`. |
 | `review [--yes] [--dry-run] [--candidates N]` | Run the agents and write the action list. |
 | `run-all [--yes] [--dry-run]` | `screen`, then `review`. |
+| `watch [--no-notify]` | The free weekly check (prices only, no agents): a holding above its intrinsic value or in FREEFALL, or a stock last rated Buy/Overweight now at least 30% below its value. Writes `reports/watch_<date>.md` and shows a macOS notification when something needs a look. |
 
 Use `--data-dir PATH` before the command (or `VALUE_PIPELINE_DATA`) to keep data somewhere else, and `-v` to log every skipped ticker.
 
@@ -46,13 +47,14 @@ Use `--data-dir PATH` before the command (or `VALUE_PIPELINE_DATA`) to keep data
 - **Universe**: S&P 500 + S&P 400 from Wikipedia (cached in `data/universe.csv` when Wikipedia is down). Financials, real estate and utilities are excluded, because EBIT/EV, ROIC and the Z-Score don't describe them; they are listed in `screen_<date>_excluded.csv`.
 - **Metrics**, from Yahoo annual statements (cached per ticker for 7 days in `data/cache/`):
   - Earnings yield = EBIT / EV; ROIC = EBIT / (net working capital + net PP&E). Working capital excludes cash and is floored at zero, as in Greenblatt.
+  - The same two averaged over up to 5 years (`earnings_yield_avg`, `roic_avg`), plus the worst year's ROIC (`roic_min`) and the yearly change in share count (`dilution_per_year`).
   - FCF yield = free cash flow / market cap.
   - Piotroski F-Score, all nine points recorded (`f_*` columns). Missing data scores 0 for that point and is counted in `fscore_missing`.
   - Altman Z-Score (original formula), debt/equity, interest coverage. No reported interest expense counts as unlimited coverage.
   - Trend: price vs the 200-day SMA and the 12-month return excluding the last month, classified as UPTREND / BASING / DOWNTREND / FREEFALL.
   - Formula value (`value_base`, `value_low`, `value_high`), its margin of safety (`mos_formula`) and the growth today's price implies (`implied_growth`). These are the same figures the agents see; see `VALUE_INVESTING.md`.
-- **Hard filters** (`config.yaml`): market cap > $2B, F-Score ≥ 6, Altman Z > 1.8, positive FCF, interest coverage > 4.
-- **Rank**: Magic Formula (rank by earnings yield + rank by ROIC, lower is better), ties broken by FCF yield. FREEFALL stocks are kept out of the top list and shown as "watch: falling knives".
+- **Hard filters** (`config.yaml`): market cap > $2B, F-Score ≥ 6, Altman Z > 1.8, positive FCF, interest coverage > 4, ROIC ≥ 8% in every year (stable quality), share count growing ≤ 3% a year (no heavy dilution).
+- **Rank**: Magic Formula on the multi-year averages (rank by average earnings yield + rank by average ROIC, lower is better), ties broken by FCF yield. Averages keep a cyclical peak from ranking as a bargain, and ROIC is capped at 100% so asset-light outliers can't take the top on one ratio. FREEFALL stocks are kept out of the top list and shown as "watch: falling knives".
 - Tickers with missing data are skipped and listed with the reason in `screen_<date>_skipped.csv`.
 
 The first screen of a week fetches every ticker (roughly 20-40 minutes); later runs that week read the cache.
@@ -77,7 +79,7 @@ The first screen of a week fetches every ticker (roughly 20-40 minutes); later r
    | Not held, anything else | skip |
    | FREEFALL | never buy or add, whatever the rating |
 
-6. Sizing: equal weight, `1 / max(min_holdings, positions)`, capped at `max_position_weight` (10%); Overweight gets half. Buys never exceed cash. Cash includes the proceeds of the sells and trims on the same list, so place those first. Amounts are in dollars plus share counts at the latest price.
+6. Sizing: equal weight, `1 / max(min_holdings, positions)`, capped at `max_position_weight` (10%); Overweight gets half. Buys and adds also stop at `max_sector_weight` (30%) in one sector (GICS, from the screen), counting the sells on the same list. Buys never exceed cash. Cash includes the proceeds of the sells and trims on the same list, so place those first. Amounts are in dollars plus share counts at the latest price.
 7. Writes `ACTIONS.md` and `ACTIONS.html` (one self-contained page that works on a phone) and prints the list.
 8. Updates each holding's `last_rating`, `last_review_date`, `consecutive_underweight` and `intrinsic_value_estimate` in `portfolio.json`. It does not touch positions or cash.
 
@@ -105,9 +107,9 @@ value_pipeline/data/            (gitignored: your holdings)
 
 The SPY comparison replays your deposits and trades into SPY on the same dates and with the same dollars. It uses prices without dividends, so it reads slightly in SPY's favour if you don't record your dividends as deposits.
 
-## Scheduling (macOS, first Saturday of each month)
+## Scheduling (macOS: review on the first Saturday, watch on the others)
 
-`scripts/monthly.sh` runs `run-all --yes` and logs to `value_pipeline/data/logs/`. launchd can't express "first Saturday", so the job starts every Saturday and the script exits unless the date is between the 1st and the 7th. To run it by hand on any day: `scripts/monthly.sh --now`.
+`scripts/monthly.sh` is started by launchd every Saturday and logs to `value_pipeline/data/logs/`. On the first Saturday of the month (the 1st to the 7th) it runs `run-all --yes`. On the other Saturdays it runs the free `watch`. launchd can't express "first Saturday", so the script checks the date. To run the full review by hand on any day: `scripts/monthly.sh --now`.
 
 1. Save this as `~/Library/LaunchAgents/local.value-pipeline.plist`, with your repo path:
 

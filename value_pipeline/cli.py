@@ -11,7 +11,7 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.table import Table
 
-from value_pipeline import benchmark, market_data, portfolio as pfmod, review, screener
+from value_pipeline import benchmark, market_data, portfolio as pfmod, review, screener, watch
 from value_pipeline.config import Paths, load_config
 
 console = Console()
@@ -101,12 +101,14 @@ def cmd_screen(args, paths: Paths, cfg) -> None:
                   f"excluded {len(res['excluded'])} financials/REITs/utilities, "
                   f"{len(res['ranked'])} passed the filters. Saved {res['path']}")
     table = Table(title=f"Top {len(res['top'])} (Magic Formula, not owned)")
-    for col in ("#", "Ticker", "Sector", "EBIT/EV", "ROIC", "FCF yield", "F", "Z", "Trend"):
+    for col in ("#", "Ticker", "Sector", "EBIT/EV (avg)", "ROIC (avg)", "FCF yield", "F", "Z", "Value MoS", "Trend"):
         table.add_column(col)
     for r in res["top"]:
-        table.add_row(str(r["mf_position"]), r["ticker"], str(r.get("sector", "")), f"{r['earnings_yield']:.1%}",
-                      f"{r['roic']:.0%}", f"{r['fcf_yield']:.1%}" if r.get("fcf_yield") is not None else "–",
-                      str(r["fscore"]), f"{r['altman_z']:.1f}", r.get("trend") or "–")
+        mos = r.get("mos_formula")
+        table.add_row(str(r["mf_position"]), r["ticker"], str(r.get("sector", "")), f"{r['earnings_yield_avg']:.1%}",
+                      f"{r['roic_avg']:.0%}", f"{r['fcf_yield']:.1%}" if r.get("fcf_yield") is not None else "–",
+                      str(r["fscore"]), f"{r['altman_z']:.1f}", "–" if mos is None else f"{mos:.0%}",
+                      r.get("trend") or "–")
     console.print(table)
     if res["knives"]:
         console.print("Watch, falling knives (FREEFALL): " + ", ".join(r["ticker"] for r in res["knives"][:10]))
@@ -118,6 +120,12 @@ def cmd_review(args, paths: Paths, cfg) -> None:
     out = review.run(paths, cfg, yes=args.yes, dry_run=args.dry_run)
     console.print(Markdown(out.read_text(encoding="utf-8")))
     console.print(f"\nSaved {out} and {out.with_suffix('.html')}")
+
+
+def cmd_watch(args, paths: Paths, cfg) -> None:
+    found, out = watch.run(paths, cfg, notify=not args.no_notify)
+    console.print(Markdown(out.read_text(encoding="utf-8")))
+    console.print(f"\nSaved {out}")
 
 
 def cmd_run_all(args, paths: Paths, cfg) -> None:
@@ -156,6 +164,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("status", help="holdings, value, gain and return vs SPY")
     s.set_defaults(func=cmd_status)
+
+    s = sub.add_parser("watch", help="free weekly check: prices vs values, FREEFALL, buy range (no agents)")
+    s.add_argument("--no-notify", action="store_true", help="don't show a macOS notification")
+    s.set_defaults(func=cmd_watch)
 
     for name, func in (("screen", cmd_screen), ("review", cmd_review), ("run-all", cmd_run_all)):
         s = sub.add_parser(name, help={"screen": "rank the S&P 500 + 400 by the Magic Formula",
