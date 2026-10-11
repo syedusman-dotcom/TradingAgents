@@ -118,10 +118,11 @@ The SPY comparison replays your deposits and trades into SPY on the same dates a
    <dict>
      <key>Label</key><string>local.value-pipeline</string>
      <key>ProgramArguments</key>
-     <array><string>/Users/syedusman/Desktop/ValueTrading/scripts/monthly.sh</string></array>
+     <array><string>/Users/syedusman/Developer/ValueTrading/scripts/monthly.sh</string></array>
      <key>StartCalendarInterval</key>
      <dict><key>Weekday</key><integer>6</integer><key>Hour</key><integer>9</integer><key>Minute</key><integer>0</integer></dict>
-     <key>StandardErrorPath</key><string>/tmp/value-pipeline.err</string>
+     <key>StandardOutPath</key><string>/Users/syedusman/Library/Logs/value-pipeline.log</string>
+     <key>StandardErrorPath</key><string>/Users/syedusman/Library/Logs/value-pipeline.log</string>
    </dict>
    </plist>
    ```
@@ -130,7 +131,7 @@ The SPY comparison replays your deposits and trades into SPY on the same dates a
    (remove with `launchctl bootout gui/$(id -u)/local.value-pipeline`).
 3. Test it now: `launchctl kickstart gui/$(id -u)/local.value-pipeline` (on a day after the 7th, edit the script or run `scripts/monthly.sh --now` instead).
 
-**The Mac must be awake.** launchd runs a missed job when the Mac wakes from sleep, but not if it was shut down. To wake it automatically: `sudo pmset repeat wakeorpoweron S 08:55:00`. Folders under `~/Desktop` may also need Full Disk Access for `/bin/bash` (System Settings → Privacy & Security) for launchd jobs to read them.
+**The Mac must be awake.** launchd runs a missed job when the Mac wakes from sleep, but not if it was shut down. To wake it automatically: `sudo pmset repeat wakeorpoweron S 08:55:00`. Keep the repo out of `~/Desktop`, `~/Documents` and `~/Downloads`: macOS blocks launchd jobs from those folders ("Operation not permitted", exit 126). `scripts/monthly.sh --check` tests access without spending anything.
 
 ## Tests
 
