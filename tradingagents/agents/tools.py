@@ -112,6 +112,25 @@ def get_fundamentals(
 
 
 @tool
+def get_value_metrics(
+    ticker: Annotated[str, InjectedState("company_of_interest")],
+    curr_date: Annotated[str, "current date you are trading at, yyyy-mm-dd"],
+    trade_date: Annotated[str, InjectedState("trade_date")] = "",
+) -> str:
+    """
+    Retrieve verified value-investing metrics computed in code from the annual statements
+    and today's quote: ROIC, margins, FCF, share-count change, buybacks, dividends and
+    leverage per year; earnings and FCF yield; Piotroski F-Score point by point; Altman
+    Z-Score; and a formula valuation range with its margin of safety.
+    Args:
+        curr_date (str): Current date you are trading at, yyyy-mm-dd
+    Returns:
+        str: A Markdown report of the metrics
+    """
+    return route_to_vendor("get_value_metrics", ticker, as_of(curr_date, trade_date))
+
+
+@tool
 def get_balance_sheet(
     ticker: Annotated[str, InjectedState("company_of_interest")],
     freq: Annotated[str, "reporting frequency: annual/quarterly"] = "quarterly",

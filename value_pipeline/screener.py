@@ -24,6 +24,8 @@ def evaluate(data: dict) -> dict:
     mcap = data.get("market_cap")
     ev = data.get("enterprise_value") or metrics.enterprise_value(mcap, cur.get("total_debt"), cur.get("cash"))
     fs = metrics.piotroski(cur, prev)
+    net_debt = (metrics.num(cur.get("total_debt")) or 0.0) - (metrics.num(cur.get("cash")) or 0.0)
+    value = metrics.formula_value(years, data.get("price"), data.get("shares") or cur.get("shares"), net_debt) or {}
     tr = metrics.trend(data.get("closes") or [])
     row = {
         "ticker": data["ticker"],
@@ -40,6 +42,11 @@ def evaluate(data: dict) -> dict:
         "altman_z": metrics.altman_z(cur, mcap),
         "debt_to_equity": metrics.debt_to_equity(cur),
         "interest_coverage": metrics.interest_coverage(cur),
+        "value_base": value.get("base"),
+        "value_low": value.get("low"),
+        "value_high": value.get("high"),
+        "mos_formula": value.get("margin_of_safety"),
+        "implied_growth": value.get("implied_growth"),
         "trend": tr.get("trend"),
         "vs_sma200": tr.get("vs_sma200"),
         "momentum_12_1": tr.get("momentum_12_1"),

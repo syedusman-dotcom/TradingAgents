@@ -50,6 +50,7 @@ Use `--data-dir PATH` before the command (or `VALUE_PIPELINE_DATA`) to keep data
   - Piotroski F-Score, all nine points recorded (`f_*` columns). Missing data scores 0 for that point and is counted in `fscore_missing`.
   - Altman Z-Score (original formula), debt/equity, interest coverage. No reported interest expense counts as unlimited coverage.
   - Trend: price vs the 200-day SMA and the 12-month return excluding the last month, classified as UPTREND / BASING / DOWNTREND / FREEFALL.
+  - Formula value (`value_base`, `value_low`, `value_high`), its margin of safety (`mos_formula`) and the growth today's price implies (`implied_growth`). These are the same figures the agents see; see `VALUE_INVESTING.md`.
 - **Hard filters** (`config.yaml`): market cap > $2B, F-Score ≥ 6, Altman Z > 1.8, positive FCF, interest coverage > 4.
 - **Rank**: Magic Formula (rank by earnings yield + rank by ROIC, lower is better), ties broken by FCF yield. FREEFALL stocks are kept out of the top list and shown as "watch: falling knives".
 - Tickers with missing data are skipped and listed with the reason in `screen_<date>_skipped.csv`.
@@ -83,6 +84,8 @@ The first screen of a week fetches every ticker (roughly 20-40 minutes); later r
 The agents read financial statements from Yahoo (`review.statement_vendor`): about 5 years with every line (debt, interest, PP&E, buybacks, dividends). The repo's default, SEC EDGAR, has about 20 years but only top-line rows, and stays the default for the `tradingagents` CLI.
 
 The intrinsic value comes from the Portfolio Manager's **Price Target** field (its prompt asks for the per-share intrinsic value there), or else from an "intrinsic value … $X" phrase in the decision.
+
+The new-buys table shows both values (agents / formula). If the agents' value is more than 30% away from the formula's, the ticker is flagged so you can read their reasons before acting.
 
 `--dry-run` skips the agents and the memory log, uses made-up ratings, writes to `data/reports/<date>-dry-run/`, and leaves `portfolio.json` untouched.
 

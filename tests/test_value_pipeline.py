@@ -378,3 +378,13 @@ def test_review_reads_statements_from_the_configured_vendor_only():
     assert "get_insider_transactions" not in cfg["tool_vendors"]
     assert DEFAULT_CONFIG["tool_vendors"].get("get_balance_sheet") is None   # the shared default is untouched
     assert graph_config(None)["tool_vendors"] == DEFAULT_CONFIG["tool_vendors"]
+
+
+@pytest.mark.unit
+def test_agents_value_far_from_the_formula_is_flagged():
+    from value_pipeline.actions import value_gap_flag
+
+    assert value_gap_flag(_new("Buy", intrinsic_value=120.0, formula_value=100.0)) is None
+    flag = value_gap_flag(_new("Buy", intrinsic_value=150.0, formula_value=100.0))
+    assert flag and "+50%" in flag
+    assert any("vs formula" in f for f in base_action(_held("Hold", intrinsic_value=50.0, formula_value=100.0)).flags)

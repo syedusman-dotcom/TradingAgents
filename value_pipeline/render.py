@@ -59,12 +59,14 @@ def actions_markdown(date: str, actions: list[Action], summary: dict, *, reports
 
     lines += ["## New buys", ""]
     if new:
-        lines += ["| Ticker | Rating | Amount | Shares | Margin of safety | F-Score | Trend | Report |",
-                  "|---|---|---|---|---|---|---|---|"]
+        lines += ["| Ticker | Rating | Amount | Shares | Value (agents / formula) | Margin of safety | F-Score | Trend | Report |",
+                  "|---|---|---|---|---|---|---|---|---|"]
         for a in new:
             d = a.decision
             shares = "–" if a.shares is None else f"{a.shares:g}"
-            lines.append(f"| {a.ticker} | {a.rating} | {_money(a.amount)} | {shares} | {_pct(d.margin_of_safety)} | "
+            values = f"{_money(d.intrinsic_value)} / {_money(d.formula_value)}"
+            flags = "".join(f" **⚑ {f}**" for f in a.flags)
+            lines.append(f"| {a.ticker}{flags} | {a.rating} | {_money(a.amount)} | {shares} | {values} | {_pct(d.margin_of_safety)} | "
                          f"{d.fscore if d.fscore is not None else '–'} | {d.trend or '–'} | {_link(reports, a.ticker)} |")
     else:
         lines.append("No new buys this month.")

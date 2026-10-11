@@ -38,6 +38,9 @@ from tradingagents.dataflows.vendors.yahoo.market import (
     get_YFin_data_online,
 )
 from tradingagents.dataflows.vendors.yahoo.news import get_global_news_yfinance, get_news_yfinance
+from tradingagents.dataflows.vendors.yahoo.value_metrics import (
+    get_value_metrics as get_yfinance_value_metrics,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +64,8 @@ TOOLS_CATEGORIES = {
             "get_fundamentals",
             "get_balance_sheet",
             "get_cashflow",
-            "get_income_statement"
+            "get_income_statement",
+            "get_value_metrics",
         ]
     },
     "news_data": {
@@ -124,6 +128,9 @@ VENDOR_METHODS = {
         "alpha_vantage": get_alpha_vantage_income_statement,
         "sec_edgar": get_sec_edgar_income_statement,
         "yfinance": get_yfinance_income_statement,
+    },
+    "get_value_metrics": {
+        "yfinance": get_yfinance_value_metrics,
     },
     # news_data
     "get_news": {

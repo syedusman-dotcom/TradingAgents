@@ -23,6 +23,7 @@ class Decision:
     intrinsic_value: float | None = None
     margin_of_safety: float | None = None   # fraction, 0.3 = 30%
     fscore: int | None = None
+    formula_value: float | None = None      # the screen's base value (3% growth)
 
     @property
     def held(self) -> bool:
@@ -43,9 +44,26 @@ class Action:
     decision: Decision | None = None
 
 
+# The agents' value may differ from the formula's for stated reasons; past this
+# gap, check their reasons before acting on it.
+VALUE_GAP = 0.30
+
+
+def value_gap_flag(d: Decision) -> str | None:
+    if d.intrinsic_value is None or not d.formula_value or d.formula_value <= 0:
+        return None
+    gap = d.intrinsic_value / d.formula_value - 1
+    if abs(gap) <= VALUE_GAP:
+        return None
+    return f"agents' value {d.intrinsic_value:,.2f} is {gap:+.0%} vs formula {d.formula_value:,.2f}: check their reasons"
+
+
 def base_action(d: Decision) -> Action:
     """The rating rule for one ticker, before sizing."""
     a = Action(ticker=d.ticker, held=d.held, rating=d.rating, action="KEEP", reason="", decision=d)
+    gap = value_gap_flag(d)
+    if gap:
+        a.flags.append(gap)
     if d.held:
         a.consecutive_underweight = 0
         if d.rating == "Sell":

@@ -27,6 +27,21 @@ Only prompt text changed. The graph, tools, state keys, output section labels (R
 
 Both managers keep the rule that conflicting arguments alone are not a reason to Hold (#1321); otherwise every debate would end in Hold.
 
+## Verified metrics and the formula valuation
+
+The fundamentals analyst first calls `get_value_metrics`, which computes the figures in code from Yahoo's annual statements and today's quote (`tradingagents/dataflows/value_metrics.py`). The analyst quotes them instead of rebuilding them by hand. They are:
+
+- Per year: ROIC (Greenblatt), ROE, gross and EBIT margins, FCF, FCF/net income, share-count change, stock-based pay as % of revenue, buybacks, dividends, debt/equity, interest cover.
+- Today's earnings yield (EBIT/EV), FCF yield, P/E, EV/EBIT, P/B.
+- The Piotroski F-Score point by point, the Altman Z-Score and the current ratio.
+- A **formula valuation**: normalized (up to 5-year average) cash flow × (1 + g) / (9% − g) at 0%, 3% and 5% growth, from two measures:
+  - owner earnings: free cash flow less stock-based pay;
+  - after-tax EBIT, less net debt.
+
+  The base value is at 3% growth. A reverse DCF shows the growth today's price already assumes.
+
+The analyst starts from that range, picks the growth rate the business can sustain, adjusts only for identified one-offs or cycle effects, and states each change. Ratings therefore move with the facts, not with a fresh guess each month. The tool is withheld for past-dated runs, which would otherwise see today's data.
+
 ## Config
 
 - `holding_period_days`: **5 → 126** trading days (about six months). Past decisions are scored by the memory log over a value-investing horizon instead of a week, so a decision only gets its reflection about six months later.
