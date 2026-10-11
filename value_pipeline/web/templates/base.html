@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}Value pipeline{% endblock %}</title>
+<style>
+:root { --bg:#fbfaf7; --panel:#ffffff; --fg:#1d1d1b; --muted:#6b6a65; --line:#e3e1da; --accent:#0b6e4f; --flag:#b4530c; --bad:#b42318; }
+@media (prefers-color-scheme: dark) { :root { --bg:#161614; --panel:#1f1f1c; --fg:#ecebe6; --muted:#a3a29b; --line:#33322e; --accent:#5fc29b; --flag:#f0a35e; --bad:#f97066; } }
+* { box-sizing: border-box; }
+body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+header { border-bottom:1px solid var(--line); background:var(--panel); }
+nav { max-width:1100px; margin:0 auto; padding:10px 16px; display:flex; gap:16px; flex-wrap:wrap; align-items:center; }
+nav a { color:var(--fg); text-decoration:none; } nav a.brand { font-weight:700; margin-right:8px; }
+main { max-width:1100px; margin:0 auto; padding:20px 16px 48px; }
+h1 { font-size:1.4rem; margin:0 0 12px; } h2 { font-size:1.05rem; margin:24px 0 8px; }
+a { color:var(--accent); }
+.muted { color:var(--muted); } .bad { color:var(--bad); } .flag { color:var(--flag); }
+.cards { display:grid; grid-template-columns:repeat(auto-fit, minmax(170px, 1fr)); gap:12px; }
+.card { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:12px; }
+.card b { display:block; font-size:1.25rem; }
+.table { overflow-x:auto; }
+table { border-collapse:collapse; width:100%; font-size:0.92rem; }
+th, td { text-align:left; padding:7px 9px; border-bottom:1px solid var(--line); vertical-align:top; }
+th { color:var(--muted); font-weight:600; white-space:nowrap; }
+td.num, th.num { text-align:right; font-variant-numeric:tabular-nums; }
+form.inline { display:inline; }
+fieldset { border:1px solid var(--line); border-radius:8px; padding:12px; margin:0 0 16px; background:var(--panel); }
+label { display:inline-block; margin:4px 12px 4px 0; }
+input, select, textarea { font:inherit; padding:5px 7px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--fg); }
+button { font:inherit; padding:6px 14px; border-radius:6px; border:1px solid var(--accent); background:var(--accent); color:var(--bg); cursor:pointer; }
+button.secondary { background:transparent; color:var(--accent); }
+.msg { padding:8px 12px; border-radius:6px; border:1px solid var(--accent); margin-bottom:12px; }
+.error { padding:8px 12px; border-radius:6px; border:1px solid var(--bad); color:var(--bad); margin-bottom:12px; }
+pre.log { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:12px; max-height:420px; overflow:auto; font-size:0.82rem; white-space:pre-wrap; }
+svg.chart { width:100%; height:auto; background:var(--panel); border:1px solid var(--line); border-radius:8px; }
+svg.chart .axis { font-size:11px; fill:var(--muted); }
+</style>
+</head>
+<body>
+<header><nav>
+  <a class="brand" href="/">Value pipeline</a>
+  <a href="/">Dashboard</a><a href="/trade">Trade</a><a href="/trades">History</a>
+  <a href="/reviews">Reviews</a><a href="/screen">Screen</a><a href="/run">Run</a><a href="/settings">Settings</a>
+</nav></header>
+<main>
+{% if msg %}<div class="msg">{{ msg }}</div>{% endif %}
+{% if error %}<div class="error">{{ error }}</div>{% endif %}
+{% block content %}{% endblock %}
+</main>
+</body>
+</html>

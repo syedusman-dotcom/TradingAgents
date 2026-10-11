@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Dashboard</h1>
+<div class="cards">
+  <div class="card"><span class="muted">Total value</span><b>{{ "{:,.2f}".format(view.total) }} {{ view.currency }}</b></div>
+  <div class="card"><span class="muted">Cash</span><b>{{ "{:,.2f}".format(view.cash) }}</b></div>
+  {% if view.comparison %}
+  <div class="card"><span class="muted">Return since {{ view.comparison.since }}</span><b>{{ "{:+.1%}".format(view.comparison.portfolio_return) }}</b></div>
+  <div class="card"><span class="muted">SPY, same cash flows</span><b>{{ "{:+.1%}".format(view.comparison.spy_return) }}</b></div>
+  {% endif %}
+  <div class="card"><span class="muted">Next review</span><b>{{ next_review.strftime("%a %d %b") }}</b></div>
+</div>
+{% if chart %}<h2>Value over time</h2>{{ chart | safe }}{% endif %}
+<h2>Holdings</h2>
+{% if view.positions %}
+<div class="table"><table>
+<tr><th>Ticker</th><th class="num">Shares</th><th class="num">Avg</th><th class="num">Price</th><th class="num">Value</th><th class="num">Gain</th><th class="num">Weight</th><th>Rating</th><th class="num">Value est.</th><th class="num">MoS</th><th class="num">Days</th></tr>
+{% for p in view.positions %}
+<tr>
+  <td><a href="/stock/{{ p.ticker }}">{{ p.ticker }}</a></td>
+  <td class="num">{{ "{:g}".format(p.shares) }}</td>
+  <td class="num">{{ "{:,.2f}".format(p.avg_price) }}</td>
+  <td class="num">{{ "{:,.2f}".format(p.price) if p.price is not none else "no price" }}</td>
+  <td class="num">{{ "{:,.2f}".format(p.value) }}</td>
+  <td class="num">{{ "{:+.1%}".format(p.gain) if p.gain is not none else "–" }}</td>
+  <td class="num">{{ "{:.1%}".format(p.weight) if p.weight is not none else "–" }}</td>
+  <td>{{ p.last_rating or "–" }}</td>
+  <td class="num">{{ "{:,.2f}".format(p.intrinsic_value) if p.intrinsic_value else "–" }}</td>
+  <td class="num {{ 'flag' if p.margin_of_safety is not none and p.margin_of_safety < 0 }}">{{ "{:.0%}".format(p.margin_of_safety) if p.margin_of_safety is not none else "–" }}</td>
+  <td class="num">{{ p.days_held }}</td>
+</tr>
+{% endfor %}
+</table></div>
+{% else %}<p class="muted">No holdings yet. <a href="/trade">Record a buy</a>.</p>{% endif %}
+<h2>Weekly watch</h2>
+{% if watch %}<p class="muted">{{ watch[0] }}</p>{{ watch[1] | markdown | safe }}{% else %}<p class="muted">No watch yet. It runs on the Saturdays between reviews, or from <a href="/run">Run</a>.</p>{% endif %}
+{% endblock %}

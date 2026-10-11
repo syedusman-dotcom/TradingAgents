@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Start your portfolio</h1>
+<p class="muted">Enter the cash you start with. Record stocks you already own afterwards on the Trade page, with the date you bought them.</p>
+<form method="post" action="/start"><fieldset>
+  <input type="hidden" name="token" value="{{ token }}">
+  <label>Cash <input name="cash" inputmode="decimal" required></label>
+  <label>Currency <input name="currency" value="USD" size="4"></label>
+  <label>Start date <input name="date" type="date"></label>
+  <button>Start</button>
+</fieldset></form>
+{% endblock %}

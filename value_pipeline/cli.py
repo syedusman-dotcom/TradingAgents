@@ -108,6 +108,21 @@ def cmd_watch(args, paths: Paths, cfg) -> None:
     console.print(f"\nSaved {out}")
 
 
+def cmd_web(args, paths: Paths, cfg) -> None:
+    import threading
+    import webbrowser
+
+    import uvicorn
+
+    from value_pipeline.web import create_app
+
+    url = f"http://127.0.0.1:{args.port}"
+    console.print(f"Value pipeline website at {url} (this Mac only). Stop with Ctrl+C.")
+    if not args.no_browser:
+        threading.Timer(1.0, webbrowser.open, (url,)).start()
+    uvicorn.run(create_app(paths), host="127.0.0.1", port=args.port, log_level="warning")
+
+
 def cmd_run_all(args, paths: Paths, cfg) -> None:
     cmd_screen(args, paths, cfg)
     cmd_review(args, paths, cfg)
@@ -148,6 +163,11 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("watch", help="free weekly check: prices vs values, FREEFALL, buy range (no agents)")
     s.add_argument("--no-notify", action="store_true", help="don't show a macOS notification")
     s.set_defaults(func=cmd_watch)
+
+    s = sub.add_parser("web", help="open the local website (this Mac only)")
+    s.add_argument("--port", type=int, default=8765)
+    s.add_argument("--no-browser", action="store_true", help="don't open the browser")
+    s.set_defaults(func=cmd_web)
 
     for name, func in (("screen", cmd_screen), ("review", cmd_review), ("run-all", cmd_run_all)):
         s = sub.add_parser(name, help={"screen": "rank the S&P 500 + 400 by the Magic Formula",
