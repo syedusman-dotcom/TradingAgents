@@ -123,21 +123,34 @@ def _trend(ticker: str, screen_row: dict | None) -> str | None:
         return None
 
 
+def select_tickers(owned: list[str], candidates: list[str], only: list[str] | None) -> tuple[list[str], int, int]:
+    """The tickers to run, and how many are holdings and candidates.
+
+    By default every holding, then the screen's candidates. ``only`` runs just
+    those tickers, held or not: to look at ideas outside the top of the screen.
+    """
+    if only:
+        chosen = list(dict.fromkeys(t.strip().upper() for t in only if t.strip()))
+        held = sum(1 for t in chosen if t in owned)
+        return chosen, held, len(chosen) - held
+    return owned + candidates, len(owned), len(candidates)
+
+
 def run(paths: Paths, cfg: dict, *, yes: bool = False, dry_run: bool = False,
-        today: str | None = None, confirm=input) -> Path:
+        today: str | None = None, confirm=input, only: list[str] | None = None) -> Path:
     today = today or date.today().isoformat()
     rcfg = cfg["review"]
     pf = pfmod.load(paths)
     owned = {p.ticker for p in pf.positions}
-    candidates = screener.top_candidates(paths, owned, rcfg["candidates"])
-    if not candidates:
+    candidates = [] if only else screener.top_candidates(paths, owned, rcfg["candidates"])
+    if not only and not candidates:
         print("No screen found (or no candidates); reviewing holdings only. Run `screen` first for new ideas.")
-    tickers = [p.ticker for p in pf.positions] + [c["ticker"] for c in candidates]
+    tickers, n_held, n_new = select_tickers([p.ticker for p in pf.positions], [c["ticker"] for c in candidates], only)
     if not tickers:
         raise SystemExit("Nothing to review: no holdings and no screen candidates.")
 
     estimate = len(tickers) * rcfg["cost_per_run"]
-    print(f"Review {today}: {len(tickers)} runs ({len(owned)} holdings + {len(candidates)} candidates): "
+    print(f"Review {today}: {len(tickers)} runs ({n_held} holdings + {n_new} candidates): "
           f"{', '.join(tickers)}")
     print(f"Estimated cost: ${estimate:,.2f} (${rcfg['cost_per_run']:,.2f}/run, limit ${rcfg['max_cost_per_review']:,.2f})")
     if dry_run:

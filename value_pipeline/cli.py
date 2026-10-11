@@ -117,7 +117,8 @@ def cmd_screen(args, paths: Paths, cfg) -> None:
 def cmd_review(args, paths: Paths, cfg) -> None:
     if args.candidates is not None:
         cfg["review"]["candidates"] = args.candidates
-    out = review.run(paths, cfg, yes=args.yes, dry_run=args.dry_run)
+    only = args.tickers.split(",") if getattr(args, "tickers", None) else None
+    out = review.run(paths, cfg, yes=args.yes, dry_run=args.dry_run, only=only)
     console.print(Markdown(out.read_text(encoding="utf-8")))
     console.print(f"\nSaved {out} and {out.with_suffix('.html')}")
 
@@ -179,6 +180,8 @@ def build_parser() -> argparse.ArgumentParser:
             s.add_argument("--yes", action="store_true", help="don't ask for confirmation")
             s.add_argument("--dry-run", action="store_true", help="fake ratings, no agent calls, no portfolio update")
             s.add_argument("--candidates", type=int, help="how many screen candidates to analyse")
+            if name == "review":
+                s.add_argument("--tickers", help="analyse only these, comma-separated (e.g. HOG,INGR,FOX)")
         s.set_defaults(func=func)
     return p
 

@@ -476,3 +476,11 @@ def test_labelled_margin_of_safety_beats_a_threshold_in_prose():
             "**Investment Thesis**: ... Margin of safety: 20% at $44 ...")
     assert parse.margin_of_safety(text) == pytest.approx(0.20)
     assert parse.margin_of_safety("a margin of safety near 25% here") == pytest.approx(0.25)
+
+
+@pytest.mark.unit
+def test_review_runs_holdings_and_candidates_or_only_the_named_tickers():
+    from value_pipeline.review import select_tickers
+
+    assert select_tickers(["HRB"], ["CI", "G"], None) == (["HRB", "CI", "G"], 1, 2)
+    assert select_tickers(["HRB"], [], ["hog", " ingr", "HRB", "hog"]) == (["HOG", "INGR", "HRB"], 1, 2)
