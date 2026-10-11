@@ -269,3 +269,18 @@ def test_review_over_the_cost_cap_cannot_be_started(tmp_path):
     assert "exceeds" in r.text and 'name="confirm"' not in r.text
     r = _post(client, app, "/run/start", kind="review", tickers=many, confirm="yes")
     assert r.status_code == 303 and "exceeds" in r.headers["location"].replace("+", " ") and calls == []
+
+
+@pytest.mark.unit
+def test_settings_validate_and_back_up(tmp_path):
+    client, app, paths = _client(tmp_path)
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("review:\n  cost_per_run: 2.0\n")
+    assert "cost_per_run: 2.0" in client.get("/settings").text
+    r = _post(client, app, "/settings", text="review: [unclosed")
+    assert r.status_code == 400 and "not valid" in r.text and cfg.read_text() == "review:\n  cost_per_run: 2.0\n"
+    assert _post(client, app, "/settings", text="- just a list\n").status_code == 400
+    assert _post(client, app, "/settings", text="review:\n  cost_per_run: lots\n").status_code == 400
+    r = _post(client, app, "/settings", text="review:\n  cost_per_run: 3.0\n")
+    assert r.status_code == 303 and "3.0" in cfg.read_text()
+    assert list(paths.backups.glob("config_*.yaml"))[0].read_text() == "review:\n  cost_per_run: 2.0\n"

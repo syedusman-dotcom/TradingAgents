@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Settings</h1>
+<p class="muted">{{ path }}: filters, sizing, sector cap, review cost and limits. The previous version is backed up on every save. API keys live in <code>.env</code> and are not editable here.</p>
+<form method="post" action="/settings">
+  <input type="hidden" name="token" value="{{ token }}">
+  <textarea name="text" rows="34" style="width:100%; font-family:ui-monospace, Menlo, monospace; font-size:0.85rem">{{ text }}</textarea>
+  <p><button>Save settings</button></p>
+</form>
+{% endblock %}

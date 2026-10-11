@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import secrets
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from urllib.parse import quote_plus
 
+import yaml
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
@@ -255,5 +256,36 @@ def create_app(paths: Paths, *, config_path: Path = CONFIG_PATH, price_fn=market
         except JobBusy as exc:
             return RedirectResponse(f"/run?msg={quote_plus(str(exc))}", status_code=303)
         return RedirectResponse(f"/run?msg={quote_plus(kind.capitalize() + ' started')}", status_code=303)
+
+    @app.get("/settings", response_class=HTMLResponse)
+    def settings(request: Request):
+        cfg_path = app.state.config_path
+        text = cfg_path.read_text(encoding="utf-8") if cfg_path.exists() else ""
+        return render(request, "settings.html", text=text, path=str(cfg_path))
+
+    @app.post("/settings")
+    async def save_settings(request: Request):
+        form = await checked_form(request)
+        text = str(form.get("text", "")).replace("\r\n", "\n")
+        cfg_path = app.state.config_path
+        try:
+            parsed = yaml.safe_load(text) if text.strip() else {}
+            if not isinstance(parsed, dict):
+                raise ValueError("the file must be a set of 'section: values' entries")
+            check = cfg_path.with_suffix(".yaml.check")
+            check.write_text(text, encoding="utf-8")
+            try:
+                load_config(check)
+            finally:
+                check.unlink(missing_ok=True)
+        except (yaml.YAMLError, ValueError, TypeError) as exc:
+            return render(request, "settings.html", status=400, text=text, path=str(cfg_path),
+                          error=f"Settings not saved: not valid ({exc})")
+        if cfg_path.exists():
+            paths.backups.mkdir(parents=True, exist_ok=True)
+            (paths.backups / f"config_{datetime.now():%Y%m%d_%H%M%S_%f}.yaml").write_text(
+                cfg_path.read_text(encoding="utf-8"), encoding="utf-8")
+        cfg_path.write_text(text, encoding="utf-8")
+        return RedirectResponse("/settings?msg=Settings+saved", status_code=303)
 
     return app
