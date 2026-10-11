@@ -1,9 +1,12 @@
 """Recording trades, undo and the portfolio view, shared by the CLI and the website."""
 
+from datetime import date
+
+import pandas as pd
 import pytest
 
-from value_pipeline import operations as ops, portfolio as pfmod
-from value_pipeline.config import Paths
+from value_pipeline import history, operations as ops, portfolio as pfmod, review
+from value_pipeline.config import DEFAULTS, Paths
 
 
 @pytest.fixture
@@ -87,3 +90,28 @@ def test_realised_gains_follow_average_cost_with_fees():
     gains = ops.realised_gains(trades)
     assert gains[:2] == [None, None]
     assert gains[2] == pytest.approx(30 - 1 - (62 / 4))
+
+
+@pytest.mark.unit
+def test_review_preview_counts_runs_and_applies_the_cap(paths):
+    ops.record_buy(paths, "HRB", 1, 44.0)
+    cfg = {**DEFAULTS, "review": {**DEFAULTS["review"], "cost_per_run": 2.0, "max_cost_per_review": 5.0}}
+    p = review.preview(paths, cfg, only=["hog", "ingr"])
+    assert (p["tickers"], p["n_held"], p["n_new"], p["estimate"], p["blocked"]) == (["HOG", "INGR"], 0, 2, 4.0, False)
+    p = review.preview(paths, cfg, only=["HRB", "A", "B"])
+    assert p["blocked"] and p["estimate"] == 6.0
+    p = review.preview(paths, cfg)          # no screen yet: holdings only
+    assert p["tickers"] == ["HRB"]
+
+
+@pytest.mark.unit
+def test_value_series_replays_cash_shares_and_the_spy_shadow():
+    deposits = [{"date": "2026-01-02", "amount": 1000}]
+    trades = [{"date": "2026-01-05", "ticker": "A", "action": "BUY", "shares": "10", "price": "50", "fees": "0"}]
+    idx = [date(2026, 1, 2), date(2026, 1, 5), date(2026, 1, 9)]
+    closes = {"A": pd.Series([50.0, 50.0, 60.0], index=idx)}
+    spy = pd.Series([100.0, 100.0, 110.0], index=idx)
+    s = history.value_series(deposits, trades, closes, spy, idx)
+    assert [round(x["portfolio"], 2) for x in s] == [1000.0, 1000.0, 1100.0]
+    assert [round(x["spy"], 2) for x in s] == [1000.0, 1000.0, 1050.0]   # 500 of SPY at 100 -> 110
+    assert s[0]["date"] == "2026-01-02"

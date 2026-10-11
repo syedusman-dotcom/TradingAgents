@@ -136,21 +136,34 @@ def select_tickers(owned: list[str], candidates: list[str], only: list[str] | No
     return owned + candidates, len(owned), len(candidates)
 
 
+def preview(paths: Paths, cfg: dict, only: list[str] | None = None) -> dict:
+    """What a review would run and cost, without running anything."""
+    rcfg = cfg["review"]
+    pf = pfmod.load(paths)
+    owned = {p.ticker for p in pf.positions}
+    candidates = [] if only else screener.top_candidates(paths, owned, rcfg["candidates"])
+    tickers, n_held, n_new = select_tickers([p.ticker for p in pf.positions], [c["ticker"] for c in candidates], only)
+    estimate = len(tickers) * rcfg["cost_per_run"]
+    return {"tickers": tickers, "n_held": n_held, "n_new": n_new, "estimate": estimate,
+            "cost_per_run": rcfg["cost_per_run"], "limit": rcfg["max_cost_per_review"],
+            "blocked": estimate > rcfg["max_cost_per_review"]}
+
+
 def run(paths: Paths, cfg: dict, *, yes: bool = False, dry_run: bool = False,
         today: str | None = None, confirm=input, only: list[str] | None = None) -> Path:
     today = today or date.today().isoformat()
     rcfg = cfg["review"]
     pf = pfmod.load(paths)
     owned = {p.ticker for p in pf.positions}
-    candidates = [] if only else screener.top_candidates(paths, owned, rcfg["candidates"])
-    if not only and not candidates:
+    plan_ = preview(paths, cfg, only)
+    tickers = plan_["tickers"]
+    if not only and plan_["n_new"] == 0:
         print("No screen found (or no candidates); reviewing holdings only. Run `screen` first for new ideas.")
-    tickers, n_held, n_new = select_tickers([p.ticker for p in pf.positions], [c["ticker"] for c in candidates], only)
     if not tickers:
         raise SystemExit("Nothing to review: no holdings and no screen candidates.")
 
-    estimate = len(tickers) * rcfg["cost_per_run"]
-    print(f"Review {today}: {len(tickers)} runs ({n_held} holdings + {n_new} candidates): "
+    estimate = plan_["estimate"]
+    print(f"Review {today}: {len(tickers)} runs ({plan_['n_held']} holdings + {plan_['n_new']} candidates): "
           f"{', '.join(tickers)}")
     print(f"Estimated cost: ${estimate:,.2f} (${rcfg['cost_per_run']:,.2f}/run, limit ${rcfg['max_cost_per_review']:,.2f})")
     if dry_run:
