@@ -52,11 +52,17 @@ def alerts(holdings: list[dict], ideas: list[dict], prices: dict, trends: dict, 
 
 
 def _latest_results(paths: Paths) -> list[dict]:
-    for folder in sorted(paths.reports.glob("????-??-??"), reverse=True):
+    """Each ticker's newest result across the review folders."""
+    from value_pipeline.review import review_dirs
+
+    latest: dict[str, dict] = {}
+    for folder in review_dirs(paths):
         f = folder / "results.json"
         if f.exists():
-            return [r for r in json.loads(f.read_text(encoding="utf-8")) if not r.get("error")]
-    return []
+            for r in json.loads(f.read_text(encoding="utf-8")):
+                if not r.get("error"):
+                    latest.setdefault(r["ticker"], r)
+    return list(latest.values())
 
 
 def _notify(title: str, text: str) -> None:

@@ -151,6 +151,12 @@ def run(paths: Paths, cfg: dict, *, yes: bool = False, dry_run: bool = False,
             raise SystemExit("Cancelled.")
 
     out_dir = paths.review_dir(today + ("-dry-run" if dry_run else ""))
+    if not dry_run:
+        # A second review the same day gets its own folder rather than overwriting
+        # the first one's results, which `buy` and `watch` read back.
+        n = 2
+        while (out_dir / "results.json").exists():
+            out_dir, n = paths.review_dir(f"{today}-{n}"), n + 1
     out_dir.mkdir(parents=True, exist_ok=True)
     screen = _screen_rows(paths)
     prices = {t: market_data.latest_price(t) for t in tickers}
@@ -224,9 +230,16 @@ def _record_ratings(paths: Paths, pf: pfmod.Portfolio, actions, today: str) -> N
     pfmod.save(paths, pf)
 
 
+def review_dirs(paths: Paths) -> list[Path]:
+    """Real review folders (YYYY-MM-DD, or YYYY-MM-DD-N for a same-day re-run), newest first."""
+    folders = [f for f in paths.reports.glob("????-??-??*")
+               if f.is_dir() and (len(f.name) == 10 or f.name[11:].isdigit())]
+    return sorted(folders, key=lambda f: (f.name[:10], int(f.name[11:] or 1)), reverse=True)
+
+
 def latest_result(paths: Paths, ticker: str) -> dict | None:
     """The newest real review's result for a ticker, used to fill a new position's thesis."""
-    for folder in sorted(paths.reports.glob("????-??-??"), reverse=True):
+    for folder in review_dirs(paths):
         f = folder / "results.json"
         if f.exists():
             for r in json.loads(f.read_text(encoding="utf-8")):

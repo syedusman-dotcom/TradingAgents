@@ -457,3 +457,14 @@ def test_weekly_watch_alerts():
     trends = {"FALL": "FREEFALL", "KNIFE": "FREEFALL"}
     got = {(a.ticker, a.kind) for a in alerts(holdings, ideas, prices, trends, buy_mos=0.30)}
     assert got == {("RICH", "REACHED VALUE"), ("FALL", "FREEFALL"), ("CHEAP", "BUY RANGE")}
+
+
+@pytest.mark.unit
+def test_review_folders_newest_first_without_dry_runs(tmp_path):
+    from value_pipeline.review import review_dirs
+
+    paths = Paths(tmp_path)
+    for name in ("2026-09-05", "2026-10-11", "2026-10-11-2", "2026-10-11-10", "2026-10-11-dry-run"):
+        (paths.reports / name).mkdir(parents=True)
+    (paths.reports / "watch_2026-10-17.md").write_text("x")
+    assert [f.name for f in review_dirs(paths)] == ["2026-10-11-10", "2026-10-11-2", "2026-10-11", "2026-09-05"]
