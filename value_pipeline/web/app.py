@@ -175,4 +175,8 @@ def create_app(paths: Paths, *, config_path: Path = CONFIG_PATH, price_fn=market
                                   {"Intrinsic value": [r["intrinsic_value"] for r in valued]})
         return render(request, "stock.html", data=data, chart=chart, price=app.state.price_fn(data["ticker"]))
 
+    @app.get("/screen", response_class=HTMLResponse)
+    def screen(request: Request):
+        return render(request, "screen.html", screen=views.screen_table(paths))
+
     return app

@@ -75,3 +75,27 @@ def safe_report_path(paths: Paths, rel: str) -> Path | None:
     if not target.is_relative_to(root) or not target.is_file():
         return None
     return target
+
+
+def _csv_records(path: Path) -> list[dict]:
+    if not path.exists():
+        return []
+    df = pd.read_csv(path)
+    return [{k: (None if pd.isna(v) else v) for k, v in r.items()} for r in df.to_dict("records")]
+
+
+def screen_table(paths: Paths) -> dict | None:
+    """The latest screen, ranked companies first, with the excluded and skipped lists."""
+    latest = screener.latest_screen(paths)
+    if latest is None:
+        return None
+    day = latest.stem.removeprefix("screen_")
+    rows = _csv_records(latest)
+    rows.sort(key=lambda r: (r.get("mf_position") is None, r.get("mf_position") or 0))
+    return {
+        "date": day,
+        "rows": rows,
+        "sectors": sorted({r["sector"] for r in rows if r.get("sector")}),
+        "excluded": _csv_records(paths.screens / f"screen_{day}_excluded.csv"),
+        "skipped": _csv_records(paths.screens / f"screen_{day}_skipped.csv"),
+    }

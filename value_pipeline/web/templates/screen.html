@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Screen</h1>
+{% if not screen %}
+<p class="muted">No screen yet. Run one from <a href="/run">Run</a>.</p>
+{% else %}
+<p class="muted">Latest screen {{ screen.date }} · {{ screen.rows | length }} companies screened · click a column heading to sort.</p>
+<fieldset>
+  <label>Sector <select id="f-sector"><option value="">All</option>{% for s in screen.sectors %}<option>{{ s }}</option>{% endfor %}</select></label>
+  <label>Trend <select id="f-trend"><option value="">All</option><option>UPTREND</option><option>BASING</option><option>DOWNTREND</option><option>FREEFALL</option></select></label>
+  <label><input type="checkbox" id="f-pass" checked> Passes filters only</label>
+  <label>Min formula margin of safety <input id="f-mos" type="number" step="5" size="4">%</label>
+</fieldset>
+<div class="table"><table id="screen">
+<thead><tr><th data-k="n">#</th><th>Ticker</th><th>Sector</th><th class="num" data-k="n">EBIT/EV avg</th><th class="num" data-k="n">ROIC avg</th><th class="num" data-k="n">FCF yield</th><th class="num" data-k="n">F</th><th class="num" data-k="n">Z</th><th class="num" data-k="n">Formula MoS</th><th>Trend</th><th>Fails</th></tr></thead>
+<tbody>
+{% for r in screen.rows %}
+<tr data-sector="{{ r.sector or '' }}" data-trend="{{ r.trend or '' }}" data-pass="{{ 'y' if r.passes_filters in (true, 'True') else 'n' }}" data-mos="{{ r.mos_formula if r.mos_formula is not none else '' }}">
+<td class="num">{{ r.mf_position | int if r.mf_position is not none else "" }}</td>
+<td><a href="/stock/{{ r.ticker }}">{{ r.ticker }}</a></td><td>{{ r.sector or "" }}</td>
+<td class="num">{{ "{:.1%}".format(r.earnings_yield_avg) if r.earnings_yield_avg is not none else "–" }}</td>
+<td class="num">{{ "{:.0%}".format(r.roic_avg) if r.roic_avg is not none else "–" }}</td>
+<td class="num">{{ "{:.1%}".format(r.fcf_yield) if r.fcf_yield is not none else "–" }}</td>
+<td class="num">{{ r.fscore | int if r.fscore is not none else "–" }}</td>
+<td class="num">{{ "{:.1f}".format(r.altman_z) if r.altman_z is not none else "–" }}</td>
+<td class="num">{{ "{:.0%}".format(r.mos_formula) if r.mos_formula is not none else "–" }}</td>
+<td>{{ r.trend or "–" }}</td><td class="muted">{{ r.fail_reasons or "" }}</td></tr>
+{% endfor %}
+</tbody></table></div>
+<h2>Excluded sectors ({{ screen.excluded | length }})</h2>
+<p class="muted">{% for e in screen.excluded %}{{ e.ticker }} ({{ e.sector }}){% if not loop.last %}, {% endif %}{% endfor %}</p>
+<h2>Skipped for missing data ({{ screen.skipped | length }})</h2>
+<p class="muted">{% for s in screen.skipped %}{{ s.ticker }}: {{ s.reason }}{% if not loop.last %}; {% endif %}{% else %}None.{% endfor %}</p>
+<script>
+(() => {
+  const body = document.querySelector("#screen tbody");
+  const rows = [...body.rows];
+  const f = id => document.getElementById(id);
+  function apply() {
+    const sector = f("f-sector").value, trend = f("f-trend").value, pass = f("f-pass").checked;
+    const mos = f("f-mos").value === "" ? null : Number(f("f-mos").value) / 100;
+    for (const r of rows) {
+      r.hidden = !((!sector || r.dataset.sector === sector) && (!trend || r.dataset.trend === trend)
+        && (!pass || r.dataset.pass === "y") && (mos === null || (r.dataset.mos !== "" && Number(r.dataset.mos) >= mos)));
+    }
+  }
+  ["f-sector", "f-trend", "f-pass", "f-mos"].forEach(id => f(id).addEventListener("input", apply));
+  document.querySelectorAll("#screen th").forEach((th, i) => th.addEventListener("click", () => {
+    const numeric = th.dataset.k === "n", dir = th.dataset.dir === "asc" ? -1 : 1;
+    th.dataset.dir = dir === 1 ? "asc" : "desc";
+    const key = r => { const t = r.cells[i].textContent.replace(/[%,]/g, "").trim();
+      return numeric ? (t === "" || t === "–" ? Infinity : parseFloat(t)) : t; };
+    rows.sort((a, b) => (key(a) > key(b) ? 1 : key(a) < key(b) ? -1 : 0) * dir).forEach(r => body.appendChild(r));
+  }));
+  apply();
+})();
+</script>
+{% endif %}
+{% endblock %}
