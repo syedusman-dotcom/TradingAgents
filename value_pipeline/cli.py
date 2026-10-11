@@ -11,7 +11,7 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.table import Table
 
-from value_pipeline import benchmark, market_data, portfolio as pfmod, review, screener, watch
+from value_pipeline import operations as ops, portfolio as pfmod, review, screener, watch
 from value_pipeline.config import Paths, load_config
 
 console = Console()
@@ -22,70 +22,49 @@ def _date(text: str) -> str:
 
 
 def cmd_init(args, paths: Paths, cfg) -> None:
-    if paths.portfolio.exists() and not args.force:
-        raise SystemExit(f"{paths.portfolio} already exists; pass --force to start over (a backup is kept).")
-    pf = pfmod.Portfolio(cash=0.0, currency=args.currency)
-    pfmod.apply_deposit(pf, args.cash, on=args.date)
-    pfmod.save(paths, pf)
+    try:
+        ops.init_portfolio(paths, args.cash, args.currency, on=args.date, force=args.force)
+    except ops.PortfolioExists as exc:
+        raise SystemExit(str(exc)) from exc
     console.print(f"Started a portfolio with {args.cash:,.2f} {args.currency} cash in {paths.root}")
 
 
 def cmd_deposit(args, paths: Paths, cfg) -> None:
-    pf = pfmod.load(paths)
-    pfmod.apply_deposit(pf, args.amount, on=args.date)
-    pfmod.save(paths, pf)
+    pf = ops.record_deposit(paths, args.amount, on=args.date)
     console.print(f"Cash is now {pf.cash:,.2f} {pf.currency}")
 
 
 def cmd_buy(args, paths: Paths, cfg) -> None:
-    pf = pfmod.load(paths)
-    ticker = args.ticker.upper()
-    found = review.latest_result(paths, ticker) if pf.position(ticker) is None else None
-    held = pfmod.apply_buy(pf, ticker, args.shares, args.price, args.fees, on=args.date,
-                           thesis=(found or {}).get("thesis", ""),
-                           intrinsic_value=(found or {}).get("intrinsic_value"))
-    pfmod.save(paths, pf)
-    pfmod.append_trade(paths, {"date": args.date, "ticker": ticker, "action": "BUY", "shares": args.shares,
-                               "price": args.price, "fees": args.fees, "note": args.note})
-    console.print(f"Bought {args.shares:g} {ticker} @ {args.price:,.2f}. Now {held.shares:g} sh, "
+    held, pf = ops.record_buy(paths, args.ticker, args.shares, args.price, args.fees, on=args.date, note=args.note)
+    console.print(f"Bought {args.shares:g} {held.ticker} @ {args.price:,.2f}. Now {held.shares:g} sh, "
                   f"avg {held.avg_price:,.2f}. Cash {pf.cash:,.2f}")
 
 
 def cmd_sell(args, paths: Paths, cfg) -> None:
-    pf = pfmod.load(paths)
-    ticker = args.ticker.upper()
-    gain = pfmod.apply_sell(pf, ticker, args.shares, args.price, args.fees)
-    pfmod.save(paths, pf)
-    pfmod.append_trade(paths, {"date": args.date, "ticker": ticker, "action": "SELL", "shares": args.shares,
-                               "price": args.price, "fees": args.fees, "note": args.note})
+    gain, pf = ops.record_sell(paths, args.ticker, args.shares, args.price, args.fees, on=args.date, note=args.note)
+    ticker = args.ticker.strip().upper()
     left = pf.position(ticker)
     console.print(f"Sold {args.shares:g} {ticker} @ {args.price:,.2f} (realised {gain:+,.2f}). "
                   f"{'Now ' + format(left.shares, 'g') + ' sh' if left else 'Position closed'}. Cash {pf.cash:,.2f}")
 
 
 def cmd_status(args, paths: Paths, cfg) -> None:
-    pf = pfmod.load(paths)
-    today = date.today()
-    rows, invested_value = [], 0.0
-    for p in pf.positions:
-        price = market_data.latest_price(p.ticker)
-        value = p.shares * (price if price is not None else p.avg_price)
-        invested_value += value
-        rows.append((p, price, value))
-    total = pf.cash + invested_value
-
-    table = Table(title=f"Portfolio {today.isoformat()} ({pf.currency})")
+    view = ops.portfolio_view(paths)
+    total = view["total"]
+    table = Table(title=f"Portfolio {date.today().isoformat()} ({view['currency']})")
     for col in ("Ticker", "Shares", "Avg", "Price", "Value", "Gain", "Weight", "Rating", "Days"):
         table.add_column(col, justify="left" if col in ("Ticker", "Rating") else "right")
-    for p, price, value in rows:
-        gain = f"{price / p.avg_price - 1:+.1%}" if price else "–"
-        days = (today - date.fromisoformat(p.first_bought)).days
-        table.add_row(p.ticker, f"{p.shares:g}", f"{p.avg_price:,.2f}", f"{price:,.2f}" if price else "no price",
-                      f"{value:,.2f}", gain, f"{value / total:.1%}" if total else "–", p.last_rating or "–", str(days))
-    table.add_row("Cash", "", "", "", f"{pf.cash:,.2f}", "", f"{pf.cash / total:.1%}" if total else "–", "", "")
+    for r in view["positions"]:
+        table.add_row(r["ticker"], f"{r['shares']:g}", f"{r['avg_price']:,.2f}",
+                      f"{r['price']:,.2f}" if r["price"] else "no price", f"{r['value']:,.2f}",
+                      f"{r['gain']:+.1%}" if r["gain"] is not None else "–",
+                      f"{r['weight']:.1%}" if r["weight"] is not None else "–", r["last_rating"] or "–",
+                      str(r["days_held"]))
+    table.add_row("Cash", "", "", "", f"{view['cash']:,.2f}", "",
+                  f"{view['cash'] / total:.1%}" if total else "–", "", "")
     console.print(table)
-    console.print(f"Total value: [bold]{total:,.2f}[/bold] {pf.currency}")
-    cmp = benchmark.compare(total, pf.deposits, pfmod.read_trades(paths))
+    console.print(f"Total value: [bold]{total:,.2f}[/bold] {view['currency']}")
+    cmp = view["comparison"]
     if cmp:
         console.print(f"Since {cmp['since']}: portfolio {cmp['portfolio_return']:+.1%} vs SPY {cmp['spy_return']:+.1%} "
                       f"(same cash flows; {cmp['invested']:,.2f} put in)")

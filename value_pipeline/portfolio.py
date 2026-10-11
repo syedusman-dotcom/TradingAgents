@@ -151,12 +151,14 @@ def load(paths: Paths) -> Portfolio:
     return Portfolio.from_dict(json.loads(paths.portfolio.read_text(encoding="utf-8")))
 
 
-def save(paths: Paths, pf: Portfolio) -> None:
-    backup(paths)
+def save(paths: Paths, pf: Portfolio) -> Path | None:
+    """Write portfolio.json; returns the backup of the previous files (None on the first write)."""
+    made = backup(paths)
     paths.root.mkdir(parents=True, exist_ok=True)
     tmp = paths.portfolio.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(pf.to_dict(), indent=2) + "\n", encoding="utf-8")
     tmp.replace(paths.portfolio)
+    return made
 
 
 def append_trade(paths: Paths, row: dict) -> None:
