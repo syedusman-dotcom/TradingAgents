@@ -325,3 +325,21 @@ def test_jobs_left_running_by_a_stopped_server_show_as_interrupted(tmp_path):
                                                  "ended": None, "status": "running", "message": "", "log": "x.log"}]))
     job = JobRunner(logs).history()[0]
     assert job["status"] == "interrupted" and "stopped" in job["message"]
+
+
+@pytest.mark.unit
+def test_stock_and_screen_pages_show_tracked_investors(tmp_path):
+    client, app, paths = _client(tmp_path)
+    paths.root.mkdir(parents=True, exist_ok=True)
+    (paths.root / "superinvestors.json").write_text(json.dumps({
+        "updated": "2026-10-12T09:00:00",
+        "investors": [{"name": "Berkshire", "period": "2026-06-30", "filed": "2026-08-14", "holdings": 40}],
+        "holdings": {"HRB": [{"investor": "Berkshire", "shares": 1200, "value": 52800, "period": "2026-06-30"}]}}))
+    r = client.get("/stock/hrb")
+    assert "Berkshire" in r.text and "1,200" in r.text and "2026-06-30" in r.text
+    paths.screens.mkdir(parents=True)
+    (paths.screens / "screen_2026-10-11.csv").write_text(
+        "ticker,sector,mf_position,trend,passes_filters,superinvestors,superinvestor_names\n"
+        "HRB,Consumer Discretionary,1,UPTREND,True,1,Berkshire\n")
+    r = client.get("/screen")
+    assert "Superinvestors" in r.text and "1: Berkshire" in r.text

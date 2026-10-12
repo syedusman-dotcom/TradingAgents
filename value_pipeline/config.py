@@ -34,6 +34,16 @@ DEFAULTS: dict = {
         "max_cost_per_review": 40.0,
     },
     "watch": {"buy_margin_of_safety": 0.30},
+    "superinvestors": {
+        "refresh_days": 7,
+        "investors": [
+            {"name": "Berkshire (Buffett)", "cik": "0001067983"},
+            {"name": "Gotham (Greenblatt)", "cik": "0001510387"},
+            {"name": "Baupost (Klarman)", "cik": "0001061768"},
+            {"name": "Himalaya (Li Lu)", "cik": "0001709323"},
+            {"name": "Dalal Street (Pabrai)", "cik": "0001549575"},
+        ],
+    },
     "sizing": {
         "max_position_weight": 0.10,
         "min_holdings": 5,

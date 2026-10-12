@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from value_pipeline import market_data, metrics
+from value_pipeline import market_data, metrics, superinvestors
 from value_pipeline.config import Paths
 
 log = logging.getLogger(__name__)
@@ -151,6 +151,12 @@ def run(paths: Paths, cfg: dict, owned: set[str], today: str | None = None) -> d
         row["fail_reasons"] = failed_filters(row, cfg["filters"])
         rows.append(row)
 
+    try:
+        overlap = superinvestors.refresh_if_stale(paths, cfg["superinvestors"])["holdings"]
+    except Exception as exc:  # noqa: BLE001 - a second opinion; the screen stands without it
+        log.warning("superinvestor holdings unavailable: %s", exc)
+        overlap = superinvestors.load(paths)["holdings"]
+    superinvestors.annotate(rows, overlap)
     result = rank(rows, cfg["filters"], owned, cfg["screen"]["top_n"])
     positions = {r["ticker"]: r["mf_position"] for r in result["ranked"]}
     for r in rows:

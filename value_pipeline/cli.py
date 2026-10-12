@@ -11,7 +11,14 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.table import Table
 
-from value_pipeline import operations as ops, portfolio as pfmod, review, screener, watch
+from value_pipeline import (
+    operations as ops,
+    portfolio as pfmod,
+    review,
+    screener,
+    superinvestors,
+    watch,
+)
 from value_pipeline.config import Paths, load_config
 
 console = Console()
@@ -102,6 +109,18 @@ def cmd_review(args, paths: Paths, cfg) -> None:
     console.print(f"\nSaved {out} and {out.with_suffix('.html')}")
 
 
+def cmd_superinvestors(args, paths: Paths, cfg) -> None:
+    console.print("Reading the latest 13F of each tracked investor (the first run maps every holding; a few minutes)...")
+    data = superinvestors.refresh_if_stale(paths, cfg["superinvestors"], force=args.force)
+    for inv in data["investors"]:
+        console.print(f"{inv['name']}: {inv['holdings']} holdings, quarter ending {inv['period']} (filed {inv['filed']})")
+    for err in data.get("errors", []):
+        console.print(f"[red]{err}[/red]")
+    shared = sorted(((len(h), t) for t, h in data["holdings"].items() if len(h) > 1), reverse=True)[:15]
+    if shared:
+        console.print("Held by more than one: " + ", ".join(f"{t} ({n})" for n, t in shared))
+
+
 def cmd_watch(args, paths: Paths, cfg) -> None:
     found, out = watch.run(paths, cfg, notify=not args.no_notify)
     console.print(Markdown(out.read_text(encoding="utf-8")))
@@ -164,6 +183,10 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("watch", help="free weekly check: prices vs values, FREEFALL, buy range (no agents)")
     s.add_argument("--no-notify", action="store_true", help="don't show a macOS notification")
     s.set_defaults(func=cmd_watch)
+
+    s = sub.add_parser("superinvestors", help="refresh which tracked value investors hold what (13F filings)")
+    s.add_argument("--force", action="store_true", help="refresh even if the data is under a week old")
+    s.set_defaults(func=cmd_superinvestors)
 
     s = sub.add_parser("web", help="open the local website (this Mac only)")
     s.add_argument("--port", type=int, default=8765)

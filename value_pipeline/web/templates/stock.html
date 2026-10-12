@@ -23,6 +23,10 @@ Z {{ "{:.1f}".format(s.altman_z) if s.altman_z is not none else "–" }} ·
 formula value {{ "{:,.2f}".format(s.value_base) if s.value_base is not none else "–" }} ·
 trend {{ s.trend or "–" }}{% if s.fail_reasons %} · <span class="flag">fails: {{ s.fail_reasons }}</span>{% endif %}</p>
 {% endif %}
+<h2>Held by tracked value investors</h2>
+{% if holders %}<ul>{% for h in holders %}<li><b>{{ h.investor }}</b>: {{ "{:,}".format(h.shares) }} shares (${{ "{:,.0f}".format(h.value) }}) at the end of {{ h.period }}</li>{% endfor %}</ul>
+<p class="muted">From 13F filings, filed up to 45 days after each quarter: old moves, no prices paid. A second opinion, not a signal.</p>
+{% else %}<p class="muted">None of the tracked investors reported holding it in their latest 13F.</p>{% endif %}
 <h2>Trades</h2>
 {% if data.trades %}<ul>{% for t in data.trades %}<li>{{ t.date }} {{ t.action }} {{ t.shares }} @ {{ t.price }}{% if t.note %}: {{ t.note }}{% endif %}</li>{% endfor %}</ul>
 {% else %}<p class="muted">No trades.</p>{% endif %}

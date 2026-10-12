@@ -84,13 +84,19 @@ def _csv_records(path: Path) -> list[dict]:
     return [{k: (None if pd.isna(v) else v) for k, v in r.items()} for r in df.to_dict("records")]
 
 
+_SCREEN_COLUMNS = ("ticker", "sector", "mf_position", "earnings_yield_avg", "roic_avg", "fcf_yield", "fscore",
+                   "altman_z", "mos_formula", "superinvestors", "superinvestor_names", "trend", "passes_filters",
+                   "fail_reasons")
+
+
 def screen_table(paths: Paths) -> dict | None:
     """The latest screen, ranked companies first, with the excluded and skipped lists."""
     latest = screener.latest_screen(paths)
     if latest is None:
         return None
     day = latest.stem.removeprefix("screen_")
-    rows = _csv_records(latest)
+    # A screen written before a column existed lacks it; show it empty rather than fail.
+    rows = [{**dict.fromkeys(_SCREEN_COLUMNS), **r} for r in _csv_records(latest)]
     rows.sort(key=lambda r: (r.get("mf_position") is None, r.get("mf_position") or 0))
     return {
         "date": day,

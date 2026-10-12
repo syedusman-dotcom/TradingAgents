@@ -22,6 +22,7 @@ from value_pipeline import (
     operations as ops,
     portfolio as pfmod,
     review as reviewmod,
+    superinvestors,
 )
 from value_pipeline.config import CONFIG_PATH, Paths, load_config, validate_config
 from value_pipeline.web import charts, views
@@ -200,7 +201,8 @@ def create_app(paths: Paths, *, config_path: Path = CONFIG_PATH, price_fn=market
         valued = [r for r in reversed(data["reviews"]) if r.get("intrinsic_value")]
         chart = charts.line_chart([r["folder"] for r in valued],
                                   {"Intrinsic value": [r["intrinsic_value"] for r in valued]})
-        return render(request, "stock.html", data=data, chart=chart, price=app.state.price_fn(data["ticker"]))
+        return render(request, "stock.html", data=data, chart=chart, price=app.state.price_fn(data["ticker"]),
+                      holders=superinvestors.holders(paths, data["ticker"]))
 
     @app.get("/screen", response_class=HTMLResponse)
     def screen(request: Request):

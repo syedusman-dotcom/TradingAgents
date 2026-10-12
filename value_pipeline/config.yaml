@@ -42,3 +42,14 @@ watch:
   # The weekly check flags a stock the agents rated Buy/Overweight once its price
   # is at least this far below their intrinsic value.
   buy_margin_of_safety: 0.30
+
+superinvestors:
+  # Value investors whose latest 13F holdings are shown beside the screen and on
+  # stock pages, as a second opinion. Add or remove any SEC filer by its CIK.
+  refresh_days: 7
+  investors:
+    - {name: "Berkshire (Buffett)", cik: "0001067983"}
+    - {name: "Gotham (Greenblatt)", cik: "0001510387"}
+    - {name: "Baupost (Klarman)", cik: "0001061768"}
+    - {name: "Himalaya (Li Lu)", cik: "0001709323"}
+    - {name: "Dalal Street (Pabrai)", cik: "0001549575"}
