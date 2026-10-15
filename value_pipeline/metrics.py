@@ -10,9 +10,11 @@ import math
 from collections.abc import Sequence
 
 from tradingagents.dataflows.value_metrics import (  # noqa: F401 - re-exported for the screen
+    DISCOUNT_RATE,
     FSCORE_POINTS,
     YEAR_FIELDS,
     altman_z,
+    current_discount_rate,
     debt_to_equity,
     earnings_yield,
     enterprise_value,

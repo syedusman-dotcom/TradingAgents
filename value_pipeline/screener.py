@@ -21,7 +21,8 @@ log = logging.getLogger(__name__)
 EY_KEY, ROIC_KEY = "earnings_yield_avg", "roic_ranked"
 
 
-def evaluate(data: dict, normalize_years: int = 5, roic_cap: float = 1.0) -> dict:
+def evaluate(data: dict, normalize_years: int = 5, roic_cap: float = 1.0,
+             rate: float = metrics.DISCOUNT_RATE) -> dict:
     """Every screen metric for one ticker's fetched data (see market_data.fundamentals)."""
     years = data["years"]
     if len(years) < 2:
@@ -31,7 +32,7 @@ def evaluate(data: dict, normalize_years: int = 5, roic_cap: float = 1.0) -> dic
     ev = data.get("enterprise_value") or metrics.enterprise_value(mcap, cur.get("total_debt"), cur.get("cash"))
     fs = metrics.piotroski(cur, prev)
     net_debt = (metrics.num(cur.get("total_debt")) or 0.0) - (metrics.num(cur.get("cash")) or 0.0)
-    value = metrics.formula_value(years, data.get("price"), data.get("shares") or cur.get("shares"), net_debt) or {}
+    value = metrics.formula_value(years, data.get("price"), data.get("shares") or cur.get("shares"), net_debt, rate) or {}
     tr = metrics.trend(data.get("closes") or [])
     norm = metrics.normalized(years, normalize_years)
     row = {
@@ -59,6 +60,7 @@ def evaluate(data: dict, normalize_years: int = 5, roic_cap: float = 1.0) -> dic
         "value_high": value.get("high"),
         "mos_formula": value.get("margin_of_safety"),
         "implied_growth": value.get("implied_growth"),
+        "discount_rate": rate,
         "trend": tr.get("trend"),
         "vs_sma200": tr.get("vs_sma200"),
         "momentum_12_1": tr.get("momentum_12_1"),
@@ -129,6 +131,9 @@ def run(paths: Paths, cfg: dict, owned: set[str], today: str | None = None) -> d
     excluded_mask = uni["sector"].isin(cfg["universe"]["exclude_sectors"])
     excluded, candidates = uni[excluded_mask], uni[~excluded_mask]
 
+    rate = metrics.current_discount_rate()
+    log.info("valuing at a %.1f%% discount rate (10-year Treasury %s)", rate["rate"] * 100,
+             "unavailable" if rate["treasury_10y"] is None else f"{rate['treasury_10y']:.2%}")
     rows, skipped = [], []
     total = len(candidates)
     for i, rec in enumerate(candidates.itertuples(index=False), 1):
@@ -138,7 +143,7 @@ def run(paths: Paths, cfg: dict, owned: set[str], today: str | None = None) -> d
             data = market_data.fundamentals(rec.ticker, paths, cfg["screen"]["cache_days"])
             if not data.get("from_cache"):
                 market_data.throttle(cfg["screen"]["throttle_seconds"])
-            row = evaluate(data, cfg["screen"]["normalize_years"], cfg["screen"]["roic_cap"])
+            row = evaluate(data, cfg["screen"]["normalize_years"], cfg["screen"]["roic_cap"], rate["rate"])
         except market_data.DataUnavailable as exc:
             log.info("skip %s: %s", rec.ticker, exc)
             skipped.append({"ticker": rec.ticker, "reason": str(exc)})

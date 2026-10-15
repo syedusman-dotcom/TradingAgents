@@ -152,3 +152,41 @@ def test_annual_report_picks_the_latest_10k_filed_by_the_date(monkeypatch):
     out = sec_filings.get_annual_report("KO", "2026-01-31")
     assert seen[0]["accession"] == "a-3"                 # the 2026 10-K was not filed yet
     assert "filed 2025-02-21" in out and "## Risk factors (Item 1A)" in out
+
+
+@pytest.mark.unit
+def test_discount_rate_follows_the_10_year_treasury_with_a_floor():
+    assert vm.discount_rate(0.0521) == pytest.approx(0.097)   # 5.21% + 4.5% premium, to 0.1%
+    assert vm.discount_rate(0.03) == vm.MIN_DISCOUNT_RATE     # low rates never go below 9%
+    assert vm.discount_rate(None) == vm.MIN_DISCOUNT_RATE
+
+
+@pytest.mark.unit
+def test_current_discount_rate_falls_back_to_the_floor_when_fred_fails():
+    def down():
+        raise RuntimeError("FRED down")
+
+    assert vm.current_discount_rate(fetch=lambda: 0.0521) == {"rate": pytest.approx(0.097), "treasury_10y": 0.0521}
+    assert vm.current_discount_rate(fetch=down) == {"rate": vm.MIN_DISCOUNT_RATE, "treasury_10y": None}
+
+
+@pytest.mark.unit
+def test_formula_value_and_reverse_dcf_use_the_given_rate():
+    years = [_year(), _year(free_cash_flow=140, ebit=180)]
+    v = vm.formula_value(years, price=20.0, shares=100, net_debt=400, rate=0.10)
+    owner_ps = ((180 - 20) + (140 - 20)) / 2 / 100
+    assert v["discount_rate"] == 0.10
+    assert v["methods"]["fcf"] == pytest.approx([owner_ps * vm.perpetuity_multiple(g, 0.10) for g in vm.GROWTH_SCENARIOS])
+    assert owner_ps * vm.perpetuity_multiple(v["implied_growth"], 0.10) == pytest.approx(20.0)
+    assert v["base"] < vm.formula_value(years, price=20.0, shares=100, net_debt=400)["base"]
+
+
+@pytest.mark.unit
+def test_report_states_the_discount_rate_and_where_it_came_from():
+    years = [_year(fiscal_year_end="2025-12-31"), _year(fiscal_year_end="2024-12-31")]
+    m = vm.company_metrics(years, price=25.0, market_cap=2500.0, shares=100, rate=0.097, treasury_10y=0.0521)
+    report = vm.render_report("ABC", "2026-10-15", m)
+    assert "(9.7% − g)" in report
+    assert "10-year Treasury 5.2% + 4.5% premium" in report
+    plain = vm.render_report("ABC", "2026-10-15", vm.company_metrics(years, price=25.0, market_cap=2500.0, shares=100))
+    assert "(9.0% − g)" in plain and "Treasury yield unavailable" in plain

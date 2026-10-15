@@ -14,7 +14,12 @@ import yfinance as yf
 
 from tradingagents.dataflows.date_window import is_historical
 from tradingagents.dataflows.symbols import normalize_symbol
-from tradingagents.dataflows.value_metrics import YEAR_FIELDS, company_metrics, render_report
+from tradingagents.dataflows.value_metrics import (
+    YEAR_FIELDS,
+    company_metrics,
+    current_discount_rate,
+    render_report,
+)
 from tradingagents.dataflows.vendors.yahoo.common import raise_for_empty, yf_retry
 
 # Each field's Yahoo row label, best first.
@@ -101,5 +106,7 @@ def get_value_metrics(
         price = None
         note = (f"\n\nThe quote is in {quote} but the statements are in {reported}, so price-based "
                 "figures and the formula valuation are left out rather than mixed.")
-    metrics = company_metrics(years, price, info.get("marketCap") if price else None, shares)
+    rate = current_discount_rate()
+    metrics = company_metrics(years, price, info.get("marketCap") if price else None, shares,
+                              rate=rate["rate"], treasury_10y=rate["treasury_10y"])
     return render_report(canonical, as_of_date or "today", metrics, currency=reported or quote) + note

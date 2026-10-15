@@ -8,8 +8,12 @@ year is a dict of ``YEAR_FIELDS`` (None when not reported); years go newest firs
 
 from __future__ import annotations
 
+import logging
 import math
+from datetime import date
 from statistics import mean
+
+logger = logging.getLogger(__name__)
 
 YEAR_FIELDS = (
     "revenue", "gross_profit", "ebit", "net_income", "interest_expense",
@@ -157,13 +161,56 @@ def interest_coverage(year: dict) -> float | None:
 # --- formula valuation -----------------------------------------------------------
 
 # Value = normalized cash flow x (1 + g) / (r - g): a growing perpetuity, the
-# multiple a 9% required return justifies at each growth rate (0% -> 11.1x,
+# multiple a required return r justifies at each growth rate (at 9%: 0% -> 11.1x,
 # 3% -> 17.2x, 5% -> 26.3x). The scenarios state the assumption instead of hiding
 # it in a multiple; which one fits the business is the analyst's call.
-DISCOUNT_RATE = 0.09
+#
+# r is the 10-year Treasury yield plus an equity premium, never below 9%: when
+# risk-free bonds pay more, a stock has to promise more to be worth owning.
+MIN_DISCOUNT_RATE = 0.09
+EQUITY_PREMIUM = 0.045
+DISCOUNT_RATE = MIN_DISCOUNT_RATE  # used when no rate is given
 GROWTH_SCENARIOS = (0.0, 0.03, 0.05)
 TAX_RATE = 0.21
 NORMALIZE_YEARS = 5
+
+
+def discount_rate(treasury_10y: float | None) -> float:
+    """The required return for a 10-year Treasury yield (a fraction), to 0.1%; the floor when unknown."""
+    if treasury_10y is None:
+        return MIN_DISCOUNT_RATE
+    return max(MIN_DISCOUNT_RATE, round(treasury_10y + EQUITY_PREMIUM, 3))
+
+
+def _latest_10y() -> float:
+    """The latest 10-year Treasury yield from FRED, as a fraction (needs FRED_API_KEY)."""
+    from tradingagents.dataflows.vendors import fred
+
+    data = fred._request("series/observations", {"series_id": "DGS10", "sort_order": "desc", "limit": 10})
+    for obs in data.get("observations", []):
+        if obs.get("value") not in (None, "", "."):
+            return float(obs["value"]) / 100
+    raise ValueError("no recent 10-year Treasury yield")
+
+
+_rate_cache: dict[str, dict] = {}
+
+
+def current_discount_rate(fetch=None) -> dict:
+    """{"rate", "treasury_10y"} for today; the 9% floor (treasury_10y None) when FRED is unavailable.
+    Fetched once a day per process."""
+    key = date.today().isoformat()
+    if fetch is None and key in _rate_cache:
+        return _rate_cache[key]
+    try:
+        ten_year = (fetch or _latest_10y)()
+    except Exception as exc:  # noqa: BLE001 - no key or FRED down: value at the floor, never fail
+        logger.info("10-year Treasury yield unavailable, using the %.0f%% floor: %s", MIN_DISCOUNT_RATE * 100, exc)
+        ten_year = None
+    out = {"rate": discount_rate(ten_year), "treasury_10y": ten_year}
+    if fetch is None:
+        _rate_cache[key] = out
+    return out
 
 
 def perpetuity_multiple(growth: float, rate: float = DISCOUNT_RATE) -> float:
@@ -179,7 +226,7 @@ def owner_earnings(year: dict) -> float | None:
     return fcf - abs(num(year.get("stock_based_comp")) or 0.0)
 
 
-def formula_value(years: list[dict], price, shares, net_debt) -> dict | None:
+def formula_value(years: list[dict], price, shares, net_debt, rate: float = DISCOUNT_RATE) -> dict | None:
     """Per-share intrinsic value at 0% / 3% / 5% growth, from normalized cash flow.
 
     Two measures of normalized (up to five-year average) cash flow: owner earnings
@@ -195,13 +242,13 @@ def formula_value(years: list[dict], price, shares, net_debt) -> dict | None:
     recent = years[:NORMALIZE_YEARS]
     fcfs = [v for v in (owner_earnings(y) for y in recent) if v is not None]
     ebits = [v for v in (num(y.get("ebit")) for y in recent) if v is not None]
-    multiples = [perpetuity_multiple(g) for g in GROWTH_SCENARIOS]
-    out = {"years_used": max(len(fcfs), len(ebits)), "methods": {}}
+    multiples = [perpetuity_multiple(g, rate) for g in GROWTH_SCENARIOS]
+    out = {"years_used": max(len(fcfs), len(ebits)), "discount_rate": rate, "methods": {}}
     if len(fcfs) >= 2 and mean(fcfs) > 0:
         fcf_ps = mean(fcfs) / shares
         out["normalized_fcf"] = mean(fcfs)
         out["methods"]["fcf"] = [fcf_ps * m for m in multiples]
-        out["implied_growth"] = (price * DISCOUNT_RATE - fcf_ps) / (price + fcf_ps)
+        out["implied_growth"] = (price * rate - fcf_ps) / (price + fcf_ps)
     if len(ebits) >= 2 and mean(ebits) > 0:
         nopat = mean(ebits) * (1 - TAX_RATE)
         out["normalized_ebit"] = mean(ebits)
@@ -218,7 +265,8 @@ def formula_value(years: list[dict], price, shares, net_debt) -> dict | None:
 
 # --- the analyst's verified report ----------------------------------------------------
 
-def company_metrics(years: list[dict], price, market_cap, shares) -> dict:
+def company_metrics(years: list[dict], price, market_cap, shares,
+                    rate: float = DISCOUNT_RATE, treasury_10y: float | None = None) -> dict:
     """Everything the fundamentals analyst needs, computed once from the statements."""
     cur = years[0]
     net_debt = (num(cur.get("total_debt")) or 0.0) - (num(cur.get("cash")) or 0.0)
@@ -260,7 +308,8 @@ def company_metrics(years: list[dict], price, market_cap, shares) -> dict:
         "fscore": piotroski(cur, years[1]) if len(years) > 1 else None,
         "altman_z": altman_z(cur, market_cap),
         "current_ratio": div(cur.get("current_assets"), cur.get("current_liabilities")),
-        "valuation": formula_value(years, price, shares, net_debt),
+        "valuation": formula_value(years, price, shares, net_debt, rate),
+        "treasury_10y": treasury_10y,
     }
 
 
@@ -340,7 +389,12 @@ def render_report(symbol: str, as_of: str, m: dict, currency: str | None = None)
     if v:
         lines += [f"## Formula valuation (per share; {v['years_used']}-year averages)", ""]
         growth = " / ".join(f"{g:.0%}" for g in GROWTH_SCENARIOS)
-        lines.append(f"Value = normalized cash flow × (1 + g) / ({DISCOUNT_RATE:.0%} − g), at {growth} perpetual growth:")
+        r = v["discount_rate"]
+        ten_year = m.get("treasury_10y")
+        source = (f"10-year Treasury {ten_year:.1%} + {EQUITY_PREMIUM:.1%} premium, never below {MIN_DISCOUNT_RATE:.0%}"
+                  if ten_year is not None else f"the {MIN_DISCOUNT_RATE:.0%} floor; Treasury yield unavailable")
+        lines.append(f"Discount rate {r:.1%} ({source}).")
+        lines.append(f"Value = normalized cash flow × (1 + g) / ({r:.1%} − g), at {growth} perpetual growth:")
         if "fcf" in v["methods"]:
             lo, mid, hi = v["methods"]["fcf"]
             lines.append(f"- Owner earnings (average FCF less stock-based pay {_money(v['normalized_fcf'])}): {lo:,.2f} / {mid:,.2f} / {hi:,.2f}")
@@ -352,7 +406,7 @@ def render_report(symbol: str, as_of: str, m: dict, currency: str | None = None)
                      f"{_pct(v['margin_of_safety'])}**")
         if v.get("implied_growth") is not None:
             lines.append(f"- Reverse DCF: today's price assumes {_pct(v['implied_growth'])} perpetual FCF growth at a "
-                         f"{DISCOUNT_RATE:.0%} discount rate")
+                         f"{r:.1%} discount rate")
         lines += ["", "Start from this range. Judge which growth rate the business can sustain and whether the "
                   "averages need adjusting (one-off cash flows, a cyclical peak or trough), and state each change "
                   "and its effect on the value."]

@@ -421,6 +421,16 @@ def test_screen_ranks_on_averages_and_caps_roic():
 
 
 @pytest.mark.unit
+def test_screen_values_at_the_given_discount_rate():
+    year = {"fiscal_year_end": "2025-12-31", "ebit": 200, "free_cash_flow": 150, "current_assets": 400,
+            "cash": 0, "current_liabilities": 200, "net_ppe": 100, "shares": 100, "total_debt": 0}
+    data = {"ticker": "ABC", "years": [year, year], "market_cap": 2000, "price": 20, "closes": []}
+    at_9, at_10 = screener.evaluate(data), screener.evaluate(data, rate=0.10)
+    assert at_10["discount_rate"] == 0.10 and at_9["discount_rate"] == 0.09
+    assert at_10["value_base"] < at_9["value_base"]
+
+
+@pytest.mark.unit
 def test_unstable_roic_and_dilution_fail_the_filters():
     f = DEFAULTS["filters"]
     assert "ROIC unstable" in screener.failed_filters(dict(GOOD, roic_min=0.02), f)
