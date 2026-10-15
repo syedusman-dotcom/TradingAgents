@@ -38,10 +38,11 @@ DEFAULTS: dict = {
         "refresh_days": 7,
         "investors": [
             {"name": "Berkshire (Buffett)", "cik": "0001067983"},
-            {"name": "Gotham (Greenblatt)", "cik": "0001510387"},
             {"name": "Baupost (Klarman)", "cik": "0001061768"},
             {"name": "Himalaya (Li Lu)", "cik": "0001709323"},
             {"name": "Dalal Street (Pabrai)", "cik": "0001549575"},
+            {"name": "Gardner Russo & Quinn (Russo)", "cik": "0000860643"},
+            {"name": "Akre Capital (Akre)", "cik": "0001112520"},
         ],
     },
     "sizing": {
