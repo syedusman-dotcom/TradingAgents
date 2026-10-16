@@ -77,7 +77,7 @@ The first screen of a week fetches every ticker (roughly 20-40 minutes); later r
 
 1. Scores past decisions in the memory log (`settle_all_pending`).
 2. Runs TradingAgents (market, news, fundamentals analysts) on every holding, then on the top `review.candidates` (default 5) screen picks you don't own. Every run sees your holdings and cash.
-3. Prints the number of runs and the estimated cost (`cost_per_run`, default $2) and asks before starting, unless you pass `--yes`. It refuses to start above `max_cost_per_review` (default $40).
+3. Prints the number of runs and the estimated cost (`cost_per_run`, default $2) and asks before starting, unless you pass `--yes`. Candidates are dropped from the end to stay under `max_cost_per_review` (default $40); holdings are never dropped, and if they alone exceed the cap the review refuses to start. Only one review runs at a time: the scheduled run, the website and a terminal share a lock in the data folder, and a second start is refused rather than spending twice.
 4. Saves each report to `data/reports/YYYY-MM-DD/TICKER/`. A failed run is retried once, then reported.
 5. Turns ratings into actions:
 
@@ -85,15 +85,17 @@ The first screen of a week fetches every ticker (roughly 20-40 minutes); later r
    |---|---|
    | Held, Buy / Overweight | KEEP; ADD up to the target weight if cash allows |
    | Held, Hold | KEEP |
-   | Held, Underweight | TRIM half the first time; SELL if Underweight twice in a row |
+   | Held, Underweight | TRIM half the first time; SELL if Underweight twice in a row. An Underweight repeated within 21 days (a re-run, a `--tickers` check) is the same verdict, not a second strike |
    | Held, Sell | SELL all |
+   | Held, above `max_position_weight` (10%) of the portfolio | TRIM back to the cap, whatever the rating (holdings left out of a `--tickers` review are named instead) |
    | Held, price above the agents' intrinsic value | flag **REACHED VALUE: consider selling** |
    | Not held, Buy | BUY (full size) |
    | Not held, Overweight | BUY (half size) |
+   | Not held, Buy / Overweight but the price is above the agents' own value | skip: no margin of safety |
    | Not held, anything else | skip |
    | FREEFALL | never buy or add, whatever the rating |
 
-6. Sizing: equal weight, `1 / max(min_holdings, positions)`, capped at `max_position_weight` (10%); Overweight gets half. Buys and adds also stop at `max_sector_weight` (30%) in one sector (GICS, from the screen), counting the sells on the same list. Buys never exceed cash. Cash includes the proceeds of the sells and trims on the same list, so place those first. Amounts are in dollars plus share counts at the latest price.
+6. Sizing: equal weight, `1 / max(min_holdings, positions)`, capped at `max_position_weight` (10%); Overweight gets half. Buys and adds also stop at `max_sector_weight` (30%) in one sector (GICS, from the screen, else from the fundamentals cache), counting the sells on the same list and the holdings not on it. Buys never exceed cash. Cash includes the proceeds of the sells and trims on the same list, so place those first. Amounts are in dollars plus share counts at the latest price.
 7. Writes `ACTIONS.md` and `ACTIONS.html` (one self-contained page that works on a phone) and prints the list.
 8. Updates each holding's `last_rating`, `last_review_date`, `consecutive_underweight` and `intrinsic_value_estimate` in `portfolio.json`. It does not touch positions or cash.
 

@@ -34,7 +34,7 @@ The fundamentals analyst first calls `get_value_metrics`, which computes the fig
 - Per year: ROIC (Greenblatt), ROE, gross and EBIT margins, FCF, FCF/net income, share-count change, stock-based pay as % of revenue, buybacks, dividends, debt/equity, interest cover.
 - Today's earnings yield (EBIT/EV), FCF yield, P/E, EV/EBIT, P/B.
 - The Piotroski F-Score point by point, the Altman Z-Score and the current ratio.
-- A **formula valuation**: normalized (up to 5-year average) cash flow × (1 + g) / (r − g) at 0%, 3% and 5% growth. The discount rate r is the 10-year Treasury yield (from FRED) plus a 4.5% equity premium, never below 9%; without `FRED_API_KEY` it stays at 9%. Two measures:
+- A **formula valuation**: normalized (up to 5-year average) cash flow × (1 + g) / (r − g) at 0%, 3% and 5% growth, per share on market cap ÷ price (Yahoo's `sharesOutstanding` counts one class for dual-class companies such as FOX and GOOGL). The discount rate r is the 10-year Treasury yield (from FRED) plus a 4.5% equity premium, never below 9%; without `FRED_API_KEY` it stays at 9%. Two measures:
   - owner earnings: free cash flow less stock-based pay;
   - after-tax EBIT, less net debt.
 

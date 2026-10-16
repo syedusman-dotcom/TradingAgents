@@ -42,6 +42,9 @@ watch:
   # The weekly check flags a stock the agents rated Buy/Overweight once its price
   # is at least this far below their intrinsic value.
   buy_margin_of_safety: 0.30
+  # A Buy rating older than this is stale (the facts may have changed) and is
+  # not alerted on; the next review refreshes it.
+  max_rating_age_days: 120
 
 superinvestors:
   # Concentrated value investors whose latest 13F holdings are shown beside the
