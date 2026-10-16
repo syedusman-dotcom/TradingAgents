@@ -100,15 +100,19 @@ def fetch_latest_13f(cik: str) -> tuple[str, str, bytes]:
     recent = recent["filings"]["recent"]
     for form, filed, period, accession in zip(recent["form"], recent["filingDate"], recent["reportDate"],
                                               recent["accessionNumber"], strict=False):
-        if form in ("13F-HR", "13F-HR/A"):
+        # Amendments (13F-HR/A) are skipped: one kind lists only the rows added, and would read
+        # as the whole portfolio. The original filing is complete, if up to a quarter older.
+        if form == "13F-HR":
             folder = accession.replace("-", "")
             index = requests.get(_FILING_INDEX.format(cik=int(cik), accession=folder),
                                  headers=_sec_headers(), timeout=30).json()
-            xmls = [i["name"] for i in index["directory"]["item"]
+            xmls = [i for i in index["directory"]["item"]
                     if i["name"].lower().endswith(".xml") and i["name"] != "primary_doc.xml"]
             if not xmls:
                 raise ValueError(f"13F {accession} has no holdings table")
-            table = requests.get(_FILING_FILE.format(cik=int(cik), accession=folder, name=xmls[0]),
+            # The holdings table is by far the largest XML in the filing; exhibits are small.
+            name = max(xmls, key=lambda i: int(i.get("size") or 0))["name"]
+            table = requests.get(_FILING_FILE.format(cik=int(cik), accession=folder, name=name),
                                  headers=_sec_headers(), timeout=60)
             table.raise_for_status()
             return period, filed, table.content
@@ -128,7 +132,9 @@ def load(paths: Paths) -> dict:
 
 def refresh(paths: Paths, investors: list[dict], fetch_filing=fetch_latest_13f,
             lookup: Callable[[list[str]], dict[str, str]] = _openfigi) -> dict:
-    """Fetch each investor's latest 13F and store their holdings by ticker. One failure skips one investor."""
+    """Fetch each investor's latest 13F and store their holdings by ticker. One failure keeps that
+    investor's previously stored holdings (a week-old filing beats none)."""
+    previous = load(paths)
     holdings: dict[str, list[dict]] = {}
     summary, errors = [], []
     for inv in investors:
@@ -139,6 +145,11 @@ def refresh(paths: Paths, investors: list[dict], fetch_filing=fetch_latest_13f,
         except Exception as exc:  # noqa: BLE001 - one investor's outage must not lose the others
             errors.append(f"{inv['name']}: {type(exc).__name__}: {exc}")
             log.warning("13F for %s unavailable: %s", inv["name"], exc)
+            for ticker, held in previous.get("holdings", {}).items():
+                kept = [h for h in held if h["investor"] == inv["name"]]
+                if kept:
+                    holdings.setdefault(ticker, []).extend(kept)
+            summary.extend(i for i in previous.get("investors", []) if i["name"] == inv["name"])
             continue
         for r in rows:
             ticker = tickers.get(r["cusip"])

@@ -24,11 +24,23 @@ export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$HOME/.cargo/bin:
 mkdir -p value_pipeline/data/logs
 log="value_pipeline/data/logs/monthly_$(date +%Y-%m-%d).log"
 echo "=== $(date) ($mode) ===" >> "$log"
+
+# A scheduled run has nobody watching: say how it ended on the screen, not only in the log.
+notify() { osascript -e "display notification \"$2\" with title \"$1\"" > /dev/null 2>&1 || true; }
+
 case "$mode" in
   check)
     uv run python -m value_pipeline --help > /dev/null && echo "check OK: uv and the repo are reachable" >> "$log" ;;
   watch)
-    uv run python -m value_pipeline watch >> "$log" 2>&1 ;;
+    if ! uv run python -m value_pipeline watch >> "$log" 2>&1; then
+      notify "Value watch failed" "See $log"
+      exit 1
+    fi ;;
   review)
-    uv run python -m value_pipeline run-all --yes >> "$log" 2>&1 ;;
+    if uv run python -m value_pipeline run-all --yes >> "$log" 2>&1; then
+      notify "Value review done" "Open the website or value_pipeline/data/reports for ACTIONS.md"
+    else
+      notify "Value review failed" "Nothing to act on. See $log"
+      exit 1
+    fi ;;
 esac

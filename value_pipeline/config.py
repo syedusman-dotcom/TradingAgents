@@ -34,7 +34,7 @@ DEFAULTS: dict = {
         "cost_per_run": 2.0,
         "max_cost_per_review": 40.0,
     },
-    "watch": {"buy_margin_of_safety": 0.30},
+    "watch": {"buy_margin_of_safety": 0.30, "max_rating_age_days": 120},
     "superinvestors": {
         "refresh_days": 7,
         "investors": [

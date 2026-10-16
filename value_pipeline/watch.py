@@ -28,8 +28,11 @@ class Alert:
     message: str
 
 
-def alerts(holdings: list[dict], ideas: list[dict], prices: dict, trends: dict, buy_mos: float) -> list[Alert]:
-    """Holdings: ticker, intrinsic_value, avg_price. Ideas (not held): ticker, rating, intrinsic_value."""
+def alerts(holdings: list[dict], ideas: list[dict], prices: dict, trends: dict, buy_mos: float,
+           today: date | None = None, max_age_days: int = 120) -> list[Alert]:
+    """Holdings: ticker, intrinsic_value, avg_price. Ideas (not held): ticker, rating, intrinsic_value,
+    date; a Buy rating older than ``max_age_days`` is stale (the facts may have changed) and is not alerted."""
+    today = today or date.today()
     out = []
     for h in holdings:
         t, price, value = h["ticker"], prices.get(h["ticker"]), h.get("intrinsic_value")
@@ -42,6 +45,8 @@ def alerts(holdings: list[dict], ideas: list[dict], prices: dict, trends: dict, 
     for idea in ideas:
         t, price, value = idea["ticker"], prices.get(idea["ticker"]), idea.get("intrinsic_value")
         if idea.get("rating") not in BUY_RATINGS or price is None or not value or trends.get(t) == "FREEFALL":
+            continue
+        if idea.get("date") and (today - date.fromisoformat(idea["date"])).days > max_age_days:
             continue
         mos = (value - price) / value
         if mos >= buy_mos:
@@ -61,7 +66,7 @@ def _latest_results(paths: Paths) -> list[dict]:
         if f.exists():
             for r in json.loads(f.read_text(encoding="utf-8")):
                 if not r.get("error"):
-                    latest.setdefault(r["ticker"], r)
+                    latest.setdefault(r["ticker"], {**r, "date": folder.name[:10]})
     return list(latest.values())
 
 
@@ -91,7 +96,8 @@ def run(paths: Paths, cfg: dict, notify: bool = True) -> tuple[list[Alert], Path
         except Exception as exc:  # noqa: BLE001 - a missing trend just skips that alert
             log.warning("no trend for %s: %s", t, exc)
 
-    found = alerts(holdings, ideas, prices, trends, cfg["watch"]["buy_margin_of_safety"])
+    found = alerts(holdings, ideas, prices, trends, cfg["watch"]["buy_margin_of_safety"],
+                   max_age_days=cfg["watch"].get("max_rating_age_days", 120))
     today = date.today().isoformat()
     lines = [f"# Weekly watch {today}", "",
              "Prices only, no agent runs. Nothing changes until you act and record a trade.", ""]

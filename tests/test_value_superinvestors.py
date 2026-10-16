@@ -79,3 +79,61 @@ def test_screen_rows_get_the_overlap_column():
     si.annotate(rows, {"AAPL": [{"investor": "Berkshire"}, {"investor": "Gotham"}]})
     assert rows[0]["superinvestors"] == 2 and rows[0]["superinvestor_names"] == "Berkshire, Gotham"
     assert rows[1]["superinvestors"] == 0 and rows[1]["superinvestor_names"] == ""
+
+
+class _Resp:
+    def __init__(self, payload=None, content=b""):
+        self._payload, self.content, self.status_code = payload, content, 200
+
+    def json(self):
+        return self._payload
+
+    def raise_for_status(self):
+        pass
+
+
+@pytest.mark.unit
+def test_latest_13f_skips_amendments_and_picks_the_holdings_table(monkeypatch):
+    """A 13F-HR/A can list only the added rows; the full portfolio is the latest 13F-HR."""
+    submissions = {"filings": {"recent": {
+        "form": ["13F-HR/A", "13F-HR", "13F-HR"],
+        "filingDate": ["2026-09-01", "2026-08-14", "2026-05-15"],
+        "reportDate": ["2026-06-30", "2026-06-30", "2026-03-31"],
+        "accessionNumber": ["0001-26-000003", "0001-26-000002", "0001-26-000001"]}}}
+    index = {"directory": {"item": [{"name": "primary_doc.xml", "size": "900"}, {"name": "exhibit.xml", "size": "300"},
+                                    {"name": "form13fInfoTable.xml", "size": "120000"}]}}
+    asked = []
+
+    def get(url, **kw):
+        asked.append(url)
+        if url.endswith("CIK0001067983.json"):
+            return _Resp(submissions)
+        if url.endswith("/index.json"):
+            return _Resp(index)
+        return _Resp(content=INFO_TABLE)
+
+    monkeypatch.setattr(si.requests, "get", get)
+    period, filed, xml = si.fetch_latest_13f("0001067983")
+    assert (period, filed) == ("2026-06-30", "2026-08-14")
+    assert any("000126000002/form13fInfoTable.xml" in u for u in asked)
+    assert xml == INFO_TABLE
+
+
+@pytest.mark.unit
+def test_refresh_keeps_the_previous_holdings_of_an_investor_that_failed(tmp_path):
+    paths = Paths(tmp_path)
+    investors = [{"name": "A", "cik": "a"}, {"name": "B", "cik": "b"}]
+    ok = lambda cik: ("2026-06-30", "2026-08-14", INFO_TABLE)  # noqa: E731
+    lookup = lambda c: {"037833100": "AAPL", "084670702": "BRK/B"}  # noqa: E731
+    si.refresh(paths, investors, fetch_filing=ok, lookup=lookup)
+
+    def flaky(cik):
+        if cik == "a":
+            raise RuntimeError("EDGAR down")
+        return ("2026-09-30", "2026-11-14", INFO_TABLE)
+
+    data = si.refresh(paths, investors, fetch_filing=flaky, lookup=lookup)
+    by = {h["investor"]: h["period"] for h in data["holdings"]["AAPL"]}
+    assert by == {"A": "2026-06-30", "B": "2026-09-30"}          # A's older filing is kept, not dropped
+    assert data["errors"] == ["A: RuntimeError: EDGAR down"]
+    assert [i["name"] for i in data["investors"]] == ["A", "B"]

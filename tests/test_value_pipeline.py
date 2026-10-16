@@ -1,6 +1,7 @@
 """The value pipeline's arithmetic and rules on fixed sample data (no network)."""
 
 import math
+from datetime import date
 
 import pytest
 
@@ -597,6 +598,29 @@ def test_weekly_watch_alerts():
     trends = {"FALL": "FREEFALL", "KNIFE": "FREEFALL"}
     got = {(a.ticker, a.kind) for a in alerts(holdings, ideas, prices, trends, buy_mos=0.30)}
     assert got == {("RICH", "REACHED VALUE"), ("FALL", "FREEFALL"), ("CHEAP", "BUY RANGE")}
+
+
+@pytest.mark.unit
+def test_watch_ignores_buy_ratings_older_than_the_limit():
+    from value_pipeline.watch import alerts
+
+    ideas = [{"ticker": "OLD", "rating": "Buy", "intrinsic_value": 100.0, "date": "2026-01-10"},
+             {"ticker": "NEW", "rating": "Buy", "intrinsic_value": 100.0, "date": "2026-09-20"}]
+    prices = {"OLD": 60.0, "NEW": 60.0}
+    got = {a.ticker for a in alerts([], ideas, prices, {}, buy_mos=0.30, today=date(2026, 10, 17), max_age_days=120)}
+    assert got == {"NEW"}
+
+
+@pytest.mark.unit
+def test_latest_results_carry_their_review_date(tmp_path):
+    from value_pipeline.watch import _latest_results
+
+    paths = Paths(tmp_path)
+    for folder, ticker in (("2026-09-05", "A"), ("2026-10-11", "B")):
+        (paths.reports / folder).mkdir(parents=True)
+        (paths.reports / folder / "results.json").write_text(
+            f'[{{"ticker": "{ticker}", "rating": "Buy", "intrinsic_value": 10, "error": null}}]')
+    assert {r["ticker"]: r["date"] for r in _latest_results(paths)} == {"A": "2026-09-05", "B": "2026-10-11"}
 
 
 @pytest.mark.unit
