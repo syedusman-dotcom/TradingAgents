@@ -26,7 +26,8 @@ def create_news_analyst(llm):
         instrument_context = get_instrument_context_from_state(state)
 
         system_message = (
-            "You are a research analyst supporting a long-term value investor. Use get_news over the past 6-12 months, not just the past week."
+            "You are a research analyst supporting a long-term value investor. Ask get_news for the past 6-12 months, not just the past week;"
+            " the vendor may return only the most recent articles, so state the period the articles actually cover and do not present a short window as the year's story."
             " Report: management quality and integrity (CEO/CFO changes, guidance credibility vs. results, lawsuits, regulatory or accounting issues, governance);"
             " competitive position (new entrants, lost customers, pricing pressure, industry disruption);"
             " one-off events that may have made the stock temporarily cheap (the reason it is cheap, and whether it looks temporary or permanent)."

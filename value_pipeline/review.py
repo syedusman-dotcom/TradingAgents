@@ -180,8 +180,11 @@ def run(paths: Paths, cfg: dict, *, yes: bool = False, dry_run: bool = False,
     owned = {p.ticker for p in pf.positions}
     plan_ = preview(paths, cfg, only)
     tickers = plan_["tickers"]
-    if not only and plan_["n_new"] == 0:
+    if not only and plan_["n_new"] == 0 and not plan_["dropped"]:
         print("No screen found (or no candidates); reviewing holdings only. Run `screen` first for new ideas.")
+    if plan_["dropped"]:
+        print(f"{plan_['dropped']} candidate(s) left out to stay under the ${rcfg['max_cost_per_review']:,.2f} cap "
+              "(raise review.max_cost_per_review or lower review.candidates to change this).")
     if not tickers:
         raise SystemExit("Nothing to review: no holdings and no screen candidates.")
 

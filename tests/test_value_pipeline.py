@@ -362,6 +362,22 @@ def test_parse_value_and_margin_of_safety():
 
 
 @pytest.mark.unit
+def test_intrinsic_value_fallback_skips_growth_rates_and_prefers_the_base_case():
+    assert parse.intrinsic_value("Intrinsic value (3% growth scenario): $142 per share") == 142.0
+    assert parse.intrinsic_value("intrinsic value at 3% growth is $62") == 62.0
+    assert parse.intrinsic_value("intrinsic value range $120-$160, base $140") == 140.0
+    assert parse.intrinsic_value("**Price Target**: ~$62\n") == 62.0
+    assert parse.intrinsic_value("intrinsic value fell 15% this year") is None
+
+
+@pytest.mark.unit
+def test_margin_of_safety_fallback_skips_the_required_threshold():
+    text = "we require a margin of safety of at least 30% and today it is 12%"
+    assert parse.margin_of_safety(text) == pytest.approx(0.12)
+    assert parse.margin_of_safety("the margin of safety (minimum 30%) is not met") is None
+
+
+@pytest.mark.unit
 def test_spy_shadow_replays_the_same_cash_flows():
     deposits = [{"date": "2026-01-02", "amount": 1000}]
     trades = [{"date": "2026-01-05", "action": "BUY", "shares": 5, "price": 100, "fees": 0},

@@ -77,7 +77,8 @@ Write these sections, in this order, starting with the rating on its own line:
 
 - **Rating**: exactly one of Buy / Overweight / Hold / Underweight / Sell
 - **Executive Summary**: the call and how to act on it
-- **Investment Thesis**: list business quality, management quality, intrinsic value estimate and margin of safety, F-Score/Z-Score, trend status, the main risk, and the specific evidence that would make you sell. Give the per-share intrinsic value estimate as the price target, and state the margin of safety as a percentage (e.g. "Margin of safety: 32%")
+- **Investment Thesis**: list business quality, management quality, intrinsic value estimate and margin of safety, F-Score/Z-Score, trend status, the main risk, and the specific evidence that would make you sell. State the margin of safety as a percentage (e.g. "Margin of safety: 32%")
+- **Price Target**: the per-share intrinsic value estimate as one number (e.g. "Price Target: 62"), not a range
 
 {NO_EXTERNAL_TOOLS}{get_language_instruction()}"""
 
