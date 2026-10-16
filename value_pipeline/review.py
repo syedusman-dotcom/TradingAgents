@@ -13,6 +13,7 @@ import pandas as pd
 
 from value_pipeline import (
     benchmark,
+    lock,
     market_data,
     metrics,
     parse,
@@ -28,6 +29,10 @@ log = logging.getLogger(__name__)
 
 class CostLimitExceeded(SystemExit):
     pass
+
+
+class ReviewRunning(SystemExit):
+    """The scheduled run and the website share one data folder: one review at a time."""
 
 
 @dataclass
@@ -174,6 +179,15 @@ def _sector(paths: Paths, ticker: str, screen_row: dict | None) -> str | None:
 
 def run(paths: Paths, cfg: dict, *, yes: bool = False, dry_run: bool = False,
         today: str | None = None, confirm=input, only: list[str] | None = None) -> Path:
+    try:
+        with lock.exclusive(paths, "review"):
+            return _run(paths, cfg, yes=yes, dry_run=dry_run, today=today, confirm=confirm, only=only)
+    except lock.Locked:
+        raise ReviewRunning("Not started: another review is running (the scheduled one, or the website's); "
+                            "wait for it to finish.") from None
+
+
+def _run(paths: Paths, cfg: dict, *, yes: bool, dry_run: bool, today: str | None, confirm, only) -> Path:
     today = today or date.today().isoformat()
     rcfg = cfg["review"]
     pf = pfmod.load(paths)
@@ -260,12 +274,15 @@ def run(paths: Paths, cfg: dict, *, yes: bool = False, dry_run: bool = False,
                                  comparison=comparison, cost=cost, failures=failures, dry_run=dry_run, knives=knives)
     (out_dir / "ACTIONS.md").write_text(md, encoding="utf-8")
     (out_dir / "ACTIONS.html").write_text(render.actions_html(md, f"Value review {today}"), encoding="utf-8")
-    (out_dir / "results.json").write_text(json.dumps([
+    # Written whole: the website reads this file while a review may be finishing.
+    tmp = out_dir / "results.json.tmp"
+    tmp.write_text(json.dumps([
         {"ticker": r.ticker, "rating": r.rating, "error": r.error, "report": r.report,
          "intrinsic_value": parse.intrinsic_value(r.decision), "margin_of_safety": parse.margin_of_safety(r.decision),
          "thesis": parse.thesis_summary(r.decision)}
         for r in results
     ], indent=2), encoding="utf-8")
+    tmp.replace(out_dir / "results.json")
 
     if not dry_run:
         _record_ratings(paths, pf, actions, today)

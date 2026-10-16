@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 import secrets
 from datetime import date, datetime
 from pathlib import Path
@@ -18,6 +19,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from value_pipeline import (
     benchmark,
     history,
+    lock,
     market_data,
     operations as ops,
     portfolio as pfmod,
@@ -29,6 +31,9 @@ from value_pipeline.web import charts, views
 from value_pipeline.web.jobs import JobBusy, JobRunner
 
 TEMPLATES = Path(__file__).parent / "templates"
+
+
+TICKER = re.compile(r"[A-Z0-9][A-Z0-9.\-]{0,9}")
 
 
 class FormError(ValueError):
@@ -107,8 +112,10 @@ def create_app(paths: Paths, *, config_path: Path = CONFIG_PATH, price_fn=market
         form = await checked_form(request)
         try:
             cash = parse_number(form.get("cash", ""), "Cash")
-            ops.init_portfolio(paths, cash, str(form.get("currency") or "USD").strip().upper(),
-                               on=str(form.get("date") or "") or None)
+            on = str(form.get("date") or "") or None
+            if on:
+                on = date.fromisoformat(on).isoformat()
+            ops.init_portfolio(paths, cash, str(form.get("currency") or "USD").strip().upper(), on=on)
         except (FormError, ops.PortfolioExists, ValueError) as exc:
             return render(request, "start.html", status=400, error=str(exc))
         return RedirectResponse("/?msg=Portfolio+started", status_code=303)
@@ -172,7 +179,8 @@ def create_app(paths: Paths, *, config_path: Path = CONFIG_PATH, price_fn=market
         entries += [{"date": d["date"], "kind": "DEPOSIT" if float(d["amount"]) > 0 else "WITHDRAW",
                      "ticker": "", "shares": "", "price": "", "fees": "", "note": "",
                      "amount": abs(float(d["amount"])), "gain": None} for d in pfmod.load(paths).deposits]
-        entries.sort(key=lambda e: e["date"], reverse=True)
+        order = {id(e): i for i, e in enumerate(entries)}            # newest first within a day too
+        entries.sort(key=lambda e: (e["date"], order[id(e)]), reverse=True)
         return render(request, "trades.html", entries=entries, undo=ops.undo_info(paths))
 
     @app.post("/trades/undo")
@@ -211,11 +219,15 @@ def create_app(paths: Paths, *, config_path: Path = CONFIG_PATH, price_fn=market
     def tickers_from(form) -> list[str] | None:
         raw = str(form.get("tickers") or "")
         names = [t.strip().upper() for t in raw.replace(" ", ",").split(",") if t.strip()]
+        bad = [t for t in names if not TICKER.fullmatch(t)]
+        if bad:      # each one would cost an agent run and names a report folder
+            raise FormError(f"Not a ticker: {', '.join(bad)} (letters, digits, '.' and '-' only; BRK-B, not BRK/B)")
         return names or None
 
     @app.get("/run", response_class=HTMLResponse)
     def run_page(request: Request):
-        return render(request, "run.html", current=app.state.runner.current(), jobs=app.state.runner.history())
+        return render(request, "run.html", current=app.state.runner.current(), jobs=app.state.runner.history(),
+                      elsewhere=lock.held(paths, "review") and app.state.runner.current() is None)
 
     @app.get("/run/status")
     def run_status():
@@ -237,7 +249,11 @@ def create_app(paths: Paths, *, config_path: Path = CONFIG_PATH, price_fn=market
         form = await checked_form(request)
         if not paths.portfolio.exists():
             return render(request, "start.html")
-        only = tickers_from(form)
+        try:
+            only = tickers_from(form)
+        except FormError as exc:
+            return render(request, "run.html", status=400, current=app.state.runner.current(),
+                          jobs=app.state.runner.history(), error=str(exc))
         plan = reviewmod.preview(paths, load_config(app.state.config_path), only)
         return render(request, "run_preview.html", plan=plan, tickers=",".join(only or []),
                       dry_run=form.get("dry_run") == "yes")
@@ -254,7 +270,13 @@ def create_app(paths: Paths, *, config_path: Path = CONFIG_PATH, price_fn=market
         if kind == "review":
             if form.get("confirm") != "yes":
                 return RedirectResponse("/run?msg=Preview+and+confirm+the+review+first", status_code=303)
-            only, dry = tickers_from(form), form.get("dry_run") == "yes"
+            try:
+                only, dry = tickers_from(form), form.get("dry_run") == "yes"
+            except FormError as exc:
+                return HTMLResponse(str(exc), status_code=400)
+            if lock.held(paths, "review"):
+                return RedirectResponse("/run?msg=" + quote_plus(
+                    "Not started: another review is running in another process (the scheduled one?)"), status_code=303)
             plan = reviewmod.preview(paths, cfg, only)
             if plan["blocked"] and not dry:
                 msg = (f"Estimated cost ${plan['estimate']:,.2f} exceeds max_cost_per_review "
@@ -295,7 +317,9 @@ def create_app(paths: Paths, *, config_path: Path = CONFIG_PATH, price_fn=market
             paths.backups.mkdir(parents=True, exist_ok=True)
             (paths.backups / f"config_{datetime.now():%Y%m%d_%H%M%S_%f}.yaml").write_text(
                 cfg_path.read_text(encoding="utf-8"), encoding="utf-8")
-        cfg_path.write_text(text, encoding="utf-8")
+        tmp = cfg_path.with_suffix(".yaml.tmp")
+        tmp.write_text(text, encoding="utf-8")
+        tmp.replace(cfg_path)           # never a half-written config, which would silently mean the defaults
         return RedirectResponse("/settings?msg=Settings+saved", status_code=303)
 
     return app

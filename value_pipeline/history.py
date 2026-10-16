@@ -60,9 +60,10 @@ def fetch_value_series(paths: Paths, step_days: int = 7) -> list[dict]:
     try:
         pf = pfmod.load(paths)
         trades = pfmod.read_trades(paths)
-        if not pf.deposits:
+        dates = [d["date"] for d in pf.deposits] + [t["date"] for t in trades]
+        if not dates:
             return []
-        start = min(d["date"] for d in pf.deposits)
+        start = min(dates)      # a stock owned before the first deposit (recorded with its real date) counts
         closes = {t: market_data.closes_between(t, start) for t in sorted({t["ticker"] for t in trades})}
         spy = market_data.closes_between("SPY", start)
         first, today = date.fromisoformat(start), date.today()

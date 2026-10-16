@@ -166,3 +166,39 @@ def test_config_with_a_wrong_shape_is_rejected(tmp_path):
             validate_config(load_config(f))
     f.write_text("review:\n  cost_per_run: 3\n")
     validate_config(load_config(f))                    # an int where a float is expected is fine
+
+
+@pytest.mark.unit
+def test_the_review_lock_is_exclusive_across_processes(paths):
+    from value_pipeline import lock
+
+    assert lock.held(paths, "review") is False
+    with lock.exclusive(paths, "review"):
+        assert lock.held(paths, "review") is True
+        with pytest.raises(lock.Locked), lock.exclusive(paths, "review"):
+            pass
+    assert lock.held(paths, "review") is False
+
+
+@pytest.mark.unit
+def test_a_review_refuses_to_start_while_another_runs(paths):
+    from value_pipeline import lock
+
+    with lock.exclusive(paths, "review"), pytest.raises(SystemExit, match="another review"):
+        review.run(paths, DEFAULTS, yes=True, only=["HRB"])
+
+
+@pytest.mark.unit
+def test_value_history_starts_at_the_earliest_trade_not_the_first_deposit(paths, monkeypatch):
+    from value_pipeline import market_data
+
+    ops.record_buy(paths, "KO", 10, 50.0, on="2021-03-01")       # owned before the pipeline started
+    asked = {}
+
+    def closes_between(ticker, start, end=None):
+        asked[ticker] = start
+        return pd.Series(dtype=float)
+
+    monkeypatch.setattr(market_data, "closes_between", closes_between)
+    history.fetch_value_series(paths)
+    assert asked["SPY"] == "2021-03-01" and asked["KO"] == "2021-03-01"

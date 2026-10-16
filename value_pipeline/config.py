@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import math
 import os
 from pathlib import Path
 
@@ -69,6 +70,10 @@ def _merge(base: dict, override: dict) -> dict:
     return out
 
 
+# Numbers that disable a safeguard at zero: the cost cap would never block, sizes would be nothing.
+_POSITIVE = {"cost_per_run", "max_cost_per_review", "max_position_weight", "max_sector_weight", "min_holdings"}
+
+
 def validate_config(cfg: dict) -> None:
     """Raise ValueError when a section or value has the wrong shape for the pipeline to use."""
     for section, defaults in DEFAULTS.items():
@@ -85,6 +90,11 @@ def validate_config(cfg: dict) -> None:
                 ok = isinstance(value, type(default))
             if not ok:
                 raise ValueError(f"{section}.{key} must be a {type(default).__name__}, not {value!r}")
+            if isinstance(default, (int, float)) and not isinstance(default, bool):
+                if not math.isfinite(value) or value < 0:
+                    raise ValueError(f"{section}.{key} must be a finite number of zero or more, not {value!r}")
+                if key in _POSITIVE and value <= 0:
+                    raise ValueError(f"{section}.{key} must be more than zero, not {value!r}")
 
 
 def load_config(path: Path | None = None) -> dict:

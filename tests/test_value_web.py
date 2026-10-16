@@ -343,3 +343,67 @@ def test_stock_and_screen_pages_show_tracked_investors(tmp_path):
         "HRB,Consumer Discretionary,1,UPTREND,True,1,Berkshire\n")
     r = client.get("/screen")
     assert "Superinvestors" in r.text and "1: Berkshire" in r.text
+
+
+@pytest.mark.unit
+def test_a_corrupt_job_index_neither_blocks_startup_nor_wedges_the_runner(tmp_path):
+    from value_pipeline.web.jobs import JobRunner
+
+    (tmp_path / "logs").mkdir()
+    (tmp_path / "logs" / "jobs.json").write_text("{not json")
+    runner = JobRunner(tmp_path / "logs")
+    runner.start("watch", lambda: None)
+    _wait(runner)
+    assert runner.current() is None
+    runner.start("watch", lambda: None)          # not JobBusy
+    _wait(runner)
+    assert runner.history()[0]["status"] == "done"
+
+
+@pytest.mark.unit
+def test_run_page_shows_a_review_running_in_another_process(tmp_path):
+    from value_pipeline import lock
+
+    calls = []
+    client, app, paths = _client(tmp_path, job_funcs={"review": lambda paths, cfg, **kw: calls.append(kw)})
+    ops.init_portfolio(paths, 1000.0)
+    with lock.exclusive(paths, "review"):
+        assert "another process" in client.get("/run").text
+        r = _post(client, app, "/run/start", kind="review", tickers="HRB", confirm="yes")
+        assert r.status_code == 303 and "another" in r.headers["location"]
+    _wait(app.state.runner)
+    assert calls == []
+
+
+@pytest.mark.unit
+def test_start_date_and_run_tickers_are_validated(tmp_path):
+    client, app, paths = _client(tmp_path)
+    r = client.post("/start", data={"cash": "1000", "currency": "USD", "date": "10/01/2026", "token": app.state.token})
+    assert r.status_code == 400 and not paths.portfolio.exists()
+    ops.init_portfolio(paths, 1000.0)
+    r = client.post("/run/preview", data={"kind": "review", "tickers": "../x, HRB", "token": app.state.token})
+    assert r.status_code == 400 and "ticker" in r.text.lower()
+    r = _post(client, app, "/run/start", kind="review", tickers="BRK/B", confirm="yes")
+    assert r.status_code == 400
+    assert "init --force" in str(pytest.raises(ops.PortfolioExists, ops.init_portfolio, paths, 1.0).value)
+
+
+@pytest.mark.unit
+def test_settings_refuse_numbers_that_disable_the_cost_cap(tmp_path):
+    client, app, paths = _client(tmp_path)
+    for text in ("review:\n  cost_per_run: 0\n", "review:\n  max_cost_per_review: .nan\n",
+                 "review:\n  max_cost_per_review: -5\n", "sizing:\n  max_position_weight: .inf\n"):
+        assert _post(client, app, "/settings", text=text).status_code == 400, text
+    assert _post(client, app, "/settings", text="review:\n  max_cost_per_review: 60\n").status_code == 303
+
+
+@pytest.mark.unit
+def test_history_lists_same_day_entries_newest_first(tmp_path):
+    client, app, paths = _client(tmp_path)
+    ops.init_portfolio(paths, 1000.0, on="2026-10-01")
+    ops.record_buy(paths, "AAA", 1, 10.0, on="2026-10-02")
+    ops.record_buy(paths, "BBB", 1, 10.0, on="2026-10-02")
+    import re
+
+    rows = re.findall(r'<a href="/stock/(AAA|BBB)">', client.get("/trades").text)
+    assert rows == ["BBB", "AAA"]

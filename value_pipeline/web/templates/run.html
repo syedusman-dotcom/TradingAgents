@@ -1,6 +1,8 @@
 {% extends "base.html" %}
 {% block content %}
 <h1>Run</h1>
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+{% if elsewhere %}<p class="error">A review is running in another process (the scheduled Saturday run, or a terminal). Starting another would spend the cost twice; wait for it to finish.</p>{% endif %}
 <fieldset><legend>Start a job</legend>
 <form method="post" action="/run/start" class="inline"><input type="hidden" name="token" value="{{ token }}"><input type="hidden" name="kind" value="screen"><button>Run screen</button></form>
 <span class="muted">about 25 min the first time each week, then minutes</span>

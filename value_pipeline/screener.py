@@ -176,7 +176,8 @@ def run(paths: Paths, cfg: dict, owned: set[str], today: str | None = None) -> d
     df = pd.DataFrame(rows)
     if not df.empty:
         df = df.sort_values("mf_position", na_position="last")
-    df.to_csv(out, index=False)
+    df.to_csv(out.with_suffix(".csv.tmp"), index=False)
+    out.with_suffix(".csv.tmp").replace(out)          # whole or absent: the website reads it any time
     _write_rows(paths.screens / f"screen_{today}_skipped.csv", skipped, ["ticker", "reason"])
     _write_rows(paths.screens / f"screen_{today}_excluded.csv",
                 excluded[["ticker", "name", "sector"]].to_dict("records"), ["ticker", "name", "sector"])

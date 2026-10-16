@@ -31,7 +31,10 @@ class JobRunner:
         """A job still 'running' in the index belonged to a server that was stopped mid-job."""
         if not self._index.exists():
             return
-        jobs = self._read()
+        try:
+            jobs = self._read()
+        except ValueError:      # a corrupt index must not stop the website from starting
+            jobs = []
         for j in jobs:
             if j["status"] == "running":
                 j.update(status="interrupted", message="the website was stopped while this job ran")
@@ -42,7 +45,12 @@ class JobRunner:
         return self.log_dir / "jobs.json"
 
     def _read(self) -> list[dict]:
-        return json.loads(self._index.read_text(encoding="utf-8")) if self._index.exists() else []
+        if not self._index.exists():
+            return []
+        try:
+            return json.loads(self._index.read_text(encoding="utf-8"))
+        except ValueError:
+            return []
 
     def _write(self, job: dict) -> None:
         jobs = [j for j in self._read() if j["name"] != job["name"]]
@@ -97,5 +105,6 @@ class JobRunner:
                 logging.getLogger().removeHandler(handler)
             job["ended"] = datetime.now().isoformat(timespec="seconds")
             with self._lock:
-                self._write(job)
-                self._current = None
+                self._current = None        # cleared first: a failed write must not wedge the runner
+                with contextlib.suppress(OSError):
+                    self._write(job)

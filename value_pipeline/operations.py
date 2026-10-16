@@ -45,7 +45,8 @@ def _remember(paths: Paths, backup_dir: Path | None, description: str) -> None:
 def init_portfolio(paths: Paths, cash: float, currency: str = "USD", on: str | None = None,
                    force: bool = False) -> pfmod.Portfolio:
     if paths.portfolio.exists() and not force:
-        raise PortfolioExists(f"{paths.portfolio} already exists; start over with force (a backup is kept)")
+        raise PortfolioExists(f"{paths.portfolio} already exists. To start over, run "
+                              "`python -m value_pipeline init --force` (a backup is kept).")
     pf = pfmod.Portfolio(cash=0.0, currency=currency)
     pfmod.apply_deposit(pf, cash, on=on)
     pfmod.save(paths, pf)
