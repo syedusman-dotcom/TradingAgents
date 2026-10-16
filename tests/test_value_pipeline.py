@@ -213,6 +213,31 @@ def test_piotroski_missing_data_is_counted_not_guessed():
 
 
 @pytest.mark.unit
+def test_piotroski_missing_long_term_debt_is_zero_only_for_a_debt_free_company():
+    assert metrics.piotroski(dict(CUR, long_term_debt=None, total_debt=0), PREV)["points"]["leverage_falling"] is True
+    assert metrics.piotroski(dict(CUR, long_term_debt=None, total_debt=900), PREV)["points"]["leverage_falling"] is None
+
+
+@pytest.mark.unit
+def test_share_count_prefers_market_cap_over_price_to_one_class_count():
+    # FOX: Yahoo's sharesOutstanding is class B only (220M); market cap / price covers every class.
+    assert metrics.share_count(23_567e6, 55.89, statement=439e6, reported=220e6) == pytest.approx(421.67e6, rel=1e-3)
+    assert metrics.share_count(None, 55.89, statement=439e6, reported=220e6) == 439e6
+    assert metrics.share_count(None, None, statement=None, reported=220e6) == 220e6
+    assert metrics.share_count(0, 0, statement=None, reported=None) is None
+
+
+@pytest.mark.unit
+def test_screen_values_per_share_on_market_cap_over_price():
+    year = {"fiscal_year_end": "2025-12-31", "ebit": 200, "free_cash_flow": 150, "current_assets": 400,
+            "cash": 0, "current_liabilities": 200, "net_ppe": 100, "shares": 440, "total_debt": 0}
+    data = {"ticker": "FOX", "years": [year, year], "market_cap": 8800, "price": 20, "shares": 220, "closes": []}
+    row = screener.evaluate(data)
+    assert row["shares"] == pytest.approx(440)
+    assert row["value_base"] == pytest.approx(metrics.formula_value([year, year], 20, 440, 0)["base"])
+
+
+@pytest.mark.unit
 def test_roic_floors_working_capital_at_zero_and_excludes_cash():
     assert metrics.roic({"ebit": 100, "current_assets": 500, "cash": 100, "current_liabilities": 200, "net_ppe": 300}) == \
         pytest.approx(100 / (200 + 300))
@@ -255,7 +280,10 @@ def test_altman_z_matches_the_formula():
 @pytest.mark.unit
 def test_interest_coverage_and_debt_to_equity():
     assert metrics.interest_coverage({"ebit": 100, "interest_expense": -20}) == 5
+    assert metrics.interest_coverage({"ebit": 100, "interest_expense": None, "total_debt": 0}) == math.inf
     assert metrics.interest_coverage({"ebit": 100, "interest_expense": None}) == math.inf
+    # Debt with no interest row is unknown coverage, not infinite: Yahoo drops the row for some borrowers.
+    assert metrics.interest_coverage({"ebit": 100, "interest_expense": None, "total_debt": 8_500}) is None
     assert metrics.debt_to_equity({"total_debt": 50, "equity": 100}) == 0.5
     assert metrics.debt_to_equity({"total_debt": 50, "equity": -1}) is None
 

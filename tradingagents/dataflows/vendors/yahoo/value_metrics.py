@@ -19,6 +19,7 @@ from tradingagents.dataflows.value_metrics import (
     company_metrics,
     current_discount_rate,
     render_report,
+    share_count,
 )
 from tradingagents.dataflows.vendors.yahoo.common import raise_for_empty, yf_retry
 
@@ -98,8 +99,12 @@ def get_value_metrics(
 
     quote, reported = info.get("currency"), info.get("financialCurrency")
     price = info.get("currentPrice") or info.get("regularMarketPrice")
-    shares = info.get("sharesOutstanding") or years[0].get("shares")
+    yahoo_shares = info.get("sharesOutstanding")
+    shares = share_count(info.get("marketCap"), price, years[0].get("shares"), yahoo_shares)
     note = ""
+    if yahoo_shares and shares and abs(yahoo_shares / shares - 1) > 0.10:
+        note = (f"\n\nYahoo's sharesOutstanding ({yahoo_shares / 1e6:,.0f}M) counts one share class; the per-share "
+                f"figures above use market cap / price ({shares / 1e6:,.0f}M), which covers every class.")
     if quote in _MINOR_UNITS or (quote and reported and quote != reported):
         # Per-share values would mix currencies (an ADR quoted in USD reporting in
         # TWD, a London listing quoted in pence): keep the ratios, drop the price.

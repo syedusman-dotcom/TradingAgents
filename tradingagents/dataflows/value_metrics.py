@@ -42,6 +42,16 @@ def div(a, b) -> float | None:
 
 # --- Greenblatt -------------------------------------------------------------
 
+def share_count(market_cap, price, statement=None, reported=None) -> float | None:
+    """The shares every per-share figure divides by: market cap / price first (it covers every
+    share class; Yahoo's sharesOutstanding can count one class only, FOX and GOOGL among them),
+    then the statements' count, then the reported one."""
+    market_cap, price = num(market_cap), num(price)
+    if market_cap and price and market_cap > 0 and price > 0:
+        return market_cap / price
+    return num(statement) or num(reported) or None
+
+
 def enterprise_value(market_cap, total_debt, cash) -> float | None:
     market_cap = num(market_cap)
     if market_cap is None:
@@ -89,6 +99,14 @@ FSCORE_POINTS = (
 )
 
 
+def _long_term_debt(year: dict) -> float | None:
+    """A missing long-term-debt row means zero for a debt-free company and unknown otherwise."""
+    ltd = num(year.get("long_term_debt"))
+    if ltd is not None:
+        return ltd
+    return 0.0 if not (num(year.get("total_debt")) or 0.0) else None
+
+
 def piotroski(cur: dict, prev: dict) -> dict:
     """The nine Piotroski points from two consecutive fiscal years.
 
@@ -101,7 +119,7 @@ def piotroski(cur: dict, prev: dict) -> dict:
 
     roa, roa_prev = div(cur.get("net_income"), cur.get("total_assets")), div(prev.get("net_income"), prev.get("total_assets"))
     cfo = num(cur.get("operating_cash_flow"))
-    lev, lev_prev = div(cur.get("long_term_debt") or 0.0, cur.get("total_assets")), div(prev.get("long_term_debt") or 0.0, prev.get("total_assets"))
+    lev, lev_prev = div(_long_term_debt(cur), cur.get("total_assets")), div(_long_term_debt(prev), prev.get("total_assets"))
     cr, cr_prev = div(cur.get("current_assets"), cur.get("current_liabilities")), div(prev.get("current_assets"), prev.get("current_liabilities"))
     shares, shares_prev = num(cur.get("shares")), num(prev.get("shares"))
     gm, gm_prev = div(cur.get("gross_profit"), cur.get("revenue")), div(prev.get("gross_profit"), prev.get("revenue"))
@@ -147,14 +165,17 @@ def debt_to_equity(year: dict) -> float | None:
 
 
 def interest_coverage(year: dict) -> float | None:
-    """EBIT / interest expense. No reported interest expense on positive EBIT reads as no
-    interest burden (infinite coverage); Yahoo reports debt-free companies that way."""
+    """EBIT / interest expense. No interest row on positive EBIT reads as no interest
+    burden (infinite coverage) only when there is no debt either: Yahoo also drops the
+    row for some borrowers, and for them the coverage is unknown, not infinite."""
     ebit = num(year.get("ebit"))
     if ebit is None:
         return None
     interest = abs(num(year.get("interest_expense")) or 0.0)
     if interest == 0:
-        return math.inf if ebit > 0 else None
+        if ebit <= 0 or (num(year.get("total_debt")) or 0.0) > 0:
+            return None
+        return math.inf
     return ebit / interest
 
 
@@ -208,7 +229,7 @@ def current_discount_rate(fetch=None) -> dict:
         logger.info("10-year Treasury yield unavailable, using the %.0f%% floor: %s", MIN_DISCOUNT_RATE * 100, exc)
         ten_year = None
     out = {"rate": discount_rate(ten_year), "treasury_10y": ten_year}
-    if fetch is None:
+    if fetch is None and ten_year is not None:    # a failure is retried next time, not pinned for the day
         _rate_cache[key] = out
     return out
 

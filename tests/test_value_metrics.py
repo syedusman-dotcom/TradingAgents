@@ -171,6 +171,45 @@ def test_current_discount_rate_falls_back_to_the_floor_when_fred_fails():
 
 
 @pytest.mark.unit
+def test_a_failed_fred_fetch_is_not_cached_for_the_day(monkeypatch):
+    calls = []
+
+    def flaky():
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("timeout")
+        return 0.05
+
+    monkeypatch.setattr(vm, "_latest_10y", flaky)
+    vm._rate_cache.clear()
+    assert vm.current_discount_rate() == {"rate": vm.MIN_DISCOUNT_RATE, "treasury_10y": None}
+    assert vm.current_discount_rate()["treasury_10y"] == 0.05     # tried again, not pinned at the floor
+    assert vm.current_discount_rate()["treasury_10y"] == 0.05 and len(calls) == 2   # now cached
+    vm._rate_cache.clear()
+
+
+@pytest.mark.unit
+def test_report_notes_when_yahoo_share_count_is_one_class(monkeypatch):
+    class FakeTicker:
+        def __init__(self, symbol):
+            self.info = {"currency": "USD", "financialCurrency": "USD", "currentPrice": 20.0,
+                         "marketCap": 8800e6, "sharesOutstanding": 220e6}
+            idx = pd.to_datetime(["2025-12-31", "2024-12-31"])
+            self.income_stmt = pd.DataFrame({idx[0]: [1000, 200, 150], idx[1]: [900, 180, 140]},
+                                            index=["Total Revenue", "EBIT", "Net Income"])
+            self.balance_sheet = pd.DataFrame({idx[0]: [2000e6, 440e6, 100e6], idx[1]: [1900e6, 440e6, 100e6]},
+                                              index=["Total Assets", "Ordinary Shares Number", "Total Debt"])
+            self.cashflow = pd.DataFrame({idx[0]: [220, 180, -40], idx[1]: [210, 170, -40]},
+                                         index=["Operating Cash Flow", "Free Cash Flow", "Capital Expenditure"])
+
+    monkeypatch.setattr(yahoo_vm.yf, "Ticker", FakeTicker)
+    monkeypatch.setattr(yahoo_vm, "current_discount_rate", lambda: {"rate": 0.09, "treasury_10y": None})
+    report = yahoo_vm.get_value_metrics("FOX")
+    assert "Shares 440M" in report
+    assert "Yahoo's sharesOutstanding (220M) counts one share class" in report
+
+
+@pytest.mark.unit
 def test_formula_value_and_reverse_dcf_use_the_given_rate():
     years = [_year(), _year(free_cash_flow=140, ebit=180)]
     v = vm.formula_value(years, price=20.0, shares=100, net_debt=400, rate=0.10)

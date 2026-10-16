@@ -32,7 +32,8 @@ def evaluate(data: dict, normalize_years: int = 5, roic_cap: float = 1.0,
     ev = data.get("enterprise_value") or metrics.enterprise_value(mcap, cur.get("total_debt"), cur.get("cash"))
     fs = metrics.piotroski(cur, prev)
     net_debt = (metrics.num(cur.get("total_debt")) or 0.0) - (metrics.num(cur.get("cash")) or 0.0)
-    value = metrics.formula_value(years, data.get("price"), data.get("shares") or cur.get("shares"), net_debt, rate) or {}
+    shares = metrics.share_count(mcap, data.get("price"), cur.get("shares"), data.get("shares"))
+    value = metrics.formula_value(years, data.get("price"), shares, net_debt, rate) or {}
     tr = metrics.trend(data.get("closes") or [])
     norm = metrics.normalized(years, normalize_years)
     row = {
@@ -40,6 +41,7 @@ def evaluate(data: dict, normalize_years: int = 5, roic_cap: float = 1.0,
         "fiscal_year_end": cur["fiscal_year_end"],
         "price": data.get("price"),
         "market_cap": mcap,
+        "shares": shares,
         "enterprise_value": ev,
         "earnings_yield": metrics.earnings_yield(cur.get("ebit"), ev),
         "roic": metrics.roic(cur),

@@ -24,6 +24,7 @@ from tradingagents.dataflows.value_metrics import (  # noqa: F401 - re-exported 
     num,
     piotroski,
     roic,
+    share_count,
 )
 
 TRENDS = ("UPTREND", "BASING", "DOWNTREND", "FREEFALL")
