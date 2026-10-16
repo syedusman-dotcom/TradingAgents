@@ -25,6 +25,7 @@ class Decision:
     fscore: int | None = None
     formula_value: float | None = None      # the screen's base value (3% growth)
     sector: str | None = None
+    days_since_last_review: int | None = None
 
     @property
     def held(self) -> bool:
@@ -48,6 +49,9 @@ class Action:
 # The agents' value may differ from the formula's for stated reasons; past this
 # gap, check their reasons before acting on it.
 VALUE_GAP = 0.30
+# An Underweight repeated within this many days is the same verdict again (a
+# re-run, a --tickers check), not a second strike toward selling.
+STRIKE_DAYS = 21
 
 
 def value_gap_flag(d: Decision) -> str | None:
@@ -70,8 +74,13 @@ def base_action(d: Decision) -> Action:
         if d.rating == "Sell":
             a.action, a.reason = "SELL", "Rated Sell: exit the position"
         elif d.rating == "Underweight":
-            a.consecutive_underweight = d.consecutive_underweight + 1
-            if a.consecutive_underweight >= 2:
+            rerun = d.consecutive_underweight > 0 and d.days_since_last_review is not None \
+                and d.days_since_last_review < STRIKE_DAYS
+            a.consecutive_underweight = d.consecutive_underweight + (0 if rerun else 1)
+            if rerun:
+                a.reason = (f"Underweight again on a re-run {d.days_since_last_review} days after the last "
+                            "review: the earlier trim stands, no new action")
+            elif a.consecutive_underweight >= 2:
                 a.action, a.reason = "SELL", "Underweight twice in a row: exit"
             else:
                 a.action, a.reason = "TRIM", "Underweight (first time): trim half; sell if it repeats"
@@ -85,8 +94,12 @@ def base_action(d: Decision) -> Action:
         if d.price is not None and d.intrinsic_value is not None and d.price > d.intrinsic_value:
             a.flags.append("REACHED VALUE: consider selling")
     else:
+        above = (d.price is not None and d.intrinsic_value is not None and d.price > d.intrinsic_value) or \
+            (d.margin_of_safety is not None and d.margin_of_safety < 0)
         if d.trend == "FREEFALL":
             a.action, a.reason = "SKIP", f"Rated {d.rating} but in FREEFALL: wait for BASING"
+        elif d.rating in BUY_RATINGS and above:
+            a.action, a.reason = "SKIP", f"Rated {d.rating} but the price is above the agents' own value: no margin of safety"
         elif d.rating in BUY_RATINGS:
             a.action, a.reason = "BUY", f"Rated {d.rating}"
         else:
@@ -99,25 +112,38 @@ def target_weight(n_positions: int, sizing: dict) -> float:
     return min(sizing["max_position_weight"], 1.0 / max(sizing["min_holdings"], n_positions, 1))
 
 
-def plan(decisions: list[Decision], cash: float, sizing: dict) -> tuple[list[Action], dict]:
+def plan(decisions: list[Decision], cash: float, sizing: dict,
+         others: list[tuple[str, float, str | None]] = ()) -> tuple[list[Action], dict]:
     """Apply the rules, then size buys and adds against cash.
 
     Cash for buys includes the estimated proceeds of the sells and trims in the
-    same list, so place those first. Buys never exceed that cash.
+    same list, so place those first. Buys never exceed that cash. ``others`` are
+    the holdings not on this list, as (ticker, value, sector): they count toward
+    the total and the sector cap even though they were not reviewed.
     """
     actions = [base_action(d) for d in decisions]
-    held_value = sum(d.held_shares * (d.price or 0.0) for d in decisions if d.held)
+    held_value = sum(d.held_shares * (d.price or 0.0) for d in decisions if d.held) + sum(v for _, v, _ in others)
     total_value = cash + held_value
+    cap_value = sizing["max_position_weight"] * total_value
 
     for a in actions:
         d = a.decision
         if a.action in ("SELL", "TRIM") and d.price is not None:
             a.shares = d.held_shares if a.action == "SELL" else round(d.held_shares / 2, 4)
             a.amount = round(a.shares * d.price, 2)
+        elif a.action == "KEEP" and d.price is not None and d.held_shares * d.price - cap_value >= sizing["min_trade_amount"]:
+            # A position that grew past the cap is trimmed back to it, whatever its rating.
+            a.action = "TRIM"
+            a.shares = round((d.held_shares * d.price - cap_value) / d.price, 4)
+            a.amount = round(a.shares * d.price, 2)
+            a.reason += f"; above the {sizing['max_position_weight']:.0%} max position: trim back to the cap"
     available = cash + sum(a.amount or 0.0 for a in actions if a.action in ("SELL", "TRIM"))
 
     # Money per sector after the sells and trims on this list, for the sector cap.
     sector_value: dict[str, float] = {}
+    for _, value, sector in others:
+        if sector:
+            sector_value[sector] = sector_value.get(sector, 0.0) + value
     for a in actions:
         d = a.decision
         if d.held and d.sector and d.price is not None:
@@ -126,7 +152,7 @@ def plan(decisions: list[Decision], cash: float, sizing: dict) -> tuple[list[Act
     sector_cap = sizing.get("max_sector_weight", 1.0) * total_value
 
     n_positions = sum(1 for a in actions if a.held and a.action != "SELL") + \
-        sum(1 for a in actions if a.action == "BUY")
+        sum(1 for a in actions if a.action == "BUY") + len(others)
     weight = target_weight(n_positions, sizing)
     target_value = weight * total_value
 
@@ -147,7 +173,7 @@ def plan(decisions: list[Decision], cash: float, sizing: dict) -> tuple[list[Act
             gap = target_value * size_factor(d.rating) - d.held_shares * (d.price or 0.0)
             if gap > 0:
                 wants.append((1 if d.rating == "Buy" else 3, a, gap))
-    wants.sort(key=lambda w: (w[0], -(w[1].decision.margin_of_safety or -1.0)))
+    wants.sort(key=lambda w: (w[0], -(w[1].decision.margin_of_safety if w[1].decision.margin_of_safety is not None else -1.0)))
 
     for _, a, wanted in wants:
         d = a.decision
@@ -187,5 +213,8 @@ def plan(decisions: list[Decision], cash: float, sizing: dict) -> tuple[list[Act
         "cash": cash,
         "target_weight": weight,
         "cash_after": available,
+        # Holdings not on this list that sit above the cap: nothing trims them here, so say so.
+        "over_cap": [(t, round(v / total_value, 4)) for t, v, _ in others
+                     if total_value > 0 and v - cap_value >= sizing["min_trade_amount"]],
     }
     return actions, summary

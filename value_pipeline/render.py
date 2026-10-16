@@ -40,6 +40,9 @@ def actions_markdown(date: str, actions: list[Action], summary: dict, *, reports
     lines.append(f"- Target weight per stock: {summary['target_weight']:.0%}; cash left after these actions: "
                  f"{_money(summary['cash_after'])}")
     lines.append(f"- Cost of this review: ~{_money(cost)}")
+    for ticker, weight in summary.get("over_cap", []):
+        lines.append(f"- **{ticker} at {weight:.0%}** of the portfolio is above the max position but was not "
+                     "reviewed: consider trimming it to the cap")
     lines.append("")
 
     lines += ["## Holdings", ""]

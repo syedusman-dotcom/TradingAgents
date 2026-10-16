@@ -106,6 +106,18 @@ def fundamentals(ticker: str, paths: Paths, cache_days: int = 7) -> dict:
     return data
 
 
+def cached_sector(ticker: str, paths: Paths) -> str | None:
+    """The sector from the screen's fundamentals cache, whatever its age; None when never fetched."""
+    cache = paths.cache / f"{ticker}.json"
+    if not cache.exists():
+        return None
+    try:
+        sector = json.loads(cache.read_text(encoding="utf-8")).get("sector")
+    except (OSError, ValueError):
+        return None
+    return sector if isinstance(sector, str) else None
+
+
 # --- prices ---------------------------------------------------------------------
 
 def latest_price(ticker: str) -> float | None:

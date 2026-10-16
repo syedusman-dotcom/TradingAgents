@@ -113,6 +113,10 @@ def _screen_rows(paths: Paths) -> dict[str, dict]:
     return {r["ticker"]: r for r in pd.read_csv(path).to_dict("records")}
 
 
+def _days_between(earlier: str | None, later: str) -> int | None:
+    return (date.fromisoformat(later) - date.fromisoformat(earlier)).days if earlier else None
+
+
 def _trend(ticker: str, screen_row: dict | None) -> str | None:
     if screen_row and isinstance(screen_row.get("trend"), str):
         return screen_row["trend"]
@@ -136,6 +140,14 @@ def select_tickers(owned: list[str], candidates: list[str], only: list[str] | No
     return owned + candidates, len(owned), len(candidates)
 
 
+def fit_to_cap(tickers: list[str], n_held: int, cost_per_run: float, limit: float) -> tuple[list[str], int, int]:
+    """Drop candidates from the end until the estimate fits the cap: (tickers, candidates kept, dropped).
+    Holdings are never dropped; if they alone exceed the cap, the review is blocked."""
+    affordable = int(limit // cost_per_run) if cost_per_run > 0 else len(tickers)
+    keep = max(n_held, min(len(tickers), affordable))
+    return tickers[:keep], keep - n_held, len(tickers) - keep
+
+
 def preview(paths: Paths, cfg: dict, only: list[str] | None = None) -> dict:
     """What a review would run and cost, without running anything."""
     rcfg = cfg["review"]
@@ -143,10 +155,21 @@ def preview(paths: Paths, cfg: dict, only: list[str] | None = None) -> dict:
     owned = {p.ticker for p in pf.positions}
     candidates = [] if only else screener.top_candidates(paths, owned, rcfg["candidates"])
     tickers, n_held, n_new = select_tickers([p.ticker for p in pf.positions], [c["ticker"] for c in candidates], only)
+    dropped = 0
+    if not only:
+        tickers, n_new, dropped = fit_to_cap(tickers, n_held, rcfg["cost_per_run"], rcfg["max_cost_per_review"])
     estimate = len(tickers) * rcfg["cost_per_run"]
-    return {"tickers": tickers, "n_held": n_held, "n_new": n_new, "estimate": estimate,
+    return {"tickers": tickers, "n_held": n_held, "n_new": n_new, "estimate": estimate, "dropped": dropped,
             "cost_per_run": rcfg["cost_per_run"], "limit": rcfg["max_cost_per_review"],
             "blocked": estimate > rcfg["max_cost_per_review"]}
+
+
+def _sector(paths: Paths, ticker: str, screen_row: dict | None) -> str | None:
+    """The screen's sector, else the cached fundamentals' (holdings outside the screen still count
+    toward the sector cap)."""
+    if screen_row and isinstance(screen_row.get("sector"), str):
+        return screen_row["sector"]
+    return market_data.cached_sector(ticker, paths)
 
 
 def run(paths: Paths, cfg: dict, *, yes: bool = False, dry_run: bool = False,
@@ -185,7 +208,7 @@ def run(paths: Paths, cfg: dict, *, yes: bool = False, dry_run: bool = False,
             out_dir, n = paths.review_dir(f"{today}-{n}"), n + 1
     out_dir.mkdir(parents=True, exist_ok=True)
     screen = _screen_rows(paths)
-    prices = {t: market_data.latest_price(t) for t in tickers}
+    prices = {t: market_data.latest_price(t) for t in sorted(set(tickers) | owned)}
 
     results: list[RunResult] = []
     if dry_run:
@@ -215,9 +238,13 @@ def run(paths: Paths, cfg: dict, *, yes: bool = False, dry_run: bool = False,
             margin_of_safety=parse.margin_of_safety(r.decision),
             fscore=int(fscore) if fscore is not None and not pd.isna(fscore) else None,
             formula_value=_float(row.get("value_base")) if row else None,
-            sector=row.get("sector") if row and isinstance(row.get("sector"), str) else None,
+            sector=_sector(paths, r.ticker, row),
+            days_since_last_review=_days_between(held.last_review_date, today) if held else None,
         ))
-    actions, summary = plan(decisions, pf.cash, cfg["sizing"])
+    reviewed = {d.ticker for d in decisions}
+    others = [(p.ticker, p.shares * (prices.get(p.ticker) or p.avg_price), _sector(paths, p.ticker, screen.get(p.ticker)))
+              for p in pf.positions if p.ticker not in reviewed]
+    actions, summary = plan(decisions, pf.cash, cfg["sizing"], others)
     failures = [f"{r.ticker}: {r.error}" for r in results if r.error]
     cost = 0.0 if dry_run else sum(1 for r in results if not r.error) * rcfg["cost_per_run"]
     comparison = benchmark.compare(summary["total_value"], pf.deposits, pfmod.read_trades(paths))

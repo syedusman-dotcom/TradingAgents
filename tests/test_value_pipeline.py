@@ -153,8 +153,7 @@ def test_buys_never_exceed_cash_and_tiny_buys_are_skipped():
     decisions = [Decision("A", "Buy", price=10.0, margin_of_safety=0.5),
                  Decision("B", "Buy", price=10.0, margin_of_safety=0.3)]
     # Total 1,010: each target is 101; only 120 cash, so A gets 101, B the 19 left (below the 25 minimum).
-    held = Decision("H", "Hold", price=10.0, held_shares=89)
-    actions, summary = plan([held, *decisions], cash=120.0, sizing=SIZING)
+    actions, summary = plan(decisions, cash=120.0, sizing=SIZING, others=[("H", 890.0, None)])
     by = {a.ticker: a for a in actions}
     assert by["A"].action == "BUY" and by["A"].amount == pytest.approx(101.0)
     assert by["B"].action == "SKIP" and "not enough cash" in by["B"].reason
@@ -376,7 +375,7 @@ def test_spy_shadow_replays_the_same_cash_flows():
 
 @pytest.mark.unit
 def test_action_page_is_self_contained():
-    actions, summary = plan([_held("Hold"), _new("Buy")], cash=5000.0, sizing=SIZING)
+    actions, summary = plan([_held("Hold"), _new("Buy")], cash=50_000.0, sizing=SIZING)
     md = render.actions_markdown("2026-11-07", actions, summary, reports={"NEW": "NEW/complete_report.html"},
                                  comparison=None, cost=4.0, failures=[], dry_run=False)
     assert "| HLD | Hold | KEEP |" in md and "| NEW | Buy |" in md
@@ -464,6 +463,93 @@ def test_unstable_roic_and_dilution_fail_the_filters():
     assert "ROIC unstable" in screener.failed_filters(dict(GOOD, roic_min=0.02), f)
     assert "dilution" in screener.failed_filters(dict(GOOD, dilution_per_year=0.06), f)
     assert screener.failed_filters(dict(GOOD, roic_min=None, dilution_per_year=None), f) == []
+
+
+@pytest.mark.unit
+def test_holding_above_the_max_weight_is_trimmed_back_to_the_cap():
+    big = Decision("BIG", "Hold", price=100.0, held_shares=500)              # 50,000 of 51,000
+    actions, _ = plan([big], cash=1_000.0, sizing=SIZING)                    # cap 10% = 5,100
+    a = actions[0]
+    assert a.action == "TRIM" and "above the 10% max position" in a.reason
+    assert a.shares == pytest.approx(449) and a.amount == pytest.approx(44_900.0)
+    # Just over the cap by less than the minimum trade: left alone.
+    small = Decision("BIG", "Hold", price=100.0, held_shares=50.1)           # 5,010 of 50,010 = 10.02%
+    assert plan([small], cash=45_000.0, sizing=SIZING)[0][0].action == "KEEP"
+    # A Buy-rated holding over the cap is trimmed too, never added to.
+    hot = Decision("HOT", "Buy", price=100.0, held_shares=500)
+    assert plan([hot], cash=1_000.0, sizing=SIZING)[0][0].action == "TRIM"
+
+
+@pytest.mark.unit
+def test_plan_counts_holdings_that_were_not_reviewed():
+    sizing = {**SIZING, "max_sector_weight": 0.30}
+    others = [("A", 90_000.0, "Tech"), ("B", 5_000.0, "Health")]              # unreviewed, 95,000
+    buy = Decision("NEW", "Buy", price=10.0, sector="Health")
+    actions, summary = plan([buy], cash=5_000.0, sizing=sizing, others=others)
+    assert summary["total_value"] == pytest.approx(100_000.0)
+    assert actions[0].amount == pytest.approx(5_000.0)                        # target 10% of 100k, cash-limited
+    tech = Decision("NEW", "Buy", price=10.0, sector="Tech")                  # Tech already at 90%
+    actions, _ = plan([tech], cash=5_000.0, sizing=sizing, others=others)
+    assert actions[0].action == "SKIP" and "sector cap" in actions[0].reason
+
+
+@pytest.mark.unit
+def test_buy_rating_above_the_agents_own_value_is_not_bought():
+    a = base_action(_new("Buy", price=10.0, intrinsic_value=8.0))
+    assert a.action == "SKIP" and "above" in a.reason
+    assert base_action(_new("Overweight", price=10.0, margin_of_safety=-0.25)).action == "SKIP"
+    assert base_action(_new("Buy", price=10.0, intrinsic_value=15.0)).action == "BUY"
+
+
+@pytest.mark.unit
+def test_underweight_again_within_three_weeks_is_not_a_repeat():
+    rerun = base_action(_held("Underweight", consecutive_underweight=1, days_since_last_review=3))
+    assert rerun.action == "KEEP" and rerun.consecutive_underweight == 1 and "re-run" in rerun.reason
+    later = base_action(_held("Underweight", consecutive_underweight=1, days_since_last_review=30))
+    assert later.action == "SELL" and later.consecutive_underweight == 2
+    first = base_action(_held("Underweight", consecutive_underweight=0, days_since_last_review=3))
+    assert first.action == "TRIM" and first.consecutive_underweight == 1
+
+
+@pytest.mark.unit
+def test_a_stated_zero_margin_ranks_ahead_of_no_margin():
+    a = Decision("A", "Buy", price=10.0, margin_of_safety=None)
+    z = Decision("Z", "Buy", price=10.0, margin_of_safety=0.0)
+    actions, _ = plan([a, z], cash=130.0, sizing=SIZING, others=[("H", 1_000.0, None)])   # targets 113: cash for one
+    by = {x.ticker: x for x in actions}
+    assert by["Z"].action == "BUY" and by["A"].action == "SKIP"
+
+
+@pytest.mark.unit
+def test_unreviewed_holdings_above_the_cap_are_named_in_the_summary():
+    _, summary = plan([_new("Hold")], cash=1_000.0, sizing=SIZING, others=[("BIG", 9_000.0, None), ("OK", 500.0, None)])
+    assert summary["over_cap"] == [("BIG", 0.8571)]
+    md = render.actions_markdown("2026-11-07", [], summary, reports={}, comparison=None, cost=0.0, failures=[], dry_run=False)
+    assert "BIG at 86%" in md and "not reviewed" in md
+
+
+@pytest.mark.unit
+def test_candidates_are_dropped_to_fit_the_cost_cap():
+    from value_pipeline.review import fit_to_cap
+
+    tickers = ["H1", "H2", "C1", "C2", "C3"]
+    assert fit_to_cap(tickers, n_held=2, cost_per_run=2.0, limit=40.0) == (tickers, 3, 0)
+    assert fit_to_cap(tickers, n_held=2, cost_per_run=2.0, limit=7.0) == (["H1", "H2", "C1"], 1, 2)
+    assert fit_to_cap(tickers, n_held=2, cost_per_run=2.0, limit=3.0) == (["H1", "H2"], 0, 3)  # holdings alone over
+
+
+@pytest.mark.unit
+def test_sector_falls_back_to_the_cached_fundamentals(tmp_path):
+    from value_pipeline import market_data
+    from value_pipeline.review import _sector
+
+    paths = Paths(tmp_path)
+    paths.cache.mkdir(parents=True)
+    (paths.cache / "HRB.json").write_text('{"ticker": "HRB", "sector": "Consumer Cyclical"}')
+    assert market_data.cached_sector("HRB", paths) == "Consumer Cyclical"
+    assert _sector(paths, "HRB", {"sector": "Industrials"}) == "Industrials"
+    assert _sector(paths, "HRB", None) == "Consumer Cyclical"
+    assert _sector(paths, "XYZ", None) is None
 
 
 @pytest.mark.unit
