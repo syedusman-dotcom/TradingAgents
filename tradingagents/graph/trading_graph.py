@@ -369,9 +369,18 @@ class TradingAgentsGraph:
             rating=run_rating(final_state),
         )
 
+    def tell_models(self, company_name: str, trade_date: str) -> None:
+        """A model that serves tools itself (provider claude_code) needs the run's ticker,
+        date and vendors; the API models have no such hook and are left alone."""
+        for llm in (getattr(self, "quick_thinking_llm", None), getattr(self, "deep_thinking_llm", None)):
+            set_context = getattr(llm, "set_context", None)
+            if callable(set_context):
+                set_context(company_name, trade_date, self.config.get("tool_vendors"))
+
     def _run_graph(self, company_name, trade_date, asset_type: str = "stock",
                    checkpoint_thread_id: str | None = None, portfolio=None):
         """Execute the graph and write the resulting state to disk and memory log."""
+        self.tell_models(company_name, trade_date)
         init_agent_state = self.create_run_state(company_name, trade_date, asset_type, portfolio)
         args = self.propagator.get_graph_args()
 

@@ -291,3 +291,20 @@ def test_the_client_builds_a_model_with_its_settings():
     llm = client.get_llm()
     assert (llm.model, llm.wait_minutes, llm.timeout_seconds, llm.effort) == ("claude-fable-5-1", 5, 30, "high")
     assert llm.invoke("ping").content == "pong"
+
+
+@pytest.mark.unit
+def test_the_graph_passes_the_ticker_date_and_vendors_to_the_models(monkeypatch):
+    from tradingagents.graph import trading_graph
+
+    told = []
+
+    class Model:
+        def set_context(self, company, trade_date, tool_vendors=None):
+            told.append((company, trade_date, tool_vendors))
+
+    graph = trading_graph.TradingAgentsGraph.__new__(trading_graph.TradingAgentsGraph)
+    graph.quick_thinking_llm, graph.deep_thinking_llm = Model(), object()
+    graph.config = {"tool_vendors": {"get_cashflow": "yfinance"}}
+    graph.tell_models("HRB", "2026-10-22")
+    assert told == [("HRB", "2026-10-22", {"get_cashflow": "yfinance"})]
