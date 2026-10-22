@@ -12,7 +12,7 @@ The agents run on the Claude plan through headless sessions when `.env` sets
    `.venv/bin/python -c "from value_pipeline import lock; from value_pipeline.config import Paths; import pathlib; print(lock.held(Paths(pathlib.Path('value_pipeline/data')), 'review'))"`
    prints `True` → say the scheduled run or the website holds the lock and stop.
 2. Start it in the background, logging to `value_pipeline/data/logs/review_<today>.log`:
-   `.venv/bin/python -m value_pipeline review --tickers <TICKERS> --yes >> value_pipeline/data/logs/review_<today>.log 2>&1`
+   `mkdir -p value_pipeline/data/logs && .venv/bin/python -m value_pipeline review --tickers <TICKERS> --yes >> value_pipeline/data/logs/review_<today>.log 2>&1`
 3. While it runs, read the log every minute or two and relay the new lines that matter:
    `[n/N] TICKER...`, `INFO claude-...: 41s, 23,000 tokens in, 900 out` (one per finished agent call),
    `WARNING usage limit reached ... retrying in 10 minutes`, and any `failed` line.
