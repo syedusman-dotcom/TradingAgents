@@ -211,3 +211,83 @@ def test_the_analyst_turn_ends_after_one_round_with_the_report():
     prompt = prompt.partial(tool_names="get_value_metrics")
     result, report = take_turn(prompt, _model(runner), [toolbox.get_value_metrics], [HumanMessage(content="HRB")])
     assert report == "The report." and result.tool_calls == []
+
+
+def _limited(text="You've hit your usage limit · resets 3pm"):
+    return {"type": "result", "subtype": "error", "is_error": True, "result": text, "usage": {}}
+
+
+class Clock:
+    def __init__(self):
+        self.now = 0.0
+
+    def __call__(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.now += seconds
+
+
+@pytest.mark.unit
+def test_a_usage_limit_is_waited_out_and_the_same_call_retried():
+    clock = Clock()
+    runner = Runner(_limited(), _limited(), _ok("pong"))
+    llm = cc.ChatClaudeCode(model="opus", runner=runner, clock=clock, sleep=clock.sleep, wait_minutes=60)
+    assert llm.invoke("ping").content == "pong"
+    assert len(runner.calls) == 3 and clock.now == 2 * cc.RETRY_SECONDS
+    assert runner.calls[0]["prompt"] == runner.calls[2]["prompt"]
+
+
+@pytest.mark.unit
+def test_the_wait_gives_up_after_wait_minutes():
+    clock = Clock()
+    runner = Runner(*[_limited()] * 10)
+    llm = cc.ChatClaudeCode(model="opus", runner=runner, clock=clock, sleep=clock.sleep, wait_minutes=25)
+    with pytest.raises(cc.UsageLimitReached):
+        llm.invoke("ping")
+    assert len(runner.calls) == 3          # 0, 10 and 20 minutes; a fourth would pass 25
+
+
+@pytest.mark.unit
+def test_wait_minutes_zero_fails_at_once():
+    runner = Runner(_limited())
+    with pytest.raises(cc.UsageLimitReached):
+        _model(runner, wait_minutes=0).invoke("ping")
+    assert len(runner.calls) == 1
+
+
+@pytest.mark.unit
+def test_a_plain_error_is_raised_without_waiting():
+    runner = Runner({"is_error": True, "result": "Not logged in · Please run /login"})
+    with pytest.raises(cc.ClaudeCodeError, match="Not logged in"):
+        _model(runner).invoke("ping")
+    assert len(runner.calls) == 1
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("result,limited", [
+    ({"result": "usage limit reached"}, True),
+    ({"result": "Rate limited, try later"}, True),
+    ({"result": "x", "api_error_status": 429}, True),
+    ({"result": "Not logged in"}, False),
+    ({"result": "Invalid API key"}, False),
+])
+def test_what_counts_as_a_usage_limit(result, limited):
+    assert cc.usage_limited(result) is limited
+
+
+@pytest.mark.unit
+def test_the_client_refuses_to_build_a_model_when_not_logged_in():
+    client = cc.ClaudeCodeClient("opus", auth_check=lambda: {"loggedIn": False})
+    with pytest.raises(cc.ClaudeCodeError, match="claude login"):
+        client.get_llm()
+
+
+@pytest.mark.unit
+def test_the_client_builds_a_model_with_its_settings():
+    runner = Runner(_ok())
+    client = cc.ClaudeCodeClient("claude-fable-5-1", auth_check=lambda: {"loggedIn": True}, runner=runner,
+                                 wait_minutes=5, timeout_seconds=30, effort="high", callbacks=[])
+    llm = client.get_llm()
+    assert (llm.model, llm.wait_minutes, llm.timeout_seconds, llm.effort) == ("claude-fable-5-1", 5, 30, "high")
+    assert llm.invoke("ping").content == "pong"
