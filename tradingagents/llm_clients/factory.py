@@ -49,6 +49,10 @@ def create_llm_client(
         from .bedrock_client import BedrockClient
         return BedrockClient(model, base_url, **kwargs)
 
+    if provider_lower == "claude_code":
+        from .claude_code_client import ClaudeCodeClient
+        return ClaudeCodeClient(model, base_url, **kwargs)
+
     from .openai_client import OpenAIClient, is_openai_compatible
     if is_openai_compatible(provider_lower):
         return OpenAIClient(model, base_url, provider=provider_lower, **kwargs)
@@ -111,6 +115,14 @@ def build_llm_kwargs(config: dict) -> dict[str, Any]:
         if effort:
             kwargs["effort"] = effort
 
+    elif provider == "claude_code":
+        effort = config.get("anthropic_effort")
+        if effort:
+            kwargs["effort"] = effort
+        kwargs["wait_minutes"] = float(config["claude_code_wait_minutes"])
+        kwargs["timeout_seconds"] = float(config["claude_code_timeout_seconds"])
+        return kwargs       # the CLI takes no temperature, retry budget or token cap
+
     # Sampling temperature is cross-provider: forward it whenever set.
     # float() here so a value coming from a TRADINGAGENTS_TEMPERATURE env
     # string ("0.2") works the same as a programmatic float.
@@ -152,5 +164,7 @@ def create_tier_client(config: dict, tier: str, **extra) -> BaseLLMClient:
     else:
         base_url = config.get(f"{tier}_think_backend_url")
     kwargs = build_llm_kwargs({**config, "llm_provider": provider})
-    return create_llm_client(provider=provider, model=config[f"{tier}_think_llm"], base_url=base_url,
-                             **kwargs, **extra)
+    model = config[f"{tier}_think_llm"]
+    if provider == "claude_code":
+        model = config.get(f"claude_code_{tier}_model") or model
+    return create_llm_client(provider=provider, model=model, base_url=base_url, **kwargs, **extra)

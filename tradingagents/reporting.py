@@ -29,11 +29,14 @@ def _header(ticker: str, final_state: dict, settings: dict | None) -> str:
         s = settings.get
         deep_provider = s("deep_think_provider") or s("llm_provider", "?")
         quick_provider = s("quick_think_provider") or s("llm_provider", "?")
+        def model_of(tier, provider):
+            return s(f"claude_code_{tier}_model", "?") if provider == "claude_code" else s(f"{tier}_think_llm", "?")
+
         if deep_provider == quick_provider:
-            models = f"{deep_provider}, deep {s('deep_think_llm', '?')}, quick {s('quick_think_llm', '?')}"
+            models = f"{deep_provider}, deep {model_of('deep', deep_provider)}, quick {model_of('quick', quick_provider)}"
         else:   # each tier on its own provider (#1440)
-            models = (f"deep {deep_provider} {s('deep_think_llm', '?')}, "
-                      f"quick {quick_provider} {s('quick_think_llm', '?')}")
+            models = (f"deep {deep_provider} {model_of('deep', deep_provider)}, "
+                      f"quick {quick_provider} {model_of('quick', quick_provider)}")
         lines.append(f"- TradingAgents {s('version', '?')}: {models}")
         lines.append(f"- Analysts: {', '.join(analyst_names(s('analysts')))}; "
                      f"research debate rounds {s('max_debate_rounds', '?')}, "

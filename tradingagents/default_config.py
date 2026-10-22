@@ -31,6 +31,11 @@ _ENV_OVERRIDES = {
     "TRADINGAGENTS_GOOGLE_THINKING_LEVEL":   "google_thinking_level",
     "TRADINGAGENTS_OPENAI_REASONING_EFFORT": "openai_reasoning_effort",
     "TRADINGAGENTS_ANTHROPIC_EFFORT":        "anthropic_effort",
+    # Provider claude_code: the agents run through the Claude Code CLI on your plan.
+    "TRADINGAGENTS_CLAUDE_CODE_DEEP_MODEL":      "claude_code_deep_model",
+    "TRADINGAGENTS_CLAUDE_CODE_QUICK_MODEL":     "claude_code_quick_model",
+    "TRADINGAGENTS_CLAUDE_CODE_WAIT_MINUTES":    "claude_code_wait_minutes",
+    "TRADINGAGENTS_CLAUDE_CODE_TIMEOUT_SECONDS": "claude_code_timeout_seconds",
 }
 
 
@@ -109,6 +114,15 @@ def build_default_config() -> dict:
         "google_thinking_level": None,      # "high", "minimal", etc.
         "openai_reasoning_effort": None,    # "medium", "high", "low"
         "anthropic_effort": None,           # "high", "medium", "low"
+        # Provider claude_code (the Claude Code CLI on your subscription) has its own
+        # model pair, so switching provider never changes the API pair above. On the
+        # plan the models cost nothing extra: the strongest for the managers.
+        "claude_code_deep_model": "claude-fable-5-1",
+        "claude_code_quick_model": "claude-opus-5-5",
+        # When the plan's usage limit is hit, a call retries every 10 minutes for this
+        # long before failing; 0 fails at once. Timeout per call, in seconds.
+        "claude_code_wait_minutes": 360,
+        "claude_code_timeout_seconds": 900,
         # Sampling temperature, forwarded to every provider when set. None leaves
         # each provider at its own default. Lower values reduce run-to-run
         # variation on models that honor it; reasoning models largely ignore it
