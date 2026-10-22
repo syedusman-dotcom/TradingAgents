@@ -266,6 +266,9 @@ class TradingAgentsGraph:
             "deep_think_llm": cfg.get("deep_think_llm"),
             "quick_think_provider": tier_provider(cfg, "quick") if cfg.get("llm_provider") else None,
             "quick_think_llm": cfg.get("quick_think_llm"),
+            # Provider claude_code has its own model pair; the report header reads these for it.
+            "claude_code_deep_model": cfg.get("claude_code_deep_model"),
+            "claude_code_quick_model": cfg.get("claude_code_quick_model"),
             "analysts": list(self.selected_analysts),
             "max_debate_rounds": cfg.get("max_debate_rounds"),
             "max_risk_discuss_rounds": cfg.get("max_risk_discuss_rounds"),

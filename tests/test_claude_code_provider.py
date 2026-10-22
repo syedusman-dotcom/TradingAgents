@@ -82,3 +82,15 @@ def test_the_cli_menu_lists_claude_code_models():
 
     assert get_model_options("claude_code", "deep")[0][1] == "claude-fable-5-1"
     assert get_model_options("claude_code", "quick")[0][1] == "claude-opus-5-5"
+
+
+@pytest.mark.unit
+def test_run_settings_record_the_claude_code_models_for_the_report_header():
+    """The report header reads the models from the saved run settings, an allowlist."""
+    from tradingagents.graph.trading_graph import TradingAgentsGraph
+
+    graph = TradingAgentsGraph.__new__(TradingAgentsGraph)
+    graph.config = _config(claude_code_deep_model="fable", claude_code_quick_model="opus")
+    graph.selected_analysts = ("market",)
+    settings = graph.run_settings()
+    assert (settings["claude_code_deep_model"], settings["claude_code_quick_model"]) == ("fable", "opus")
