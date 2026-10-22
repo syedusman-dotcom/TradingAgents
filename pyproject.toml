@@ -20,6 +20,7 @@ dependencies = [
     "langgraph-checkpoint-sqlite>=3.1.1",
     "lxml>=5.0",
     "markdown-it-py>=4.0",
+    "mcp>=2,<3",
     "packaging>=24.0",
     "pandas>=3.0.6",
     "python-dotenv>=1.0.0",
