@@ -83,6 +83,10 @@ def _build_run_config(selections: dict, checkpoint: bool | None) -> dict:
     config["deep_think_llm"] = selections["deep_think_llm"]
     config["backend_url"] = selections["backend_url"]
     config["llm_provider"] = selections["llm_provider"].lower()
+    if config["llm_provider"] == "claude_code":
+        # This provider's tiers read their own keys, which override the *_think_llm pair.
+        config["claude_code_quick_model"] = selections["quick_think_llm"]
+        config["claude_code_deep_model"] = selections["deep_think_llm"]
     # Provider-specific thinking configuration. Only the main provider's is
     # asked; a tier on another provider keeps its configured value (#1440).
     for key in ("google_thinking_level", "openai_reasoning_effort", "anthropic_effort"):

@@ -117,3 +117,19 @@ def test_a_tier_s_thinking_setting_survives_a_main_provider_that_has_none(monkey
                                     checkpoint=None)
     assert (cfg["openai_reasoning_effort"], cfg["anthropic_effort"], cfg["google_thinking_level"]) == \
         ("high", "low", "high")
+
+
+def test_claude_code_picks_also_set_its_own_model_pair():
+    sel = dict(SELECTIONS, llm_provider="Claude_Code", quick_think_llm="claude-sonnet-5-5",
+               deep_think_llm="claude-opus-5-5")
+    cfg = cli_run._build_run_config(sel, checkpoint=None)
+    assert cfg["claude_code_quick_model"] == "claude-sonnet-5-5"
+    assert cfg["claude_code_deep_model"] == "claude-opus-5-5"
+    assert cfg["quick_think_llm"] == "claude-sonnet-5-5"
+
+
+def test_other_providers_leave_the_claude_code_pair_alone():
+    sel = dict(SELECTIONS, llm_provider="anthropic")
+    cfg = cli_run._build_run_config(sel, checkpoint=None)
+    assert cfg["claude_code_quick_model"] == cli_run.DEFAULT_CONFIG["claude_code_quick_model"]
+    assert cfg["claude_code_deep_model"] == cli_run.DEFAULT_CONFIG["claude_code_deep_model"]

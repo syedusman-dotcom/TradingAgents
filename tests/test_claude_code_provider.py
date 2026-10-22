@@ -74,3 +74,11 @@ def test_the_report_header_names_the_claude_code_models():
     settings = {**_config(), "version": "0.7.0", "analysts": ["market"]}
     text = _header("HRB", {}, settings)
     assert "claude_code, deep claude-fable-5-1, quick claude-opus-5-5" in text
+
+
+@pytest.mark.unit
+def test_the_cli_menu_lists_claude_code_models():
+    from tradingagents.llm_clients.model_catalog import get_model_options
+
+    assert get_model_options("claude_code", "deep")[0][1] == "claude-fable-5-1"
+    assert get_model_options("claude_code", "quick")[0][1] == "claude-opus-5-5"

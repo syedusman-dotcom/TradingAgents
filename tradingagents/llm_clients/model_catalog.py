@@ -122,6 +122,21 @@ MODEL_OPTIONS: ProviderModeOptions = {
             ("Custom model ID", "custom"),
         ],
     },
+    # The subscription's own models; the CLI also accepts aliases through "Custom model ID".
+    "claude_code": {
+        "quick": [
+            ("Claude Opus 5.5", "claude-opus-5-5"),
+            ("Claude Fable 5.1", "claude-fable-5-1"),
+            ("Claude Sonnet 5.5", "claude-sonnet-5-5"),
+            ("Custom model ID", "custom"),
+        ],
+        "deep": [
+            ("Claude Fable 5.1", "claude-fable-5-1"),
+            ("Claude Opus 5.5", "claude-opus-5-5"),
+            ("Claude Sonnet 5.5", "claude-sonnet-5-5"),
+            ("Custom model ID", "custom"),
+        ],
+    },
     "google": {
         "quick": [
             ("Gemini 3.8 Flash - Most capable Flash", "gemini-3.8-flash"),
