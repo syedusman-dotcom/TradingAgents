@@ -40,7 +40,7 @@ def exposed(tool, state: dict) -> Callable[..., str]:
     fields = tool.tool_call_schema.model_fields
 
     def call(**kwargs) -> str:
-        args = {**kwargs, **{name: state.get(key, "") for name, key in injected.items()}}
+        args = {**{k: v for k, v in kwargs.items() if v is not None}, **{name: state.get(key, "") for name, key in injected.items()}}
         try:
             return str(tool.invoke(args))
         except Exception as exc:  # noqa: BLE001 - the model reads the failure and carries on

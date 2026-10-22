@@ -69,3 +69,22 @@ def test_tool_vendors_from_the_environment_reach_the_dataflows_config(monkeypatc
 
     mcp_server.build_server([], {}, {"get_cashflow": "yfinance"})
     assert get_config()["tool_vendors"]["get_cashflow"] == "yfinance"
+
+
+@pytest.mark.unit
+def test_omitted_optional_parameters_take_the_tools_default(monkeypatch):
+    seen = []
+
+    def fake_route(name, *args):
+        seen.append((name, args))
+        return "cashflow text"
+
+    monkeypatch.setattr(toolbox, "route_to_vendor", fake_route)
+    server = mcp_server.build_server(["get_cashflow"], {"company_of_interest": "HRB", "trade_date": "2026-10-22"})
+    result = _run(server.call_tool("get_cashflow", {}))
+    assert result.content[0].text == "cashflow text"
+    assert len(seen) == 1 and seen[0][0] == "get_cashflow"
+    seen.clear()
+    result = _run(server.call_tool("get_cashflow", {"curr_date": "2026-10-01"}))
+    assert result.content[0].text == "cashflow text"
+    assert "2026-10-01" in seen[0][1]
