@@ -225,3 +225,6 @@ reports/
 # Value pipeline: personal holdings, trades, screens and reports
 value_pipeline/data/
 .superpowers/
+
+# Git worktrees for isolated feature work
+.worktrees/
