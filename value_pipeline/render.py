@@ -23,7 +23,7 @@ def _cell(text) -> str:
 
 def actions_markdown(date: str, actions: list[Action], summary: dict, *, reports: dict[str, str],
                      comparison: dict | None, cost: float, failures: list[str], dry_run: bool,
-                     knives: list[str] | None = None) -> str:
+                     knives: list[str] | None = None, usage: dict | None = None) -> str:
     held = [a for a in actions if a.held]
     new = [a for a in actions if not a.held and a.action == "BUY"]
     skipped = [a for a in actions if not a.held and a.action != "BUY"]
@@ -39,7 +39,15 @@ def actions_markdown(date: str, actions: list[Action], summary: dict, *, reports
                      f"vs SPY {_pct(comparison['spy_return'])} (same cash flows; {_money(comparison['invested'])} invested)")
     lines.append(f"- Target weight per stock: {summary['target_weight']:.0%}; cash left after these actions: "
                  f"{_money(summary['cash_after'])}")
-    lines.append(f"- Cost of this review: ~{_money(cost)}")
+    if usage and usage.get("on_plan"):
+        lines.append(f"- Cost of this review: ~{_money(usage['nominal_cost_usd'])} nominal "
+                     f"({usage['tokens_in']:,} tokens in, {usage['tokens_out']:,} out; "
+                     "billed to your Claude plan, not the API)")
+    elif usage:
+        lines.append(f"- Cost of this review: ~{_money(cost)} (estimate; {usage['tokens_in']:,} tokens in, "
+                     f"{usage['tokens_out']:,} out)")
+    else:
+        lines.append(f"- Cost of this review: ~{_money(cost)}")
     for ticker, weight in summary.get("over_cap", []):
         lines.append(f"- **{ticker} at {weight:.0%}** of the portfolio is above the max position but was not "
                      "reviewed: consider trimming it to the cap")

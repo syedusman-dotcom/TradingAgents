@@ -308,3 +308,17 @@ def test_the_graph_passes_the_ticker_date_and_vendors_to_the_models(monkeypatch)
     graph.config = {"tool_vendors": {"get_cashflow": "yfinance"}}
     graph.tell_models("HRB", "2026-10-22")
     assert told == [("HRB", "2026-10-22", {"get_cashflow": "yfinance"})]
+
+
+@pytest.mark.unit
+def test_the_usage_tally_sums_tokens_and_nominal_cost_across_calls():
+    from tradingagents.llm_clients.usage import UsageTally
+
+    tally = UsageTally()
+    runner = Runner(_ok(), _ok())
+    llm = cc.ChatClaudeCode(model="opus", runner=runner, sleep=lambda s: None, callbacks=[tally])
+    llm.invoke("a")
+    llm.invoke("b")
+    assert tally.snapshot() == {"calls": 2, "tokens_in": 224, "tokens_out": 8, "nominal_cost_usd": pytest.approx(0.0796)}
+    tally.reset()
+    assert tally.snapshot()["calls"] == 0

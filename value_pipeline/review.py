@@ -42,6 +42,9 @@ class RunResult:
     decision: str = ""
     report: str | None = None      # path relative to the review folder
     error: str | None = None
+    tokens_in: int = 0
+    tokens_out: int = 0
+    nominal_cost_usd: float = 0.0   # what the calls would have cost at API prices (measured, not the estimate)
 
 
 # --- running the agents ---------------------------------------------------------
@@ -67,23 +70,29 @@ def graph_config(statement_vendor: str | None) -> dict:
     return cfg
 
 
-def make_graph(analysts: list[str], statement_vendor: str | None = None):
+def make_graph(analysts: list[str], statement_vendor: str | None = None, tally=None):
     from tradingagents.graph.trading_graph import TradingAgentsGraph
 
-    return TradingAgentsGraph(selected_analysts=tuple(analysts), config=graph_config(statement_vendor))
+    return TradingAgentsGraph(selected_analysts=tuple(analysts), config=graph_config(statement_vendor),
+                              callbacks=[tally] if tally else None)
 
 
-def run_agents(ta, ticker: str, day: str, portfolio_ctx, out_dir: Path) -> RunResult:
+def run_agents(ta, ticker: str, day: str, portfolio_ctx, out_dir: Path, tally=None) -> RunResult:
     """One TradingAgents run, retried once; a second failure is reported, not raised."""
     from tradingagents.agents.rating import is_review
 
     error = None
     for attempt in (1, 2):
         try:
+            if tally:
+                tally.reset()
             final_state, rating = ta.propagate(ticker, day, portfolio=portfolio_ctx)
             ta.save_reports(final_state, ticker, save_path=out_dir / ticker, html=True)
+            used = tally.snapshot() if tally else {}
             return RunResult(ticker, "REVIEW" if is_review(rating) else rating,
-                             final_state.get("final_trade_decision", ""), f"{ticker}/complete_report.html")
+                             final_state.get("final_trade_decision", ""), f"{ticker}/complete_report.html",
+                             tokens_in=used.get("tokens_in", 0), tokens_out=used.get("tokens_out", 0),
+                             nominal_cost_usd=used.get("nominal_cost_usd", 0.0))
         except Exception as exc:  # noqa: BLE001 - one failed ticker must not stop the review
             error = f"{type(exc).__name__}: {exc}"
             log.warning("%s run %d failed: %s", ticker, attempt, error)
@@ -228,16 +237,26 @@ def _run(paths: Paths, cfg: dict, *, yes: bool, dry_run: bool, today: str | None
     prices = {t: market_data.latest_price(t) for t in sorted(set(tickers) | owned)}
 
     results: list[RunResult] = []
+    usage = None
     if dry_run:
         results = [fake_run(t, i, t in owned, prices[t]) for i, t in enumerate(tickers)]
     else:
-        ta = make_graph(rcfg["analysts"], rcfg.get("statement_vendor"))
+        from tradingagents.llm_clients.usage import UsageTally
+
+        logging.getLogger("tradingagents.llm_clients.claude_code_client").setLevel(logging.INFO)
+        if not logging.getLogger().handlers:
+            logging.basicConfig(format="%(levelname)s %(message)s")
+        tally = UsageTally()
+        ta = make_graph(rcfg["analysts"], rcfg.get("statement_vendor"), tally)
         print("Scoring past decisions (memory log)...")
         ta.settle_all_pending()
         ctx = pf.to_context()
         for i, t in enumerate(tickers, 1):
             print(f"[{i}/{len(tickers)}] {t}...", flush=True)
-            results.append(run_agents(ta, t, today, ctx, out_dir))
+            results.append(run_agents(ta, t, today, ctx, out_dir, tally))
+        usage = {"tokens_in": sum(r.tokens_in for r in results), "tokens_out": sum(r.tokens_out for r in results),
+                 "nominal_cost_usd": sum(r.nominal_cost_usd for r in results),
+                 "on_plan": str(ta.config.get("llm_provider", "")).lower() == "claude_code"}
 
     decisions = []
     for r in results:
@@ -271,13 +290,15 @@ def _run(paths: Paths, cfg: dict, *, yes: bool, dry_run: bool, today: str | None
         knives = [r["ticker"] for r in ranked[:50] if r.get("trend") == "FREEFALL" and r["ticker"] not in owned][:10]
 
     md = render.actions_markdown(today, actions, summary, reports={r.ticker: r.report for r in results if r.report},
-                                 comparison=comparison, cost=cost, failures=failures, dry_run=dry_run, knives=knives)
+                                 comparison=comparison, cost=cost, failures=failures, dry_run=dry_run, knives=knives,
+                                 usage=usage)
     (out_dir / "ACTIONS.md").write_text(md, encoding="utf-8")
     (out_dir / "ACTIONS.html").write_text(render.actions_html(md, f"Value review {today}"), encoding="utf-8")
     # Written whole: the website reads this file while a review may be finishing.
     tmp = out_dir / "results.json.tmp"
     tmp.write_text(json.dumps([
         {"ticker": r.ticker, "rating": r.rating, "error": r.error, "report": r.report,
+         "tokens_in": r.tokens_in, "tokens_out": r.tokens_out, "nominal_cost_usd": round(r.nominal_cost_usd, 4),
          "intrinsic_value": parse.intrinsic_value(r.decision), "margin_of_safety": parse.margin_of_safety(r.decision),
          "thesis": parse.thesis_summary(r.decision)}
         for r in results

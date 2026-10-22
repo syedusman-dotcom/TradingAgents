@@ -546,6 +546,49 @@ def test_unreviewed_holdings_above_the_cap_are_named_in_the_summary():
 
 
 @pytest.mark.unit
+def test_the_cost_line_shows_measured_usage_and_says_who_is_billed():
+    _, summary = plan([_new("Hold")], cash=1_000.0, sizing=SIZING)
+    plan_usage = {"tokens_in": 120000, "tokens_out": 8000, "nominal_cost_usd": 12.4, "on_plan": True}
+    md = render.actions_markdown("2026-11-07", [], summary, reports={}, comparison=None, cost=4.0, failures=[],
+                                 dry_run=False, usage=plan_usage)
+    assert "- Cost of this review: ~$12.40 nominal (120,000 tokens in, 8,000 out; billed to your Claude plan, not the API)" in md
+
+    api_usage = {**plan_usage, "on_plan": False}
+    md = render.actions_markdown("2026-11-07", [], summary, reports={}, comparison=None, cost=4.0, failures=[],
+                                 dry_run=False, usage=api_usage)
+    assert "- Cost of this review: ~$4.00 (estimate; 120,000 tokens in, 8,000 out)" in md
+
+    md = render.actions_markdown("2026-11-07", [], summary, reports={}, comparison=None, cost=4.0, failures=[], dry_run=False)
+    assert "- Cost of this review: ~$4.00\n" in md
+
+
+@pytest.mark.unit
+def test_run_agents_records_the_tally_for_the_ticker(tmp_path):
+    from value_pipeline import review
+
+    class Tally:
+        def __init__(self):
+            self.resets = 0
+
+        def reset(self):
+            self.resets += 1
+
+        def snapshot(self):
+            return {"calls": 3, "tokens_in": 10, "tokens_out": 5, "nominal_cost_usd": 0.5}
+
+    class Graph:
+        def propagate(self, ticker, day, portfolio=None):
+            return {"final_trade_decision": "**Rating**: Hold"}, "Hold"
+
+        def save_reports(self, state, ticker, save_path, html):
+            pass
+
+    tally = Tally()
+    r = review.run_agents(Graph(), "HRB", "2026-10-22", None, tmp_path, tally)
+    assert (r.tokens_in, r.tokens_out, r.nominal_cost_usd, tally.resets) == (10, 5, 0.5, 1)
+
+
+@pytest.mark.unit
 def test_candidates_are_dropped_to_fit_the_cost_cap():
     from value_pipeline.review import fit_to_cap
 

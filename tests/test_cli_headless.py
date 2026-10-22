@@ -362,3 +362,44 @@ def test_a_page_the_browser_cannot_open_is_pointed_to(monkeypatch, tmp_path, cap
     run._offer_reports(STATE, _report_graph(tmp_path), "NVDA")
 
     assert "complete_report.html" in capsys.readouterr().out.split("the page is at:")[-1]
+
+
+@pytest.mark.unit
+def test_the_cli_stream_tells_the_models_its_ticker_and_date_before_it_runs(monkeypatch, tmp_path):
+    """The CLI streams the graph itself, bypassing _run_graph, so it must tell the models first."""
+    order = []
+
+    class Stop(Exception):
+        pass
+
+    class FakeGraph:
+        def __init__(self, analysts, config=None, debug=False, callbacks=None):
+            self.propagator = type("P", (), {"get_graph_args": lambda self, callbacks=None: {}})()
+
+        def create_run_state(self, ticker, trade_date, asset_type, portfolio=None):
+            return {}
+
+        def begin_checkpoint(self, *args, **kwargs):
+            return None
+
+        def tell_models(self, ticker, trade_date):
+            order.append(("tell", ticker, trade_date))
+
+        def checkpoint_input(self, state):
+            return state
+
+        def stream_run(self, graph_input, **args):
+            order.append(("stream",))
+            raise Stop()
+
+    monkeypatch.setattr(run, "TradingAgentsGraph", FakeGraph)
+    monkeypatch.setattr(run, "get_user_selections", lambda flags: {
+        "ticker": "NVDA", "analysis_date": "2026-09-23", "asset_type": "stock",
+        "analysts": [AnalystType.MARKET],
+    })
+    monkeypatch.setattr(run, "_build_run_config", lambda selections, checkpoint: {"results_dir": str(tmp_path)})
+
+    with pytest.raises(Stop):
+        run.run_analysis(flags={})
+
+    assert order == [("tell", "NVDA", "2026-09-23"), ("stream",)]
