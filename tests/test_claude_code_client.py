@@ -2,11 +2,13 @@
 
 import json
 import os
+import sys
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from pydantic import BaseModel
 
+from tradingagents.agents import tools as toolbox
 from tradingagents.llm_clients import claude_code_client as cc
 
 
@@ -175,3 +177,37 @@ def test_a_bound_copy_sees_a_context_set_later_on_the_original():
     llm.set_context("HRB", "2026-10-22", {"get_cashflow": "yfinance"})
     bound = structured.first if hasattr(structured, "first") else structured.steps[0]
     assert bound._context == {"company": "HRB", "trade_date": "2026-10-22", "tool_vendors": {"get_cashflow": "yfinance"}}
+
+
+@pytest.mark.unit
+def test_a_tool_call_serves_the_named_tools_over_mcp_for_the_run_s_ticker_and_date():
+    runner = Runner(_ok("Fundamentals report"))
+    llm = _model(runner)
+    llm.set_context("HRB", "2026-10-22", {"get_cashflow": "yfinance"})
+    message = llm.bind_tools([toolbox.get_value_metrics, toolbox.get_annual_report]).invoke(
+        [SystemMessage(content="You are the fundamentals analyst."), HumanMessage(content="Report on HRB.")])
+
+    assert message.content == "Fundamentals report" and message.tool_calls == []
+    args = runner.calls[0]["args"]
+    assert args[args.index("--max-turns") + 1] == "30"
+    assert "--strict-mcp-config" in args
+    assert args[args.index("--allowedTools") + 1] == "mcp__ta__get_value_metrics,mcp__ta__get_annual_report"
+    server = json.loads(args[args.index("--mcp-config") + 1])["mcpServers"]["ta"]
+    assert server["command"] == sys.executable and server["args"] == ["-m", "tradingagents.mcp_server"]
+    assert server["env"] == {"TA_COMPANY": "HRB", "TA_TRADE_DATE": "2026-10-22",
+                             "TA_TOOLS": "get_value_metrics,get_annual_report",
+                             "TA_TOOL_VENDORS": '{"get_cashflow": "yfinance"}'}
+
+
+@pytest.mark.unit
+def test_the_analyst_turn_ends_after_one_round_with_the_report():
+    """turn.take_turn treats a reply without tool_calls as the finished report."""
+    from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+
+    from tradingagents.agents.analysts.turn import take_turn
+
+    runner = Runner(_ok("The report."))
+    prompt = ChatPromptTemplate.from_messages([("system", "Analyst. Tools: {tool_names}"), MessagesPlaceholder("messages")])
+    prompt = prompt.partial(tool_names="get_value_metrics")
+    result, report = take_turn(prompt, _model(runner), [toolbox.get_value_metrics], [HumanMessage(content="HRB")])
+    assert report == "The report." and result.tool_calls == []
