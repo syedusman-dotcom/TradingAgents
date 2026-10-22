@@ -588,6 +588,53 @@ def test_run_agents_records_the_tally_for_the_ticker(tmp_path):
     assert (r.tokens_in, r.tokens_out, r.nominal_cost_usd, tally.resets) == (10, 5, 0.5, 1)
 
 
+class _GrowingTally:
+    def __init__(self):
+        self.resets, self.snaps = 0, 0
+
+    def reset(self):
+        self.resets += 1
+
+    def snapshot(self):
+        self.snaps += 1
+        return {"calls": 1, "tokens_in": 10 * self.snaps, "tokens_out": 5 * self.snaps,
+                "nominal_cost_usd": 0.5 * self.snaps}
+
+
+class _FlakyGraph:
+    def __init__(self, fail_times):
+        self.fail_times, self.calls = fail_times, 0
+
+    def propagate(self, ticker, day, portfolio=None):
+        self.calls += 1
+        if self.calls <= self.fail_times:
+            raise RuntimeError("boom")
+        return {"final_trade_decision": "**Rating**: Hold"}, "Hold"
+
+    def save_reports(self, state, ticker, save_path, html):
+        pass
+
+
+@pytest.mark.unit
+def test_run_agents_usage_counts_a_failed_first_attempt(tmp_path):
+    from value_pipeline import review
+
+    tally = _GrowingTally()
+    r = review.run_agents(_FlakyGraph(1), "HRB", "2026-10-22", None, tmp_path, tally)
+    assert r.error is None and tally.resets == 1
+    assert (r.tokens_in, r.tokens_out, r.nominal_cost_usd) == (10, 5, 0.5)
+
+
+@pytest.mark.unit
+def test_run_agents_usage_is_kept_when_both_attempts_fail(tmp_path):
+    from value_pipeline import review
+
+    tally = _GrowingTally()
+    r = review.run_agents(_FlakyGraph(99), "HRB", "2026-10-22", None, tmp_path, tally)
+    assert r.error and tally.resets == 1
+    assert (r.tokens_in, r.tokens_out, r.nominal_cost_usd) == (10, 5, 0.5)
+
+
 @pytest.mark.unit
 def test_candidates_are_dropped_to_fit_the_cost_cap():
     from value_pipeline.review import fit_to_cap

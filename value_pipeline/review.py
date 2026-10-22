@@ -82,10 +82,10 @@ def run_agents(ta, ticker: str, day: str, portfolio_ctx, out_dir: Path, tally=No
     from tradingagents.agents.rating import is_review
 
     error = None
+    if tally:
+        tally.reset()  # once: a failed attempt's tokens were still spent
     for attempt in (1, 2):
         try:
-            if tally:
-                tally.reset()
             final_state, rating = ta.propagate(ticker, day, portfolio=portfolio_ctx)
             ta.save_reports(final_state, ticker, save_path=out_dir / ticker, html=True)
             used = tally.snapshot() if tally else {}
@@ -96,7 +96,9 @@ def run_agents(ta, ticker: str, day: str, portfolio_ctx, out_dir: Path, tally=No
         except Exception as exc:  # noqa: BLE001 - one failed ticker must not stop the review
             error = f"{type(exc).__name__}: {exc}"
             log.warning("%s run %d failed: %s", ticker, attempt, error)
-    return RunResult(ticker, "REVIEW", error=error)
+    used = tally.snapshot() if tally else {}
+    return RunResult(ticker, "REVIEW", error=error, tokens_in=used.get("tokens_in", 0),
+                     tokens_out=used.get("tokens_out", 0), nominal_cost_usd=used.get("nominal_cost_usd", 0.0))
 
 
 _FAKE_HELD = ("Buy", "Hold", "Underweight", "Sell", "Overweight")
