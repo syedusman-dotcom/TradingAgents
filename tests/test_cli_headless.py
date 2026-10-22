@@ -388,6 +388,9 @@ def test_the_cli_stream_tells_the_models_its_ticker_and_date_before_it_runs(monk
         def checkpoint_input(self, state):
             return state
 
+        def end_checkpoint(self):
+            pass
+
         def stream_run(self, graph_input, **args):
             order.append(("stream",))
             raise Stop()

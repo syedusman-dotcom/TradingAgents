@@ -125,6 +125,9 @@ def test_the_cli_says_when_a_run_produced_no_usable_rating(monkeypatch, tmp_path
         def create_run_state(self, *a, **k):
             return {"messages": []}
 
+        def tell_models(self, *a, **k):
+            pass
+
         def record_decision(self, *a, **k):
             pass
 

@@ -219,6 +219,9 @@ def run_analysis(checkpoint: bool | None = None, portfolio=None, flags=None):
         init_agent_state = graph.create_run_state(
             selections["ticker"], selections["analysis_date"], selections["asset_type"], portfolio
         )
+        # This path streams the graph without _run_graph, so it tells the models
+        # the run's ticker and date itself, before the first model call.
+        graph.tell_models(selections["ticker"], selections["analysis_date"])
         # Pass callbacks to graph config for tool execution tracking
         # (LLM tracking is handled separately via LLM constructor)
         args = graph.propagator.get_graph_args(callbacks=[stats_handler])
