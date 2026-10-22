@@ -2410,6 +2410,7 @@ wheels = [
 name = "tradingagents"
 source = { editable = "." }
 dependencies = [
+    { name = "cryptography" },
     { name = "fastapi" },
     { name = "jinja2" },
     { name = "langchain-anthropic" },
@@ -2420,6 +2421,7 @@ dependencies = [
     { name = "langgraph-checkpoint-sqlite" },
     { name = "lxml" },
     { name = "markdown-it-py" },
+    { name = "packaging" },
     { name = "pandas" },
     { name = "python-dotenv" },
     { name = "python-multipart" },
@@ -2447,6 +2449,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "cryptography", specifier = ">=42.0" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "jinja2", specifier = ">=3.1" },
     { name = "langchain-anthropic", specifier = ">=1.7.4" },
@@ -2458,6 +2461,7 @@ requires-dist = [
     { name = "langgraph-checkpoint-sqlite", specifier = ">=3.1.1" },
     { name = "lxml", specifier = ">=5.0" },
     { name = "markdown-it-py", specifier = ">=4.0" },
+    { name = "packaging", specifier = ">=24.0" },
     { name = "pandas", specifier = ">=3.0.6" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pytest-subtests", marker = "extra == 'dev'", specifier = ">=0.13" },
