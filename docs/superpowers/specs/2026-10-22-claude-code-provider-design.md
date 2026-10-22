@@ -296,6 +296,6 @@ adapt the client.
    start).
 3. Run `/review HRB` once interactively and compare its report with the
    2026-10-15 API run for the same ticker.
-4. Leave the Saturday job as it is; it picks up `.env`. The launchd job's
-   environment must be able to find `claude` (`~/.local/bin`) — the plan
-   adds the path to `scripts/monthly.sh`.
+4. Leave the Saturday job as it is; it picks up `.env`, and
+   `scripts/monthly.sh` already puts `~/.local/bin` (where `claude` lives)
+   on the PATH.
