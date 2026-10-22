@@ -186,6 +186,8 @@ For Azure OpenAI, copy `.env.enterprise.example` to `.env.enterprise` and fill i
 
 To run on your ChatGPT Plus or Pro plan instead of an API key, choose "Subscription" in the CLI's provider menu, or set `llm_provider: "chatgpt"`. Sign in once with `tradingagents login chatgpt`: it prints an address to open in your browser, which returns to this machine on `127.0.0.1`. When the browser runs on another machine, or TradingAgents runs in Docker (`docker compose run --rm tradingagents login chatgpt`), paste the address the browser ends up on. The sign-in is kept in `~/.tradingagents/chatgpt-auth.json`, and `tradingagents logout chatgpt` revokes it. Runs count toward your plan's usage limits, and the plan does not accept `temperature` or `max_tokens`.
 
+To run on your Claude plan instead of an API key, install [Claude Code](https://claude.com/claude-code), run `claude login` once, and set `TRADINGAGENTS_LLM_PROVIDER=claude_code`. Each agent call is then a headless Claude Code session: the analysts get their data tools over a local MCP server, the structured agents keep their schemas, and the API key is never passed to the session. The provider has its own model pair (`TRADINGAGENTS_CLAUDE_CODE_DEEP_MODEL`, `TRADINGAGENTS_CLAUDE_CODE_QUICK_MODEL`, Fable and Opus by default) so the API pair is untouched. Runs count toward the plan's usage limit; when it is hit, a call waits and retries every 10 minutes for up to `TRADINGAGENTS_CLAUDE_CODE_WAIT_MINUTES`. `temperature`, `max_tokens` and `llm_max_retries` do not apply.
+
 For AWS Bedrock, install the extra with `pip install ".[bedrock]"`, set `llm_provider: "bedrock"`, configure AWS credentials (environment variables, `~/.aws/credentials`, or an IAM role) and `AWS_DEFAULT_REGION`, and use a Bedrock model ID, e.g. `us.anthropic.claude-opus-5-5`.
 
 For local models, configure Ollama with `llm_provider: "ollama"`. The default endpoint is `http://localhost:11434/v1`; set `OLLAMA_BASE_URL` to point at a remote `ollama-serve`. Pull models with `ollama pull <name>`, and pick "Custom model ID" in the CLI for any model not listed by default.
@@ -248,7 +250,7 @@ An interface will appear showing results as they load, letting you track the age
 
 ### Implementation Details
 
-We built TradingAgents with LangGraph to ensure flexibility and modularity. The framework supports multiple LLM providers: OpenAI, Google, Anthropic, xAI, DeepSeek, Qwen (Alibaba DashScope, international and China endpoints), GLM (Zhipu), MiniMax (global + China), OpenRouter, Ollama for local models, Azure OpenAI for enterprise, and your own ChatGPT plan.
+We built TradingAgents with LangGraph to ensure flexibility and modularity. The framework supports multiple LLM providers: OpenAI, Google, Anthropic, xAI, DeepSeek, Qwen (Alibaba DashScope, international and China endpoints), GLM (Zhipu), MiniMax (global + China), OpenRouter, Ollama for local models, Azure OpenAI for enterprise, your own ChatGPT plan, and your own Claude plan through Claude Code.
 
 ### Python Usage
 

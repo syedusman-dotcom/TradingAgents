@@ -78,6 +78,7 @@ The first screen of a week fetches every ticker (roughly 20-40 minutes); later r
 1. Scores past decisions in the memory log (`settle_all_pending`).
 2. Runs TradingAgents (market, news, fundamentals analysts) on every holding, then on the top `review.candidates` (default 5) screen picks you don't own. Every run sees your holdings and cash.
 3. Prints the number of runs and the estimated cost (`cost_per_run`, default $2) and asks before starting, unless you pass `--yes`. Candidates are dropped from the end to stay under `max_cost_per_review` (default $40); holdings are never dropped, and if they alone exceed the cap the review refuses to start. Only one review runs at a time: the scheduled run, the website and a terminal share a lock in the data folder, and a second start is refused rather than spending twice.
+   With `TRADINGAGENTS_LLM_PROVIDER=claude_code` the agents run on your Claude plan through Claude Code, so the cap is a usage budget rather than a bill; the ACTIONS report then shows the measured tokens and what the run would have cost at API prices. The website runs reviews in its own process: restart it after changing `.env`. Inside Claude Code, `/review HRB` runs one stock and relays the agents as they finish.
 4. Saves each report to `data/reports/YYYY-MM-DD/TICKER/`. A failed run is retried once, then reported.
 5. Turns ratings into actions:
 

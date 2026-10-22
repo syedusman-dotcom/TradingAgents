@@ -80,4 +80,6 @@ final_state, rating = ta.propagate("AAPL", "2026-10-09")
 
 The deep-thinking model matters most: the managers weigh the debate and set the rating. The analysts make most of the calls, so a cheaper quick-thinking model (`TRADINGAGENTS_QUICK_THINK_LLM`) cuts the cost per run with little loss, now that the numbers come from code rather than from the model.
 
+On a Claude plan the per-token cost disappears: set `TRADINGAGENTS_LLM_PROVIDER=claude_code` and the agents run through the Claude Code CLI with Fable for the managers and Opus for everyone else (their own two settings, so the API pair stays as it is). What you spend instead is the plan's usage limit; a 15-stock review may hit it and wait.
+
 Add a free FRED key (`FRED_API_KEY` in `.env`, from fred.stlouisfed.org) so the news analyst can use real interest-rate and inflation data, which matter for lenders, real estate and anything bought with debt.
