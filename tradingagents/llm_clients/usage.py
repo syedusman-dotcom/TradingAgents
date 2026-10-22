@@ -18,7 +18,7 @@ class UsageTally(BaseCallbackHandler):
         self.reset()
 
     def reset(self) -> None:
-        with getattr(self, "_lock", threading.Lock()):
+        with self._lock:
             self.calls, self.tokens_in, self.tokens_out, self.nominal_cost_usd = 0, 0, 0, 0.0
 
     def on_llm_end(self, response: LLMResult, **kwargs: Any) -> None:

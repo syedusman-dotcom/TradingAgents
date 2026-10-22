@@ -4,7 +4,7 @@ description: Run the value_pipeline agent review for one or more tickers from in
 disable-model-invocation: true
 ---
 
-Run the agent review for the tickers in `$ARGUMENTS` (comma or space separated, upper-cased).
+Run the agent review for the tickers in `$ARGUMENTS` (comma or space separated, upper-cased; space-separated input is joined with commas before it is passed to `--tickers`).
 The agents run on the Claude plan through headless sessions when `.env` sets
 `TRADINGAGENTS_LLM_PROVIDER=claude_code`; you watch agents complete, not the model think.
 
@@ -20,5 +20,5 @@ The agents run on the Claude plan through headless sessions when `.env` sets
 4. When the process exits, read `value_pipeline/data/reports/<latest folder>/ACTIONS.md` and, for each
    ticker, `<folder>/<TICKER>/complete_report.md`. Report per ticker: rating, price target, margin of
    safety, the planned action and its reason, and the report path. Then stop and let the user ask.
-5. If the run failed, show the last 20 log lines and the likely cause (not logged in → `claude login`;
+5. If the run failed, show the last 20 log lines and the likely cause (not logged in → `claude auth login`;
    usage limit → when it resets; a vendor error → which tool).
