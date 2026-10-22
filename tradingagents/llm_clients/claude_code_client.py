@@ -34,10 +34,14 @@ log = logging.getLogger(__name__)
 MCP_SERVER_NAME = "ta"
 RETRY_SECONDS = 600
 # What the CLI says when the plan's rolling limit is hit; matched case-insensitively.
-USAGE_LIMIT_SIGNS = ("usage limit", "rate limit", "rate limited", "limit reached", "overloaded", "529")
-_DROPPED_VARS = ("ANTHROPIC_API_KEY", "CLAUDECODE")
+USAGE_LIMIT_SIGNS = ("usage limit", "rate limit", "rate limited", "limit reached", "resets", "overloaded")
+# Wordings that name a limit only together with the word "limit" ("You've hit your limit").
+_LIMIT_LEAD_INS = ("hit your", "reached your")
+_DROPPED_VARS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDECODE")
 _DROPPED_PREFIXES = ("CLAUDE_CODE_",)
-_PLAIN_TURNS, _TOOL_TURNS = 4, 30
+_SERVER_PREFIXES = ("TRADINGAGENTS_", "TYPESAFE_")
+_SERVER_VARS = ("SEC_EDGAR_USER_AGENT", "OLLAMA_BASE_URL", "PATH", "HOME")
+_PLAIN_TURNS, _TOOL_TURNS = 4, 50
 
 
 class ClaudeCodeError(RuntimeError):
@@ -100,12 +104,33 @@ def usage_of(result: dict) -> dict:
 
 def usage_limited(result: dict) -> bool:
     text = str(result.get("result") or "").lower()
-    return result.get("api_error_status") == 429 or any(sign in text for sign in USAGE_LIMIT_SIGNS)
+    if result.get("api_error_status") in (429, 529):
+        return True
+    if any(sign in text for sign in USAGE_LIMIT_SIGNS):
+        return True
+    return "limit" in text and any(lead in text for lead in _LIMIT_LEAD_INS)
 
 
-def mcp_config(tool_names: Sequence[str], context: Mapping[str, Any]) -> dict:
-    """The inline ``--mcp-config``: this interpreter serving the named tools for the run's ticker and date."""
-    env = {"TA_COMPANY": str(context.get("company", "")), "TA_TRADE_DATE": str(context.get("trade_date", "")),
+def _server_env(source: Mapping[str, str]) -> dict[str, str]:
+    """The slice of the environment the MCP server needs: vendor keys and settings, never the API key."""
+    return {k: v for k, v in child_env(source).items()
+            if k.endswith("_API_KEY") or k.startswith(_SERVER_PREFIXES) or k in _SERVER_VARS}
+
+
+def _failure(result: dict) -> str:
+    """Why an ``is_error`` result failed: its subtype, text and error list (the max-turns result has no text)."""
+    parts = [str(result.get("result") or "")[:300], *(str(e) for e in result.get("errors") or [])]
+    subtype = result.get("subtype")
+    return f"claude -p failed{f' ({subtype})' if subtype else ''}: {'; '.join(p for p in parts if p)[:400]}"
+
+
+def mcp_config(tool_names: Sequence[str], context: Mapping[str, Any], env: Mapping[str, str] | None = None) -> dict:
+    """The inline ``--mcp-config``: this interpreter serving the named tools for the run's ticker and date.
+
+    The server starts in an empty directory with no ``.env``, so it is handed the data-vendor keys and
+    settings of this process (``ANTHROPIC_API_KEY`` stays out).
+    """
+    env = _server_env(os.environ if env is None else env) | {"TA_COMPANY": str(context.get("company", "")), "TA_TRADE_DATE": str(context.get("trade_date", "")),
            "TA_TOOLS": ",".join(tool_names), "TA_TOOL_VENDORS": json.dumps(context.get("tool_vendors") or {})}
     return {"mcpServers": {MCP_SERVER_NAME: {"command": sys.executable, "args": ["-m", "tradingagents.mcp_server"],
                                              "env": env}}}
@@ -196,7 +221,7 @@ class ChatClaudeCode(BaseChatModel):
                 return result
             text = str(result.get("result") or "")
             if not usage_limited(result):
-                raise ClaudeCodeError(f"claude -p failed: {text[:300]}")
+                raise ClaudeCodeError(_failure(result))
             if self.clock() + RETRY_SECONDS > deadline:
                 raise UsageLimitReached(f"usage limit still in force after {self.wait_minutes:.0f} minutes: {text[:200]}")
             log.warning("usage limit reached (%s); retrying in %d minutes", text[:120], RETRY_SECONDS // 60)
@@ -222,7 +247,8 @@ class ChatClaudeCode(BaseChatModel):
 def auth_status() -> dict:
     """``claude auth status`` as a dict; ``{"loggedIn": False}`` when the CLI is missing."""
     try:
-        proc = subprocess.run(["claude", "auth", "status"], capture_output=True, text=True, timeout=30, check=False)
+        proc = subprocess.run(["claude", "auth", "status"], capture_output=True, text=True, timeout=30, check=False,
+                              env=child_env(os.environ))
         return json.loads(proc.stdout)
     except (FileNotFoundError, subprocess.TimeoutExpired, ValueError):
         return {"loggedIn": False}
@@ -240,7 +266,7 @@ class ClaudeCodeClient(BaseLLMClient):
     def get_llm(self) -> ChatClaudeCode:
         check = self.kwargs.get("auth_check", auth_status)
         if not check().get("loggedIn"):
-            raise ClaudeCodeError("Claude Code is not logged in: run `claude login` (or install the CLI) "
+            raise ClaudeCodeError("Claude Code is not logged in: run `claude auth login` (or install the CLI) "
                                   "before using provider claude_code")
         fields = {k: v for k, v in self.kwargs.items() if k in self._FIELDS}
         return ChatClaudeCode(model=self.model, **fields)

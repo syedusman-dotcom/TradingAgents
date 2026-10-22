@@ -84,7 +84,8 @@ def test_effort_is_passed_when_set():
 
 @pytest.mark.unit
 def test_the_child_environment_has_no_api_key_and_no_session_variables():
-    env = {"PATH": "/bin", "ANTHROPIC_API_KEY": "sk-secret", "CLAUDECODE": "1", "CLAUDE_CODE_SESSION_ID": "x",
+    env = {"PATH": "/bin", "ANTHROPIC_API_KEY": "sk-secret", "ANTHROPIC_AUTH_TOKEN": "tok", "CLAUDECODE": "1",
+           "CLAUDE_CODE_SESSION_ID": "x",
            "CLAUDE_CODE_ENTRYPOINT": "cli", "FRED_API_KEY": "fred"}
     assert cc.child_env(env) == {"PATH": "/bin", "FRED_API_KEY": "fred"}
 
@@ -180,7 +181,11 @@ def test_a_bound_copy_sees_a_context_set_later_on_the_original():
 
 
 @pytest.mark.unit
-def test_a_tool_call_serves_the_named_tools_over_mcp_for_the_run_s_ticker_and_date():
+def test_a_tool_call_serves_the_named_tools_over_mcp_for_the_run_s_ticker_and_date(monkeypatch):
+    monkeypatch.setenv("FRED_API_KEY", "fred")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-secret")
+    monkeypatch.setenv("TRADINGAGENTS_MAX_TOOL_ROUNDS", "5")
+    monkeypatch.setenv("UNRELATED", "x")
     runner = Runner(_ok("Fundamentals report"))
     llm = _model(runner)
     llm.set_context("HRB", "2026-10-22", {"get_cashflow": "yfinance"})
@@ -189,14 +194,17 @@ def test_a_tool_call_serves_the_named_tools_over_mcp_for_the_run_s_ticker_and_da
 
     assert message.content == "Fundamentals report" and message.tool_calls == []
     args = runner.calls[0]["args"]
-    assert args[args.index("--max-turns") + 1] == "30"
+    assert args[args.index("--max-turns") + 1] == "50"
     assert "--strict-mcp-config" in args
     assert args[args.index("--allowedTools") + 1] == "mcp__ta__get_value_metrics,mcp__ta__get_annual_report"
     server = json.loads(args[args.index("--mcp-config") + 1])["mcpServers"]["ta"]
     assert server["command"] == sys.executable and server["args"] == ["-m", "tradingagents.mcp_server"]
-    assert server["env"] == {"TA_COMPANY": "HRB", "TA_TRADE_DATE": "2026-10-22",
-                             "TA_TOOLS": "get_value_metrics,get_annual_report",
-                             "TA_TOOL_VENDORS": '{"get_cashflow": "yfinance"}'}
+    env = server["env"]
+    assert {k: v for k, v in env.items() if k.startswith("TA_")} == {
+        "TA_COMPANY": "HRB", "TA_TRADE_DATE": "2026-10-22", "TA_TOOLS": "get_value_metrics,get_annual_report",
+        "TA_TOOL_VENDORS": '{"get_cashflow": "yfinance"}'}
+    assert env["FRED_API_KEY"] == "fred" and env["TRADINGAGENTS_MAX_TOOL_ROUNDS"] == "5"
+    assert "ANTHROPIC_API_KEY" not in env and "UNRELATED" not in env
 
 
 @pytest.mark.unit
@@ -271,6 +279,10 @@ def test_a_plain_error_is_raised_without_waiting():
     ({"result": "x", "api_error_status": 429}, True),
     ({"result": "Not logged in"}, False),
     ({"result": "Invalid API key"}, False),
+    ({"result": "You've hit your limit \u00b7 resets 3pm"}, True),
+    ({"result": "you have reached your weekly usage limit"}, True),
+    ({"result": "x", "api_error_status": 529}, True),
+    ({"result": "request id 529abc failed: invalid model"}, False),
 ])
 def test_what_counts_as_a_usage_limit(result, limited):
     assert cc.usage_limited(result) is limited
@@ -279,7 +291,7 @@ def test_what_counts_as_a_usage_limit(result, limited):
 @pytest.mark.unit
 def test_the_client_refuses_to_build_a_model_when_not_logged_in():
     client = cc.ClaudeCodeClient("opus", auth_check=lambda: {"loggedIn": False})
-    with pytest.raises(cc.ClaudeCodeError, match="claude login"):
+    with pytest.raises(cc.ClaudeCodeError, match="claude auth login"):
         client.get_llm()
 
 
@@ -322,3 +334,30 @@ def test_the_usage_tally_sums_tokens_and_nominal_cost_across_calls():
     assert tally.snapshot() == {"calls": 2, "tokens_in": 224, "tokens_out": 8, "nominal_cost_usd": pytest.approx(0.0796)}
     tally.reset()
     assert tally.snapshot()["calls"] == 0
+
+
+@pytest.mark.unit
+def test_the_login_check_runs_with_the_scrubbed_environment(monkeypatch):
+    calls = []
+
+    class Proc:
+        stdout = '{"loggedIn": true}'
+
+    def fake_run(*a, **k):
+        calls.append(k)
+        return Proc()
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-secret")
+    monkeypatch.setenv("CLAUDECODE", "1")
+    monkeypatch.setattr(cc.subprocess, "run", fake_run)
+    assert cc.auth_status()["loggedIn"] is True
+    assert "ANTHROPIC_API_KEY" not in calls[0]["env"] and "CLAUDECODE" not in calls[0]["env"]
+
+
+@pytest.mark.unit
+def test_a_max_turns_error_without_text_is_reported_with_its_subtype_and_not_retried():
+    runner = Runner({"is_error": True, "subtype": "error_max_turns", "result": None,
+                     "errors": ["Reached maximum number of turns (50)"]})
+    with pytest.raises(cc.ClaudeCodeError, match="error_max_turns.*maximum number of turns"):
+        _model(runner).invoke("ping")
+    assert len(runner.calls) == 1
