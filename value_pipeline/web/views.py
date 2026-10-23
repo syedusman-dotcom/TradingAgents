@@ -77,6 +77,25 @@ def safe_report_path(paths: Paths, rel: str) -> Path | None:
     return target
 
 
+_INTL_COLUMNS = ("ticker", "name", "region", "sector", "market_cap", "mf_position", "earnings_yield_avg",
+                 "roic_avg", "fscore", "altman_z", "mos_formula", "trend", "passes_filters", "fail_reasons")
+
+
+def intl_screen_table(paths: Paths) -> dict | None:
+    """The latest exploratory screen of other markets (data/screens/intl), ranked companies first."""
+    files = sorted((paths.screens / "intl").glob("intl_screen_????-??-??.csv"))
+    if not files:
+        return None
+    latest = files[-1]
+    rows = [{**dict.fromkeys(_INTL_COLUMNS), **r} for r in _csv_records(latest)]
+    rows.sort(key=lambda r: (r.get("mf_position") is None, r.get("mf_position") or 0))
+    return {
+        "date": latest.stem.removeprefix("intl_screen_"),
+        "rows": rows,
+        "regions": sorted({r["region"] for r in rows if r.get("region")}),
+    }
+
+
 def _csv_records(path: Path) -> list[dict]:
     if not path.exists():
         return []

@@ -407,3 +407,23 @@ def test_history_lists_same_day_entries_newest_first(tmp_path):
 
     rows = re.findall(r'<a href="/stock/(AAA|BBB)">', client.get("/trades").text)
     assert rows == ["BBB", "AAA"]
+
+
+@pytest.mark.unit
+def test_screen_page_lists_the_latest_other_markets_screen(tmp_path):
+    client, app, paths = _client(tmp_path)
+    assert "Other markets" not in client.get("/screen").text          # nothing to show without a file
+    intl = paths.screens / "intl"
+    intl.mkdir(parents=True)
+    (intl / "intl_screen_2026-10-20.csv").write_text("ticker,name,region\nOLD.L,Old plc,UK\n")
+    (intl / "intl_screen_2026-10-23.csv").write_text(
+        "ticker,name,region,sector,market_cap,mf_position,earnings_yield_avg,roic_avg,fscore,altman_z,"
+        "mos_formula,trend,passes_filters,fail_reasons\n"
+        "000270.KS,Kia Corporation,Korea,Consumer Cyclical,31900000000,14,0.53,0.64,6,3.1,0.68,BASING,True,\n"
+        "DGE.L,Diageo plc,UK,Consumer Defensive,53300000000,,0.064,0.43,5,2.1,-0.22,UPTREND,False,F-Score\n")
+    r = client.get("/screen")
+    assert r.status_code == 200
+    for text in ("Other markets", "2026-10-23", "Kia Corporation", "Korea", "68%", "$31.9B", "DGE.L", "F-Score"):
+        assert text in r.text, text
+    assert "OLD.L" not in r.text                                        # only the newest file
+    assert r.text.index("000270.KS") < r.text.index("DGE.L")           # ranked first, unranked last

@@ -214,7 +214,8 @@ def create_app(paths: Paths, *, config_path: Path = CONFIG_PATH, price_fn=market
 
     @app.get("/screen", response_class=HTMLResponse)
     def screen(request: Request):
-        return render(request, "screen.html", screen=views.screen_table(paths))
+        return render(request, "screen.html", screen=views.screen_table(paths),
+                      intl=views.intl_screen_table(paths))
 
     def tickers_from(form) -> list[str] | None:
         raw = str(form.get("tickers") or "")

@@ -57,4 +57,53 @@
 })();
 </script>
 {% endif %}
+{% if intl %}
+<h2>Other markets (exploratory)</h2>
+<p class="muted">Screen {{ intl.date }} of UK, European, Canadian, Japanese, Korean and US small-cap index members · {{ intl.rows | length }} companies · same filters, figures in USD at that day's FX, one US discount rate for every market · no agent review yet.</p>
+<fieldset>
+  <label>Region <select id="i-region"><option value="">All</option>{% for s in intl.regions %}<option>{{ s }}</option>{% endfor %}</select></label>
+  <label><input type="checkbox" id="i-pass" checked> Passes filters only</label>
+  <label>Min formula margin of safety <input id="i-mos" type="number" step="5" size="4">%</label>
+</fieldset>
+<div class="table"><table id="intl">
+<thead><tr><th data-k="n">#</th><th>Ticker</th><th>Name</th><th>Region</th><th>Sector</th><th class="num" data-k="n">Mkt cap</th><th class="num" data-k="n">EBIT/EV avg</th><th class="num" data-k="n">ROIC avg</th><th class="num" data-k="n">F</th><th class="num" data-k="n">Z</th><th class="num" data-k="n">Formula MoS</th><th>Trend</th><th>Fails</th></tr></thead>
+<tbody>
+{% for r in intl.rows %}
+<tr data-region="{{ r.region or '' }}" data-pass="{{ 'y' if r.passes_filters in (true, 'True') else 'n' }}" data-mos="{{ r.mos_formula if r.mos_formula is not none else '' }}">
+<td class="num">{{ r.mf_position | int if r.mf_position is not none else "" }}</td>
+<td>{{ r.ticker }}</td><td>{{ r.name or "" }}</td><td>{{ r.region or "" }}</td><td>{{ r.sector or "" }}</td>
+<td class="num">{{ "${:.1f}B".format(r.market_cap / 1e9) if r.market_cap is not none else "–" }}</td>
+<td class="num">{{ "{:.1%}".format(r.earnings_yield_avg) if r.earnings_yield_avg is not none else "–" }}</td>
+<td class="num">{{ "{:.0%}".format(r.roic_avg) if r.roic_avg is not none else "–" }}</td>
+<td class="num">{{ r.fscore | int if r.fscore is not none else "–" }}</td>
+<td class="num">{{ "{:.1f}".format(r.altman_z) if r.altman_z is not none else "–" }}</td>
+<td class="num">{{ "{:.0%}".format(r.mos_formula) if r.mos_formula is not none else "–" }}</td>
+<td>{{ r.trend or "–" }}</td><td class="muted">{{ r.fail_reasons or "" }}</td></tr>
+{% endfor %}
+</tbody></table></div>
+<script>
+(() => {
+  const body = document.querySelector("#intl tbody");
+  const rows = [...body.rows];
+  const f = id => document.getElementById(id);
+  function apply() {
+    const region = f("i-region").value, pass = f("i-pass").checked;
+    const mos = f("i-mos").value === "" ? null : Number(f("i-mos").value) / 100;
+    for (const r of rows) {
+      r.hidden = !((!region || r.dataset.region === region) && (!pass || r.dataset.pass === "y")
+        && (mos === null || (r.dataset.mos !== "" && Number(r.dataset.mos) >= mos)));
+    }
+  }
+  ["i-region", "i-pass", "i-mos"].forEach(id => f(id).addEventListener("input", apply));
+  document.querySelectorAll("#intl th").forEach((th, i) => th.addEventListener("click", () => {
+    const numeric = th.dataset.k === "n", dir = th.dataset.dir === "asc" ? -1 : 1;
+    th.dataset.dir = dir === 1 ? "asc" : "desc";
+    const key = r => { const t = r.cells[i].textContent.replace(/[%,$B]/g, "").trim();
+      return numeric ? (t === "" || t === "–" ? Infinity : parseFloat(t)) : t; };
+    rows.sort((a, b) => (key(a) > key(b) ? 1 : key(a) < key(b) ? -1 : 0) * dir).forEach(r => body.appendChild(r));
+  }));
+  apply();
+})();
+</script>
+{% endif %}
 {% endblock %}
