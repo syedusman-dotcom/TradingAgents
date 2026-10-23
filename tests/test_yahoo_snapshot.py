@@ -22,6 +22,11 @@ def _sample_ohlcv() -> pd.DataFrame:
     })
 
 
+@pytest.fixture(autouse=True)
+def _no_calendar(monkeypatch):
+    monkeypatch.setattr(validator, "next_earnings_date", lambda symbol: None)
+
+
 @pytest.mark.unit
 class TestVerifiedSnapshot:
     def test_excludes_future_rows(self, monkeypatch):

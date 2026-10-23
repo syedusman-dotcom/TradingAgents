@@ -127,7 +127,7 @@ class TradingAgentsGraph:
         """
         identity = resolve_instrument_identity(ticker)
         earnings = None
-        if asset_type != "crypto":
+        if asset_type != "crypto" and not is_historical(trade_date):
             try:
                 earnings = next_earnings_date(ticker)
             except Exception:  # noqa: BLE001 - a missing date must never break a run

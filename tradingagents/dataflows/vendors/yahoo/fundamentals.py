@@ -166,14 +166,27 @@ def get_insider_transactions(
     return f"# Insider Transactions data for {canonical}\n" + data.to_csv()
 
 
+_earnings_dates: dict[str, str] = {}   # found dates only, so a failed lookup is asked again
+
+
 def next_earnings_date(symbol: str) -> str | None:
-    """The next earnings date Yahoo lists for ``symbol`` as YYYY-MM-DD, or None when unknown."""
+    """The next earnings date Yahoo lists for ``symbol`` as YYYY-MM-DD, or None when unknown.
+
+    Yahoo knows only today's next date, so callers use it for a run dated today.
+    A found date is kept for the process: the context and the snapshot share one call.
+    """
+    canonical = normalize_symbol(symbol)
+    if canonical in _earnings_dates:
+        return _earnings_dates[canonical]
     try:
-        calendar = yf_retry(lambda: yf.Ticker(normalize_symbol(symbol)).calendar) or {}
+        calendar = yf_retry(lambda: yf.Ticker(canonical).calendar) or {}
         dates = calendar.get("Earnings Date") or []
-        return dates[0].isoformat()[:10] if dates else None
+        found = dates[0].isoformat()[:10] if dates else None
     except Exception:  # noqa: BLE001 - a missing date must never break a run
         return None
+    if found:
+        _earnings_dates[canonical] = found
+    return found
 
 
 def get_company_profile(ticker: str) -> dict:

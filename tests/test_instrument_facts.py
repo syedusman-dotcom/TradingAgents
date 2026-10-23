@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 
 import pandas as pd
 import pytest
@@ -23,26 +23,52 @@ def _ohlcv() -> pd.DataFrame:
                          "Close": closes, "Volume": [1_000_000] * len(dates)})
 
 
+def _today(offset: int = 0) -> str:
+    return (date.today() + timedelta(days=offset)).isoformat()
+
+
 @pytest.mark.unit
-@pytest.mark.parametrize("found,line", [
-    ("2026-05-26", "- Next earnings: 2026-05-26 (13 days)"),
-    ("2026-05-13", "- Next earnings: 2026-05-13 (0 days)"),
-    ("2026-05-01", "- Next earnings: unknown"),
-    (None, "- Next earnings: unknown"),
-])
-def test_snapshot_shows_days_to_next_earnings(monkeypatch, found, line):
+@pytest.mark.parametrize("offset,days", [(13, "13 days"), (0, "0 days")])
+def test_snapshot_shows_days_to_next_earnings(monkeypatch, offset, days):
+    monkeypatch.setattr(snapshot, "load_ohlcv", lambda s, d, fill_gaps=True: _ohlcv())
+    monkeypatch.setattr(snapshot, "next_earnings_date", lambda symbol: _today(offset))
+    snap = snapshot.build_verified_market_snapshot("COF", _today())
+    assert f"- Next earnings: {_today(offset)} ({days})" in snap
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("found", [_today(-5), None])
+def test_snapshot_next_earnings_unknown_when_stale_or_missing(monkeypatch, found):
     monkeypatch.setattr(snapshot, "load_ohlcv", lambda s, d, fill_gaps=True: _ohlcv())
     monkeypatch.setattr(snapshot, "next_earnings_date", lambda symbol: found)
-    assert line in snapshot.build_verified_market_snapshot("COF", "2026-05-13")
+    assert "- Next earnings: unknown" in snapshot.build_verified_market_snapshot("COF", _today())
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("symbol,as_of", [("COF", "2026-05-13"), ("BTC-USD", None)])
+def test_snapshot_does_not_ask_the_calendar_for_a_past_run_or_crypto(monkeypatch, symbol, as_of):
+    def calendar(s):
+        raise AssertionError("calendar must not be asked")
+
+    monkeypatch.setattr(snapshot, "load_ohlcv", lambda s, d, fill_gaps=True: _ohlcv())
+    monkeypatch.setattr(snapshot, "next_earnings_date", calendar)
+    snap = snapshot.build_verified_market_snapshot(symbol, as_of or _today())
+    assert "- Next earnings: unknown" in snap
 
 
 @pytest.mark.unit
 def test_instrument_context_names_the_earnings_date():
-    text = build_instrument_context("AAPL", trade_date="2026-10-23", earnings_date="2026-11-05")
-    assert "Next earnings report: 2026-11-05 (13 days away)." in text
-    past = build_instrument_context("AAPL", trade_date="2026-10-23", earnings_date="2026-10-01")
+    text = build_instrument_context("AAPL", trade_date=_today(), earnings_date=_today(13))
+    assert f"Next earnings report: {_today(13)} (13 days away)." in text
+    past = build_instrument_context("AAPL", trade_date=_today(), earnings_date=_today(-1))
     assert "Next earnings" not in past
-    assert "Next earnings" not in build_instrument_context("AAPL", trade_date="2026-10-23")
+    assert "Next earnings" not in build_instrument_context("AAPL", trade_date=_today())
+
+
+@pytest.mark.unit
+def test_a_past_dated_context_leaves_out_the_earnings_date():
+    text = build_instrument_context("AAPL", trade_date="2026-05-13", earnings_date=_today(13))
+    assert "Next earnings" not in text and _today(13) not in text
 
 
 @pytest.mark.unit
@@ -154,11 +180,14 @@ def test_next_earnings_date_reads_the_calendar(monkeypatch):
 
     from tradingagents.dataflows.vendors.yahoo import fundamentals
 
+    monkeypatch.setattr(fundamentals, "_earnings_dates", {})
+
     class Cal:
         def __init__(self, calendar):
             self.calendar = calendar
 
     def use(calendar):
+        fundamentals._earnings_dates.clear()
         monkeypatch.setattr(fundamentals.yf, "Ticker", lambda s: Cal(calendar))
 
     use({"Earnings Date": [dt.date(2026, 11, 5), dt.date(2026, 11, 9)]})
@@ -167,6 +196,11 @@ def test_next_earnings_date_reads_the_calendar(monkeypatch):
     assert fundamentals.next_earnings_date("AAPL") is None
     use({})
     assert fundamentals.next_earnings_date("AAPL") is None
+    use({"Earnings Date": [dt.date(2026, 11, 5)]})
+    assert fundamentals.next_earnings_date("AAPL") == "2026-11-05"
+    monkeypatch.setattr(fundamentals.yf, "Ticker", lambda s: pytest.fail("asked twice"))
+    assert fundamentals.next_earnings_date("AAPL") == "2026-11-05"   # kept for the process
+    fundamentals._earnings_dates.clear()
 
     def boom(s):
         raise RuntimeError("down")
@@ -180,9 +214,12 @@ def test_resolve_instrument_context_passes_the_earnings_date(monkeypatch):
     from tradingagents.graph import trading_graph as tg
 
     monkeypatch.setattr(tg, "resolve_instrument_identity", lambda t: {})
-    monkeypatch.setattr(tg, "next_earnings_date", lambda t: "2026-11-05")
+    asked = []
+    monkeypatch.setattr(tg, "next_earnings_date", lambda t: asked.append(t) or _today(13))
     graph = object.__new__(tg.TradingAgentsGraph)
-    text = graph.resolve_instrument_context("AAPL", "stock", "2026-10-23")
-    assert "Next earnings report: 2026-11-05 (13 days away)." in text
-    crypto = graph.resolve_instrument_context("BTC-USD", "crypto", "2026-10-23")
-    assert "Next earnings" not in crypto
+    text = graph.resolve_instrument_context("AAPL", "stock", _today())
+    assert f"Next earnings report: {_today(13)} (13 days away)." in text
+    assert "Next earnings" not in graph.resolve_instrument_context("BTC-USD", "crypto", _today())
+    assert asked == ["AAPL"]
+    past = graph.resolve_instrument_context("AAPL", "stock", "2026-05-13")
+    assert "Next earnings" not in past and asked == ["AAPL"]   # no calendar call for a past run

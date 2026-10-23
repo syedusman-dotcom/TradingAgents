@@ -16,8 +16,9 @@ from datetime import date
 import pandas as pd
 from stockstats import wrap
 
+from tradingagents.dataflows.date_window import is_historical
 from tradingagents.dataflows.errors import NoMarketDataError
-from tradingagents.dataflows.symbols import normalize_symbol
+from tradingagents.dataflows.symbols import crypto_base, normalize_symbol
 from tradingagents.dataflows.vendors.yahoo.fundamentals import next_earnings_date
 from tradingagents.dataflows.vendors.yahoo.ohlcv import load_ohlcv
 
@@ -66,7 +67,14 @@ def _fmt(value) -> str:
 
 
 def _earnings_line(symbol: str, as_of_date: str) -> str:
-    """The next earnings date and days to it; a date before ``as_of_date`` is stale, so unknown."""
+    """The next earnings date and days to it, for a stock analysed today.
+
+    Yahoo's calendar holds only today's next date, so a past-dated run (it would
+    be a fact from after that day), a crypto pair, and a date before ``as_of_date``
+    (stale) are all unknown.
+    """
+    if is_historical(as_of_date) or crypto_base(symbol):
+        return "- Next earnings: unknown"
     try:
         found = next_earnings_date(symbol)
         days = (date.fromisoformat(found) - date.fromisoformat(as_of_date)).days if found else -1

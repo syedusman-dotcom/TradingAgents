@@ -172,7 +172,7 @@ def build_instrument_context(
             "result explicitly disproves this resolved identity."
         )
 
-    if earnings_date and not is_crypto:
+    if earnings_date and not is_crypto and not is_historical(trade_date):
         days = _days_until(earnings_date, trade_date)
         if days is not None and days >= 0:
             context += f" Next earnings report: {earnings_date} ({days} days away)."
