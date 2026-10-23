@@ -30,6 +30,8 @@ class Decision:
     entry_price: float | None = None        # the Portfolio Manager's buy-below price
     kill_criteria: list[str] = field(default_factory=list)
     value_bridge: list[dict] = field(default_factory=list)   # [{"reason", "amount"}] from formula to target
+    upside_downside: float | None = None    # bull gain over bear loss, at the review price when known
+    weighted_mos: float | None = None       # probability-weighted margin of safety at the review price
 
     @property
     def held(self) -> bool:

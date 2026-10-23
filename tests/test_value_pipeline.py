@@ -821,28 +821,67 @@ def test_value_gap_flag_prints_the_bridge():
 
 
 @pytest.mark.unit
-def test_results_json_carries_the_checklist_fields(tmp_path, monkeypatch):
+def _review_one(tmp_path, monkeypatch, decision, price):
+    """A dry-run review of HRB whose agents return ``decision``: the results.json row and the Decision."""
     import json
 
     import pandas as pd
 
-    from tests.test_decision_math import _good_decision
     from tradingagents.agents.schemas import render_pm_decision
     from value_pipeline import market_data, operations as ops, review
 
     paths = Paths(tmp_path)
     ops.init_portfolio(paths, 1000.0, on="2026-10-01")
-    text = render_pm_decision(_good_decision())
+    text = render_pm_decision(decision)
     monkeypatch.setattr(review, "fake_run", lambda t, i, held, price: review.RunResult(t, "Overweight", text))
     monkeypatch.setattr(review, "_screen_rows", lambda paths: {"HRB": {"ticker": "HRB", "value_base": 80.33,
                                                                         "trend": "UPTREND", "sector": "X"}})
-    monkeypatch.setattr(market_data, "latest_price", lambda t: 50.0)
+    monkeypatch.setattr(market_data, "latest_price", lambda t: price)
     monkeypatch.setattr(market_data, "closes_between", lambda *a, **k: pd.Series(dtype=float))
-    out = review.run(paths, DEFAULTS, yes=True, dry_run=True, today="2026-10-23", only=["HRB"])
+    planned = {}
+    real_plan = review.plan
 
-    row = json.loads((out.parent / "results.json").read_text())[0]
+    def plan(decisions, *args):
+        planned["d"] = decisions
+        return real_plan(decisions, *args)
+
+    monkeypatch.setattr(review, "plan", plan)
+    out = review.run(paths, DEFAULTS, yes=True, dry_run=True, today="2026-10-23", only=["HRB"])
+    return json.loads((out.parent / "results.json").read_text())[0], planned["d"][0]
+
+
+@pytest.mark.unit
+def test_results_json_carries_the_checklist_fields(tmp_path, monkeypatch):
+    from tests.test_decision_math import _good_decision
+
+    row, _ = _review_one(tmp_path, monkeypatch, _good_decision(), 50.0)
     assert row["price"] == 50.0 and row["formula_value"] == 80.33 and row["entry_price"] == 46.0
     assert len(row["kill_criteria"]) == 3 and row["checklist"]["cheap"]["passed"] is True
     assert row["scenarios"]["expected_value"] == pytest.approx(56.0)
     assert row["value_bridge"][1] == {"reason": "net debt", "amount": -12.33}
     assert row["red_flags"] == []
+
+
+@pytest.mark.unit
+def test_results_json_measures_the_scenarios_at_the_review_price(tmp_path, monkeypatch):
+    from tests.test_decision_math import _decision
+    from tradingagents.agents.schemas import Scenario, Scenarios
+
+    scen = Scenarios(bear=Scenario(value=40, probability=0.25, basis="b"),
+                     base=Scenario(value=56, probability=0.5, basis="m"),
+                     bull=Scenario(value=70, probability=0.25, basis="u"))
+    row, d = _review_one(tmp_path, monkeypatch, _decision(scenarios=scen), 50.0)
+    sc = row["scenarios"]
+    assert sc["upside_downside"] == pytest.approx(2.0) and sc["weighted_mos"] == pytest.approx((55.5 - 50) / 55.5)
+    assert sc["expected_value"] == pytest.approx(55.5) and sc["price_basis"] == "review price"
+    assert d.upside_downside == pytest.approx(2.0) and d.weighted_mos == pytest.approx((55.5 - 50) / 55.5)
+
+
+@pytest.mark.unit
+def test_without_a_review_price_the_scenarios_keep_the_entry_price_figures(tmp_path, monkeypatch):
+    from tests.test_decision_math import _good_decision
+
+    row, d = _review_one(tmp_path, monkeypatch, _good_decision(), None)
+    sc = row["scenarios"]
+    assert sc["price_basis"] == "entry price" and sc["upside_downside"] == pytest.approx(6.0)
+    assert sc["weighted_mos"] is None and d.upside_downside == pytest.approx(6.0)

@@ -134,6 +134,24 @@ def _float(x) -> float | None:
     return None if x is None or pd.isna(x) else float(x)
 
 
+def _scenarios_at(decision: str, price: float | None) -> dict | None:
+    """The decision's scenarios with the statistics measured at the review price.
+
+    The Portfolio Manager sees no market price and measures upside/downside at its entry
+    price; the review knows the price, so it recomputes. Without one, the text's figures stay.
+    """
+    from tradingagents.agents.decision_math import scenario_stats
+    from tradingagents.agents.schemas import Scenario, Scenarios
+
+    parsed = parse.scenarios(decision)
+    if parsed is None:
+        return None
+    if price is None or not all(leg in parsed for leg in ("bear", "base", "bull")):
+        return {"weighted_mos": None, **parsed, "price_basis": "entry price"}
+    legs = Scenarios(**{leg: Scenario(**parsed[leg]) for leg in ("bear", "base", "bull")})
+    return {**parsed, **scenario_stats(legs, price), "price_basis": "review price"}
+
+
 def _screen_rows(paths: Paths) -> dict[str, dict]:
     path = screener.latest_screen(paths)
     if path is None:
@@ -272,6 +290,7 @@ def _run(paths: Paths, cfg: dict, *, yes: bool, dry_run: bool, today: str | None
                  "nominal_cost_usd": sum(r.nominal_cost_usd for r in results),
                  "on_plan": str(ta.config.get("llm_provider", "")).lower() == "claude_code"}
 
+    scenarios = {r.ticker: _scenarios_at(r.decision, prices.get(r.ticker)) for r in results}
     decisions = []
     for r in results:
         held = pf.position(r.ticker)
@@ -294,6 +313,8 @@ def _run(paths: Paths, cfg: dict, *, yes: bool, dry_run: bool, today: str | None
             entry_price=parse.entry_price(r.decision),
             kill_criteria=parse.kill_criteria(r.decision),
             value_bridge=parse.value_bridge(r.decision),
+            upside_downside=(scenarios[r.ticker] or {}).get("upside_downside"),
+            weighted_mos=(scenarios[r.ticker] or {}).get("weighted_mos"),
         ))
     reviewed = {d.ticker for d in decisions}
     others = [(p.ticker, p.shares * (prices.get(p.ticker) or p.avg_price), _sector(paths, p.ticker, screen.get(p.ticker)))
@@ -321,7 +342,7 @@ def _run(paths: Paths, cfg: dict, *, yes: bool, dry_run: bool, today: str | None
          "thesis": parse.thesis_summary(r.decision), "price": prices.get(r.ticker),
          "formula_value": _float(screen[r.ticker].get("value_base")) if r.ticker in screen else None,
          "entry_price": parse.entry_price(r.decision), "kill_criteria": parse.kill_criteria(r.decision),
-         "checklist": parse.checklist(r.decision), "scenarios": parse.scenarios(r.decision),
+         "checklist": parse.checklist(r.decision), "scenarios": scenarios[r.ticker],
          "value_bridge": parse.value_bridge(r.decision), "red_flags": parse.red_flags(r.decision)}
         for r in results
     ], indent=2), encoding="utf-8")

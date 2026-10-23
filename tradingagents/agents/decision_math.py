@@ -54,8 +54,16 @@ def decision_checks(decision: PortfolioDecision, formula_value: float | None,
         if ev is not None and target is not None and abs(ev - target) > TOLERANCE * abs(target):
             problems.append(f"The scenarios' expected value {ev:.2f} is not the price target "
                             f"{target:.2f}: reconcile them.")
-    if decision.entry_price is None and decision.rating.value != "Sell":
-        problems.append(f"No entry price: a {decision.rating.value} needs the price at which to buy.")
+    if decision.rating.value != "Sell":
+        if decision.entry_price is None:
+            problems.append(f"No entry price: a {decision.rating.value} needs the price at which to buy.")
+        if decision.scenarios is None:
+            problems.append("No scenarios: give bear, base and bull values with their probabilities.")
+        for label, verdict in (("Good business", decision.good_business),
+                               ("Good management", decision.good_management),
+                               ("Cheap", decision.cheap)):
+            if verdict is None:
+                problems.append(f"No {label} verdict: the checklist needs all three tests.")
     if len(decision.kill_criteria) < MIN_KILL_CRITERIA:
         problems.append(f"Only {len(decision.kill_criteria)} kill criteria: give 3 to 6 verifiable "
                         "facts that would prove the thesis wrong.")

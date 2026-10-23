@@ -170,3 +170,12 @@ def test_worksheet_excerpt_is_the_valuation_section_only():
                                          "- **Range 60 base (3% growth) 80.33; margin of safety 30%**")
     assert worksheet_excerpt("## Valuation worksheet\nlast") == "## Valuation worksheet\nlast"
     assert worksheet_excerpt("no worksheet here") == ""
+
+
+@pytest.mark.unit
+def test_decision_checks_flag_missing_scenarios_and_verdicts_except_on_a_sell():
+    assert len(decision_checks(_decision(scenarios=None), None, None)) == 1
+    problems = decision_checks(_decision(good_management=None, cheap=None), None, None)
+    assert len(problems) == 2 and any("Cheap" in p for p in problems)
+    assert decision_checks(_decision(rating=PortfolioRating.SELL, scenarios=None, good_business=None,
+                                     entry_price=None), None, None) == []
