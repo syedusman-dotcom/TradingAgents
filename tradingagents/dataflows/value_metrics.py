@@ -899,7 +899,8 @@ def quarter_trend_prose(rows: list[dict]) -> str | None:
             continue
         change = a - b
         word = "flat" if abs(change) < TREND_FLAT_POINTS else "up" if change > 0 else "down"
-        parts.append(f"{name} {word} {abs(change) * 100:.1f} points")
+        size = f"{abs(change) * 100:.1f} points"
+        parts.append(f"{name} flat ({size})" if word == "flat" else f"{name} {word} {size}")
     a, b = new.get("cash_conversion"), old.get("cash_conversion")
     if a is not None and b is not None:
         parts.append(f"cash conversion {b:.2f}× → {a:.2f}×")

@@ -1057,7 +1057,7 @@ def test_render_report_shows_the_eight_quarter_table_after_the_annual_table():
 def test_quarter_trend_prose_calls_small_moves_flat_and_drops_missing_parts():
     rows = [{"period_end": "2026-06-30", "gross_margin": 0.403, "ebit_margin": 0.18, "cash_conversion": None},
             {"period_end": "2025-06-30", "gross_margin": 0.400, "ebit_margin": 0.20, "cash_conversion": 1.0}]
-    assert vm.quarter_trend_prose(rows) == ("Over the span: gross margin flat 0.3 points, "
+    assert vm.quarter_trend_prose(rows) == ("Over the span: gross margin flat (0.3 points), "
                                             "EBIT margin down 2.0 points.")
     assert vm.quarter_trend_prose(rows[:1]) is None
 

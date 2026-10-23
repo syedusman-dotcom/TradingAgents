@@ -499,7 +499,8 @@ def _run(paths: Paths, cfg: dict, *, yes: bool, dry_run: bool, today: str | None
             r.earnings_date = None
 
     scenarios = {r.ticker: _scenarios_at(r.decision, prices.get(r.ticker)) for r in results}
-    consensus_of = {r.ticker: _consensus_figures(r.ticker) for r in results}
+    # A dry run makes no Yahoo calls for the estimates.
+    consensus_of = {r.ticker: (None, None) if dry_run else _consensus_figures(r.ticker) for r in results}
     decisions = []
     for r in results:
         held = pf.position(r.ticker)
