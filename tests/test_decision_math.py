@@ -8,6 +8,7 @@ from tradingagents.agents.decision_math import (
     scenario_stats,
     worksheet_base,
     worksheet_excerpt,
+    worksheet_price,
 )
 from tradingagents.agents.schemas import (
     Adjustment,
@@ -193,3 +194,40 @@ def test_worksheet_base_reads_the_base_value_or_none():
     assert worksheet_base(excerpt) == pytest.approx(1080.33)
     assert worksheet_base("## Valuation worksheet\nnothing here") is None
     assert worksheet_base("") is None
+
+
+@pytest.mark.unit
+def test_rendered_scenarios_measure_upside_downside_at_todays_price_else_the_entry():
+    scen = Scenarios(bear=Scenario(value=40, probability=0.25, basis="b"),
+                     base=Scenario(value=80, probability=0.5, basis="m"),
+                     bull=Scenario(value=120, probability=0.25, basis="u"))
+    d = _decision(scenarios=scen, entry_price=60.0)
+    assert "upside/downside 1.0x at price 80.00" in render_pm_decision(d, price=80.0)
+    assert "upside/downside 3.0x at entry price 60.00" in render_pm_decision(d)
+    assert "upside/downside n/a" in render_pm_decision(_decision(scenarios=scen, entry_price=None))
+
+
+@pytest.mark.unit
+def test_worksheet_price_reads_todays_price_line_or_none():
+    excerpt = "## Valuation worksheet (per share)\n- Price today 1,886.50\n- **Range 1 to 2, base (3% growth) 3**"
+    assert worksheet_price(excerpt) == pytest.approx(1886.5)
+    assert worksheet_price("## Valuation worksheet\nnothing") is None
+
+
+@pytest.mark.unit
+def test_the_worksheet_carries_todays_price_inside_its_section():
+    from tests.test_value_metrics import _year
+    from tradingagents.dataflows import value_metrics as vm
+
+    m = vm.company_metrics([_year(), _year()], price=25.0, market_cap=2500.0, shares=100)
+    excerpt = worksheet_excerpt(vm.render_report("X", "2026-10-23", m))
+    assert worksheet_price(excerpt) == 25.0
+
+
+@pytest.mark.unit
+def test_a_sell_is_not_asked_for_kill_criteria_and_the_entry_wording_is_grammatical():
+    assert decision_checks(_decision(rating=PortfolioRating.SELL, kill_criteria=[]), None, None) == []
+    problems = decision_checks(_decision(rating=PortfolioRating.UNDERWEIGHT, entry_price=None), None, None)
+    assert problems == ["No entry price: an Underweight rating needs the price at which to buy."]
+    problems = decision_checks(_decision(rating=PortfolioRating.HOLD, entry_price=None), None, None)
+    assert problems == ["No entry price: a Hold rating needs the price at which to buy."]

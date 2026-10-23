@@ -745,6 +745,8 @@ def render_report(symbol: str, as_of: str, m: dict, currency: str | None = None)
     v = m["valuation"]
     if v:
         lines += [f"## Valuation worksheet (per share; {v['years_used']}-year averages)", ""]
+        if m["price"] is not None:
+            lines.append(f"- Price today {m['price']:,.2f}")
         growth = " / ".join(f"{g:.0%}" for g in GROWTH_SCENARIOS)
         r = v["discount_rate"]
         ten_year = m.get("treasury_10y")

@@ -439,13 +439,13 @@ def test_stock_page_shows_checklist_and_kill_criteria(tmp_path):
                scenarios={"bear": {"value": 42.0, "probability": 0.25, "basis": "b"},
                           "base": {"value": 56.0, "probability": 0.5, "basis": "m"},
                           "bull": {"value": 70.0, "probability": 0.25, "basis": "u"},
-                          "expected_value": 56.0, "upside_downside": 2.5})
+                          "expected_value": 56.0, "upside_downside": 2.4615384615})
     _review(paths, "2026-10-11", [dict(ROW, rating="Hold")])
     _review(paths, "2026-11-07", [row])
     text = client.get("/stock/HRB").text
     for want in ("Checklist", "Good business", "PASS", "ROIC above 20%", "Good management", "FAIL",
                  "serial acquirer", "Kill criteria", "Dividend cut", "Entry price", "46.00", "Scenarios",
-                 "Bear", "25%", "42.00", "Expected value", "56.00", "2.5"):
+                 "Bear", "25%", "42.00", "Expected value", "56.00", "upside/downside 2.5x"):
         assert want in text, want
     # the newest row lacks nothing; an old row without the keys renders none of the sections
     old = _client(tmp_path / "other")

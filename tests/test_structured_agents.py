@@ -17,6 +17,7 @@ from tradingagents.agents.analysts.sentiment_analyst import create_sentiment_ana
 from tradingagents.agents.managers.portfolio_manager import create_portfolio_manager
 from tradingagents.agents.managers.research_manager import create_research_manager
 from tradingagents.agents.schemas import (
+    Adjustment,
     PortfolioDecision,
     PortfolioRating,
     ResearchPlan,
@@ -24,6 +25,7 @@ from tradingagents.agents.schemas import (
     SentimentReport,
     TraderAction,
     TraderProposal,
+    render_pm_decision,
     render_research_plan,
     render_sentiment_report,
     render_trader_proposal,
@@ -636,7 +638,9 @@ def test_pm_retries_once_on_failed_checks_then_keeps_the_decision():
 
     assert structured.invoke.call_count == 2
     assert prompts[1].startswith(prompts[0])
-    assert "Fix these problems and return the full decision again:\n- " in prompts[1]
+    assert "\n\nYour decision was:\n" + render_pm_decision(bad) + "\n\n" in prompts[1]
+    assert "Fix these problems and return the full decision again, changing nothing else:\n- " in prompts[1]
+    assert prompts[1].index("Your decision was:") < prompts[1].index("Fix these problems")
     assert "**Unresolved Checks**:" in result["final_trade_decision"]
     assert result["final_rating"] == "Overweight"
 
@@ -686,6 +690,9 @@ def test_pm_prompt_carries_the_worksheet_and_the_checklist_rubric():
         "Start the value bridge from the worksheet's formula value and justify any growth above the base rate.",
         "The bear case may not assume more than 0.8× the target multiple and zero growth unless you say why.",
         "upside/downside of at least 3",
+        "Upside/downside is measured at today's price, not the entry price.",
+        "Do not propose position sizes, starter positions or tranches; the pipeline's rules and the "
+        "investment committee size positions. The entry price is the only price condition.",
     ):
         assert sentence in flat
     for section in ("**Checklist**", "**Red Flags**", "**Kill Criteria**", "**Entry Price**",
@@ -728,3 +735,29 @@ def test_pm_checks_the_bridge_against_the_worksheet_when_the_decision_omits_its_
     assert structured.invoke.call_count == 2
     assert "sums to 65.67, not the price target 56.00" in prompts[1]
     assert "**Unresolved Checks**:" in result["final_trade_decision"]
+
+
+@pytest.mark.unit
+def test_pm_measures_upside_downside_at_the_worksheet_price():
+    from tests.test_decision_math import _decision
+    from tradingagents.agents.schemas import Scenario, Scenarios
+
+    scen = Scenarios(bear=Scenario(value=40, probability=0.25, basis="b"),
+                     base=Scenario(value=56, probability=0.5, basis="m"),
+                     bull=Scenario(value=128, probability=0.25, basis="u"))
+    prompts = []
+    llm, _ = _sequenced_pm_llm(prompts, [_decision(scenarios=scen, price_target=70.0, value_bridge=[
+        Adjustment(reason="r", amount=-10.33)])] * 2)
+    state = {**_make_pm_state(), "fundamentals_report":
+             "## Valuation worksheet (per share)\n- Price today 80.00\n- **Range 60.00 to 95.00, base (3% growth) "
+             "80.33; margin of safety at base 30%**"}
+    result = create_portfolio_manager(llm)(state)
+    assert "upside/downside 1.2x at price 80.00" in result["final_trade_decision"]
+
+
+@pytest.mark.unit
+def test_fundamentals_analyst_quotes_the_expected_return_and_the_grid():
+    from tradingagents.agents.analysts import fundamentals_analyst
+
+    source = " ".join(inspect.getsource(fundamentals_analyst).replace('"', " ").split())
+    assert "Quote the worksheet's expected-return line and the sensitivity grid." in source

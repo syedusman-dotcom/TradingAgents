@@ -39,7 +39,7 @@ def create_fundamentals_analyst(llm):
             " dividends, leverage, yields, the Piotroski F-Score point by point, the Altman Z-Score and the formula valuation)"
             " are computed in code from the statements: quote them and do not recompute or estimate them yourself."
             " The worksheet's base value is the formula value every later agent refers to; start your valuation"
-            " from it and state each adjustment."
+            " from it and state each adjustment. Quote the worksheet's expected-return line and the sensitivity grid."
             " If it is not available for this date, compute what you can from the statements and say so."
             " Then call `get_income_statement`, `get_balance_sheet` and `get_cashflow` with freq='annual'"
             " to explain one-offs, plus freq='quarterly' for the latest trend, `get_fundamentals` for the profile,"

@@ -19,6 +19,7 @@ from tradingagents.agents.decision_math import (
     decision_checks,
     worksheet_base,
     worksheet_excerpt,
+    worksheet_price,
 )
 from tradingagents.agents.rating import parse_rating
 from tradingagents.agents.schemas import PortfolioDecision, render_pm_decision
@@ -57,6 +58,7 @@ def create_portfolio_manager(llm):
         )
         excerpt = worksheet_excerpt(state.get("fundamentals_report", ""))
         base = worksheet_base(excerpt)
+        price = worksheet_price(excerpt)
         worksheet_block = (
             f"**Valuation worksheet (formula value):**\n{excerpt}\n" if excerpt else ""
         )
@@ -92,7 +94,7 @@ Ground every conclusion in specific evidence from the analysts. Decide as a disc
 - Underweight/Sell: a test clearly fails, the stock is above intrinsic value, or the original thesis is broken.
 - Never rate Buy in FREEFALL; wait for BASING.
 Think in a 1-3 year horizon. Conflicting arguments alone are not a reason to Hold; the debate always contains conflict, so decide which side the evidence supports. Prefer doing nothing over frequent trading: only change the rating from a previous decision on this ticker if the facts changed, not because the price moved. For a stock already held, buying and selling have different bars: a margin of safety that has shrunk but is still positive means stop adding (Hold), not sell; rate a holding Underweight or Sell only when the price is above intrinsic value or the thesis is broken. Weigh the analysts on their merits, independent of speaking order.{premortem_instruction}
-Express entry conditions as prices and verifiable facts. Use the earnings date only when the print is genuinely binary and say why. If you would buy at today's price after a clean print, say so and give the entry price. Start the value bridge from the worksheet's formula value and justify any growth above the base rate. The bear case may not assume more than 0.8× the target multiple and zero growth unless you say why.
+Express entry conditions as prices and verifiable facts. Use the earnings date only when the print is genuinely binary and say why. If you would buy at today's price after a clean print, say so and give the entry price. Upside/downside is measured at today's price, not the entry price. Do not propose position sizes, starter positions or tranches; the pipeline's rules and the investment committee size positions. The entry price is the only price condition. Start the value bridge from the worksheet's formula value and justify any growth above the base rate. The bear case may not assume more than 0.8× the target multiple and zero growth unless you say why.
 
 ## Output
 
@@ -117,16 +119,17 @@ Write these sections, in this order, starting with the rating on its own line:
         # Read back from text, a rating the thesis quotes could replace it.
         decision = invoke_structured(structured_llm, prompt, "Portfolio Manager")
         if decision is not None:
-            # No market price reaches this node, so the checks that need one skip; the worksheet
-            # supplies the bridge's starting value when the decision omits its own.
-            problems = decision_checks(decision, base, None)
+            # The worksheet supplies today's price and the bridge's starting value when the
+            # decision omits its own.
+            problems = decision_checks(decision, base, price)
             if problems:
-                retry_prompt = (prompt + "\n\nFix these problems and return the full decision again:\n"
-                                + "\n".join(f"- {p}" for p in problems))
+                retry_prompt = (prompt + "\n\nYour decision was:\n" + render_pm_decision(decision, price=price)
+                                + "\n\nFix these problems and return the full decision again, changing "
+                                "nothing else:\n" + "\n".join(f"- {p}" for p in problems))
                 retried = invoke_structured(structured_llm, retry_prompt, "Portfolio Manager")
                 if retried is not None:
-                    decision, problems = retried, decision_checks(retried, base, None)
-            final_trade_decision = render_pm_decision(decision)
+                    decision, problems = retried, decision_checks(retried, base, price)
+            final_trade_decision = render_pm_decision(decision, price=price)
             if problems:
                 final_trade_decision += "\n\n**Unresolved Checks**:\n" + "\n".join(
                     f"- {p}" for p in problems)

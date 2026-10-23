@@ -352,7 +352,7 @@ class PortfolioDecision(BaseModel):
         return _coerce_optional_float(v)
 
 
-def render_pm_decision(decision: PortfolioDecision) -> str:
+def render_pm_decision(decision: PortfolioDecision, price: float | None = None) -> str:
     """Render a PortfolioDecision back to the markdown shape the rest of the system expects.
 
     Memory log, CLI display, and saved report files all read this markdown,
@@ -386,7 +386,7 @@ def render_pm_decision(decision: PortfolioDecision) -> str:
     parts.extend(["", "**Kill Criteria**:" + ("\n" + "\n".join(kills) if kills else " not provided")])
     entry = decision.entry_price if decision.entry_price is not None else "not provided"
     parts.extend(["", f"**Entry Price**: {entry}"])
-    parts.extend(["", "**Scenarios**:" + ("\n" + _render_scenarios(decision) if decision.scenarios
+    parts.extend(["", "**Scenarios**:" + ("\n" + _render_scenarios(decision, price) if decision.scenarios
                                           else " not provided")])
     parts.extend(["", "**Value Bridge**:\n" + _render_bridge(decision)])
     parts.extend(["", f"**Pre-mortem Answer**: {decision.premortem_answer or 'not provided'}"])
@@ -397,13 +397,14 @@ def _money(value: float | None) -> str:
     return f"{value:.2f}" if value is not None else "not provided"
 
 
-def _render_scenarios(decision: PortfolioDecision) -> str:
+def _render_scenarios(decision: PortfolioDecision, price: float | None = None) -> str:
     s = decision.scenarios
     lines = [f"{name} {sc.probability * 100:.0f}%: {sc.value:.2f} — {sc.basis}"
              for name, sc in (("Bear", s.bear), ("Base", s.base), ("Bull", s.bull))]
-    # No market price reaches the Portfolio Manager, so the ratio is measured at its entry price.
-    stats = scenario_stats(s, decision.entry_price)
-    ratio = (f"{stats['upside_downside']:.1f}x at entry {decision.entry_price:.2f}"
+    # Measured at today's price (the worksheet's) when known, else at the entry price, labelled.
+    at, label = (price, "price") if price is not None else (decision.entry_price, "entry price")
+    stats = scenario_stats(s, at)
+    ratio = (f"{stats['upside_downside']:.1f}x at {label} {at:.2f}"
              if stats["upside_downside"] is not None else "n/a")
     ev = _money(stats["expected_value"])
     lines.append(f"Expected value: {ev}; upside/downside {ratio}")

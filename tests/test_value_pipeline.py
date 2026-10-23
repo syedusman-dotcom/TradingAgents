@@ -884,7 +884,7 @@ def test_without_a_review_price_the_scenarios_keep_the_entry_price_figures(tmp_p
 
     row, d = _review_one(tmp_path, monkeypatch, _good_decision(), None)
     sc = row["scenarios"]
-    assert sc["price_basis"] == "entry price" and sc["upside_downside"] == pytest.approx(6.0)
+    assert sc["price_basis"] == "decision text" and sc["upside_downside"] == pytest.approx(6.0)
     assert sc["weighted_mos"] is None and d.upside_downside == pytest.approx(6.0)
 
 

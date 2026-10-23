@@ -170,8 +170,8 @@ def _float(x) -> float | None:
 def _scenarios_at(decision: str, price: float | None) -> dict | None:
     """The decision's scenarios with the statistics measured at the review price.
 
-    The Portfolio Manager sees no market price and measures upside/downside at its entry
-    price; the review knows the price, so it recomputes. Without one, the text's figures stay.
+    The Portfolio Manager measures upside/downside at the worksheet's price (its entry price
+    without one); the review recomputes at its own price. Without one, the text's figures stay.
     """
     from tradingagents.agents.decision_math import scenario_stats
     from tradingagents.agents.schemas import Scenario, Scenarios
@@ -180,7 +180,7 @@ def _scenarios_at(decision: str, price: float | None) -> dict | None:
     if parsed is None:
         return None
     if price is None or not all(leg in parsed for leg in ("bear", "base", "bull")):
-        return {"weighted_mos": None, **parsed, "price_basis": "entry price"}
+        return {"weighted_mos": None, **parsed, "price_basis": "decision text"}
     legs = Scenarios(**{leg: Scenario(**parsed[leg]) for leg in ("bear", "base", "bull")})
     return {**parsed, **scenario_stats(legs, price), "price_basis": "review price"}
 

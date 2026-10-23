@@ -35,8 +35,8 @@ def decision_checks(decision: PortfolioDecision, formula_value: float | None,
     """Plain-English problems with the decision; empty when it is consistent.
 
     ``formula_value`` is the pipeline's when it has one, else the decision's own; with
-    neither, the bridge is not checked. ``price`` is passed through to the scenario
-    statistics; none of the checks needs it.
+    neither, the bridge is not checked. ``price`` (today's, from the worksheet) is passed
+    through to the scenario statistics; none of the checks needs it.
     """
     problems = []
     target = decision.price_target
@@ -57,7 +57,9 @@ def decision_checks(decision: PortfolioDecision, formula_value: float | None,
                             f"{target:.2f}: reconcile them.")
     if decision.rating.value != "Sell":
         if decision.entry_price is None:
-            problems.append(f"No entry price: a {decision.rating.value} needs the price at which to buy.")
+            rating = decision.rating.value
+            article = "an" if rating[0] in "AEIOU" else "a"
+            problems.append(f"No entry price: {article} {rating} rating needs the price at which to buy.")
         if decision.scenarios is None:
             problems.append("No scenarios: give bear, base and bull values with their probabilities.")
         for label, verdict in (("Good business", decision.good_business),
@@ -65,7 +67,7 @@ def decision_checks(decision: PortfolioDecision, formula_value: float | None,
                                ("Cheap", decision.cheap)):
             if verdict is None:
                 problems.append(f"No {label} verdict: the checklist needs all three tests.")
-    if len(decision.kill_criteria) < MIN_KILL_CRITERIA:
+    if decision.rating.value != "Sell" and len(decision.kill_criteria) < MIN_KILL_CRITERIA:
         problems.append(f"Only {len(decision.kill_criteria)} kill criteria: give 3 to 6 verifiable "
                         "facts that would prove the thesis wrong.")
     return problems
@@ -88,4 +90,13 @@ _BASE = re.compile(r"base \(3% growth\)\s*([\d,]+(?:\.\d+)?)")
 def worksheet_base(excerpt: str) -> float | None:
     """The formula's base value from the worksheet's range line; None when it is absent."""
     match = _BASE.search(excerpt)
+    return float(match.group(1).replace(",", "")) if match else None
+
+
+_PRICE = re.compile(r"Price today\s*([\d,]+(?:\.\d+)?)")
+
+
+def worksheet_price(excerpt: str) -> float | None:
+    """Today's price from the worksheet's ``Price today`` line (the quote unit); None when absent."""
+    match = _PRICE.search(excerpt)
     return float(match.group(1).replace(",", "")) if match else None
