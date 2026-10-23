@@ -1,7 +1,7 @@
 # Methodology upgrade — design
 
 **Date:** 2026-10-23
-**Status:** the user opted out of the brainstorming questions and asked for Claude's own list of improvements, built tonight; calls Claude made on their behalf are marked *(my call)*.
+**Status:** the user opted out of the brainstorming questions and asked for Claude's own list of improvements, built tonight, then widened it: "build the best available investment strategies that big firms use", aimed at returns. Calls Claude made on their behalf are marked *(my call)*.
 
 ## Goal
 
@@ -17,6 +17,7 @@ Make each stock review more consistent and more decisive without adding debate r
 ### What the user said
 
 - "Some other methodology you want to include that will improve the analysis? Do you want to increase the messages between agents?" and then "go ahead" with Claude's list.
+- "Just do as much analysis but improve the methodology to make most returns" and "use all 30% but build the best available investment strategies that big firms use".
 - Earlier, recorded in memory: a checklist in the portfolio manager's decision, accounting red-flag metrics in code, a peer-comparison tool and capital-allocation history were wanted as small follow-ups.
 
 ### Non-goals
@@ -40,7 +41,7 @@ Make each stock review more consistent and more decisive without adding debate r
 
 ## Design
 
-Eight parts. Parts 1–4 are code in `tradingagents/dataflows/value_metrics.py` and its Yahoo vendor; 5–6 are tools and run context; 7 is one graph node; 8 is the decision format and what the pipeline does with it.
+Twelve parts. Parts 1–4 are code in `tradingagents/dataflows/value_metrics.py` and its Yahoo vendor; 5–6 are tools and run context; 7 is one graph node; 8 is the decision format and what the pipeline does with it; 9–11 are the institutional methods (expected returns, scenarios, base rates) and 12 is the cross-stock investment committee.
 
 ### 1. Valuation worksheet (anchor)
 
@@ -123,6 +124,34 @@ Graph: `Neutral Analyst` routes to `Pre-mortem` when the risk round is complete;
 - The weekly watch alerts "ENTRY PRICE" when a reviewed name's price is at or below its `entry_price` and the rating is ≤ 120 days old, in addition to today's 30% rule. Holdings list their kill criteria so the user can tick them off; the watch does not evaluate them *(my call: most are judgment calls)*.
 - The website's stock page shows the checklist, kill criteria and entry price from the latest review.
 
+### 9. Expected-return model (code, every screened stock)
+
+The way allocators such as GMO, Research Affiliates and AQR forecast a stock or market: **expected annual return over 7 years = shareholder yield + real growth + multiple reversion**, computed in `value_metrics.expected_return(years, price, market_cap, shares, history)`:
+- *Shareholder yield*: (dividends + buybacks − issuance) / market cap, 3-year average.
+- *Growth*: the lower of (a) sustainable growth = ROIC × reinvestment rate (1 − payout of owner earnings) and (b) the base-rate-capped growth from part 11; never above 10%.
+- *Multiple reversion*: EV/EBIT today versus the stock's own 10-year median EV/EBIT (from the yearly average closes and statements; fallback: the sector median from the latest screen; fallback: 12×), annualized over 7 years and capped at ±5%/yr.
+- Output: `expected_return` with its three components, plus **bear / base / bull** (growth 0 / base / base+3pt; reversion to 0.8× / 1× / 1.2× of the target multiple).
+
+The screen adds columns `expected_return`, `er_yield`, `er_growth`, `er_reversion`; the Magic Formula rank stays the quality-value sort, and a second column `er_rank` orders passers by expected return. `top_candidates` picks the review set by Magic Formula rank as today *(my call: changing the candidate source and the ranking method in one night would confound the November comparison)*, and ACTIONS lists each candidate's expected return. The worksheet (part 1) prints the expected-return line and its components.
+
+### 10. Scenario-weighted valuation in the decision
+
+The Portfolio Manager's `PortfolioDecision` gains `scenarios: {bear: Scenario, base: Scenario, bull: Scenario}` with `Scenario = {value: float, probability: float, basis: str}`; probabilities sum to 1 (±0.02). Derived in code after the call: `expected_value`, `upside_downside` = (bull − price) / (price − bear) when bear < price, and the **probability-weighted margin of safety** = (expected_value − price) / expected_value. `price_target` must equal `expected_value` within 2%, or the structured-output retry asks once for a fix.
+
+Rubric change *(my call, matching how buy-side targets are set)*: Buy requires the probability-weighted margin of safety ≥ 30% **and** upside/downside ≥ 3; Overweight requires ≥ 15% and ≥ 2; a Hold on a non-held name states the `entry_price` at which both are met. The bear case must be a plausible permanent-loss scenario (multiple at 0.8× and zero growth is the floor the PM may not go above without saying why).
+
+Rendering adds `**Scenarios**:` (three lines: Bear 25%: 42 — basis…), `**Expected Value**:` and `**Upside/Downside**:`. `parse.py`, `results.json`, the watch and the website show them. The weekly watch's ENTRY PRICE alert (part 8) uses this entry price.
+
+### 11. Base rates for growth
+
+`value_metrics.growth_base_rates(revenue)`: a small embedded table (from the Credit Suisse / Mauboussin base-rate work, 1950–2015, 10-year revenue CAGR by size cohort) returning, for a company's revenue cohort, the share of companies that achieved ≥ 0/3/5/7/10/15% CAGR over 10 years. The worksheet prints: "Implied growth 7.9%/yr: base rate — about X% of companies with revenue $5–10B sustained that for 10 years." The expected-return model (part 9) caps growth at the cohort's 25th-percentile-from-top (the rate that roughly a quarter of companies achieved), and the PM prompt tells the manager to justify any growth above the base rate in the bridge. The table's numbers are cited in a docstring; the builder may approximate from the published charts and must say so.
+
+### 12. Investment committee (cross-stock step)
+
+Today each stock is judged alone. After all reviews finish, `value_pipeline` runs one deep-tier call, **the investment committee**, with: every reviewed ticker's rating, checklist verdicts, expected return, scenarios, upside/downside, entry price, red flags and sector; the holdings with their current weights and kill criteria; cash; the sizing rules. It returns structured output: a ranked list (by expected return adjusted for the probability-weighted downside and the red flags), the proposed allocation under the 10% position and 30% sector caps, swaps (sell a holding to fund a candidate when the candidate's expected return exceeds the holding's by at least 5 points *(my call)*), the concentration and correlation observations (same sector, same end market, same macro factor), and a one-paragraph rationale per action.
+
+`actions.plan` stays the deterministic sizing engine; the committee's allocation is rendered as its own section in ACTIONS.md ("Investment committee: ranking and allocation") above the deterministic table, and where the two disagree the ACTIONS line says so. The committee never trades and never overrides a Sell from a stock's own review. The CLI and website show the section; `results.json` gains `committee` with the ranking. Cost: one call per review, about 50k tokens in.
+
 ## Testing
 
 - Unit tests for every new metric with hand-built years dicts, including None-tolerance and the M-score against a published worked example.
@@ -131,6 +160,7 @@ Graph: `Neutral Analyst` routes to `Pre-mortem` when the risk round is complete;
 - Graph tests: the pre-mortem node runs once, feeds the PM, appears in the report; run signature changes.
 - Tool tests with mocked yfinance for the peer table, the earnings date and the news fallback; one real-CLI integration test on a foreign ticker guarded like the existing Claude Code integration tests.
 - Pipeline tests: ACTIONS rendering of entry price and kill criteria; watch's ENTRY PRICE alert; results.json fields.
+- Expected-return tests with hand-built histories (yield, growth cap, reversion cap, bear/base/bull ordering); scenario maths (probabilities, expected value, upside/downside, the 2% check); base-rate lookup by cohort; committee structured output with a stubbed model, including the never-override-a-Sell rule and the swap threshold.
 - Existing 1,600 tests keep passing; ruff clean.
 
 ## Rollout
@@ -138,4 +168,4 @@ Graph: `Neutral Analyst` routes to `Pre-mortem` when the risk round is complete;
 1. Build in a worktree off `main`, merge when green.
 2. Re-run one US holding (HRB) and one foreign name (000270.KS) through `review --tickers` and read the two reports end to end before trusting the new sections.
 3. Restart the website after the merge.
-4. The first full run with the new method is the November first-Saturday review; compare its values with 10-22's and read every bridge.
+4. The first full run with the new method is the November first-Saturday review; compare its values with 10-22's and read every bridge, and read the committee's ranking against the deterministic table.
