@@ -184,7 +184,7 @@ def interest_coverage(year: dict) -> float | None:
 
 ACCRUALS_LIMIT = 0.10         # (net income - operating cash flow) / average assets
 CASH_CONVERSION_FLOOR = 0.8   # operating cash flow / net income, over three years
-RECEIVABLES_GAP_LIMIT = 0.15  # receivables growth less revenue growth
+RECEIVABLES_GAP_LIMIT = 0.30  # receivables growth less revenue growth
 BENEISH_LIMIT = -1.78         # M above this is the "likely manipulator" band
 CAPEX_TO_DEPRECIATION_FLOOR = 0.5
 
