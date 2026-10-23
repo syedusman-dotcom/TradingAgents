@@ -345,6 +345,28 @@ class PortfolioDecision(BaseModel):
             "How the thesis survives the pre-mortem's failure path, or why the risk is accepted."
         ),
     )
+    lane: Literal["value", "compounder", "inflection"] = Field(
+        default="value",
+        description=(
+            "The investment lane the evidence supports; value first. 'value': the margin-of-safety "
+            "bars. 'compounder': ROIC above 20% in every one of the last five years, revenue CAGR at "
+            "least 8% (ten years, or five flagged), sustainable growth at least 10% and at or above "
+            "the reverse-DCF implied growth, and for a Buy a price no more than 1.15x the worksheet "
+            "base (1.25x for Overweight). 'inflection': TTM EBIT at least 1.5x its five-year average, "
+            "revenue growth up at least 10 points, incremental ROIC at least 20%, demand evidence the "
+            "news report marks verified, a bear case of at least 30% probability and a kill "
+            "criterion on a demand indicator (orders, backlog, customer capex)."
+        ),
+    )
+    lane_evidence: list[str] = Field(
+        default_factory=list,
+        description=(
+            "The numbers the lane rests on, quoted from the worksheet's Record and inflection lines, "
+            "e.g. 'ROIC ≥ 20% 5/5 years', 'sustainable growth 14%', 'price 1.08× base'. An "
+            "inflection claim includes at least one item starting 'verified:' naming the demand "
+            "source (a filing, a dated company statement, a customer's dated guidance)."
+        ),
+    )
 
     @field_validator("price_target", "entry_price", mode="before")
     @classmethod
@@ -380,6 +402,8 @@ def render_pm_decision(decision: PortfolioDecision, price: float | None = None) 
             parts.append(f"{label} — not provided")
         else:
             parts.append(f"{label} — {'PASS' if verdict.passed else 'FAIL'}: {verdict.note}")
+    evidence = "; ".join(decision.lane_evidence)
+    parts.extend(["", f"**Lane**: {decision.lane}" + (f" — {evidence}" if evidence else "")])
     flags = [f"- {flag}" for flag in decision.red_flags]
     parts.extend(["", "**Red Flags**:" + ("\n" + "\n".join(flags) if flags else " none")])
     kills = [f"{i}. {k}" for i, k in enumerate(decision.kill_criteria, 1)]

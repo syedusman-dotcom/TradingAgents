@@ -34,6 +34,7 @@ class Decision:
     weighted_mos: float | None = None       # probability-weighted margin of safety at the review price
     currency: str | None = None             # the quote currency; None is taken as US dollars
     fx_to_usd: float | None = 1.0           # US dollars per quoted unit; None when the rate is unknown
+    lane: str = "value"                     # value / compounder / inflection, from the decision
 
     @property
     def held(self) -> bool:

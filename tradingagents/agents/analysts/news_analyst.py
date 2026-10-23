@@ -31,6 +31,8 @@ def create_news_analyst(llm):
             " Report: management quality and integrity (CEO/CFO changes, guidance credibility vs. results, lawsuits, regulatory or accounting issues, governance);"
             " competitive position (new entrants, lost customers, pricing pressure, industry disruption);"
             " one-off events that may have made the stock temporarily cheap (the reason it is cheap, and whether it looks temporary or permanent)."
+            " When the fundamentals show accelerating revenue or EBIT, look for the demand behind it — customers' stated spending plans, backlog, bookings, lead times, pricing — with sources, and label each item verified (a filing, a dated company statement, a customer's dated guidance) or unverified."
+            " When the stock fell 20% or more in the last three months, classify the cause: company-specific deterioration, sector-wide sentiment, or macro, with sources."
             " Use macro tools only for factors that change the company's long-term earnings power (rates for lenders/real estate, commodity prices for producers)."
             " Ignore day-to-day market noise."
             f" Use the available tools: get_news(start_date, end_date) for news about the {asset_label} under analysis, get_global_news(curr_date, look_back_days, limit) for broader macroeconomic news, get_macro_indicators(indicator, curr_date, look_back_days) to ground macro commentary in actual data from FRED (e.g. 'cpi', 'core_pce', 'unemployment', 'fed_funds_rate', '10y_treasury', 'yield_curve'), and get_prediction_markets(topic, limit) for live market-implied probabilities of forward-looking events (e.g. 'Fed rate cut', 'recession 2026', geopolitical or sector events)."

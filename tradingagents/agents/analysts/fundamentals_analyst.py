@@ -3,7 +3,7 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 from tradingagents.agents.analysts.turn import take_turn
 from tradingagents.agents.context import get_instrument_context_from_state, get_language_instruction
-from tradingagents.agents.decision_math import worksheet_excerpt
+from tradingagents.agents.decision_math import record_excerpt, worksheet_excerpt, worksheet_record
 from tradingagents.agents.tools import (
     get_annual_report,
     get_balance_sheet,
@@ -31,17 +31,20 @@ TOOLS = (
 )
 
 
-def tool_worksheet(messages, ticker: str, trade_date: str) -> str:
-    """The valuation worksheet from the latest ``get_value_metrics`` result in ``messages``, else
-    fetched again (a provider that runs its tools itself leaves no tool results in the state);
-    empty when there is none."""
+def tool_metrics(messages, ticker: str, trade_date: str) -> str:
+    """The latest ``get_value_metrics`` result in ``messages``, else fetched again (a provider that
+    runs its tools itself leaves no tool results in the state); empty when there is none."""
     for message in reversed(messages or []):
         if isinstance(message, ToolMessage) and message.name == get_value_metrics.name:
-            return worksheet_excerpt(message.content if isinstance(message.content, str) else "")
+            return message.content if isinstance(message.content, str) else ""
     try:
-        return worksheet_excerpt(route_to_vendor("get_value_metrics", ticker, trade_date) or "")
+        return route_to_vendor("get_value_metrics", ticker, trade_date) or ""
     except Exception:  # noqa: BLE001 - the report stands without it
         return ""
+
+
+def _has_record(report: str) -> bool:
+    return any(v is not None for v in worksheet_record(record_excerpt(report)).values())
 
 
 def create_fundamentals_analyst(llm):
@@ -56,6 +59,7 @@ def create_fundamentals_analyst(llm):
             " are computed in code from the statements: quote them and do not recompute or estimate them yourself."
             " The worksheet's base value is the formula value every later agent refers to; start your valuation"
             " from it and state each adjustment. Quote the worksheet's expected-return line and the sensitivity grid."
+            " Quote the Record and inflection lines and the run-rate value."
             " If it is not available for this date, compute what you can from the statements and say so."
             " Then call `get_income_statement`, `get_balance_sheet` and `get_cashflow` with freq='annual'"
             " to explain one-offs, plus freq='quarterly' for the latest trend, `get_fundamentals` for the profile,"
@@ -109,12 +113,15 @@ def create_fundamentals_analyst(llm):
         prompt = prompt.partial(instrument_context=instrument_context)
 
         result, report = take_turn(prompt, llm, TOOLS, state["messages"])
-        if report and not worksheet_excerpt(report):
-            # Later agents read the formula value and today's price from the worksheet; the
-            # analyst's prose may quote it under its own headings, so the tool's is appended.
-            sheet = tool_worksheet(state["messages"], state["company_of_interest"], current_date)
-            if sheet:
-                report = f"{report}\n\n{sheet}"
+        if report and (not worksheet_excerpt(report) or not _has_record(report)):
+            # Later agents read the formula value, today's price and the lanes' numbers from the
+            # worksheet; the analyst's prose may quote them under its own headings, so the tool's
+            # sections are appended.
+            metrics = tool_metrics(state["messages"], state["company_of_interest"], current_date)
+            for present, piece in ((worksheet_excerpt(report), worksheet_excerpt(metrics)),
+                                   (_has_record(report), record_excerpt(metrics))):
+                if not present and piece:
+                    report = f"{report}\n\n{piece}"
 
         return {
             "messages": [result],

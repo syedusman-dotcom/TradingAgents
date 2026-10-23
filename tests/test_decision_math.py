@@ -231,3 +231,176 @@ def test_a_sell_is_not_asked_for_kill_criteria_and_the_entry_wording_is_grammati
     assert problems == ["No entry price: an Underweight rating needs the price at which to buy."]
     problems = decision_checks(_decision(rating=PortfolioRating.HOLD, entry_price=None), None, None)
     assert problems == ["No entry price: a Hold rating needs the price at which to buy."]
+
+
+# --- investment lanes ---------------------------------------------------------
+
+_SHEET = """## Valuation worksheet (per share; 5-year averages)
+
+- Price today 108.00
+- **Range 70.00 to 140.00, base (3% growth) 100.00; margin of safety at base -8.0%**
+- Reverse DCF: today's price assumes 6.0% perpetual FCF growth at a 9.0% discount rate"""
+
+
+def _record(**values):
+    """A ``## Record and inflection`` section in the worksheet's format; a compounder's by default."""
+    lines = {"ROIC years above 20%": "5", "ROIC years counted": "5", "ROIC worst of last 5 years": "24.1%",
+             "Revenue CAGR": "11.2%", "Revenue CAGR years": "10", "FCF CAGR 5y": "12.0%",
+             "Reinvestment rate": "62%", "Sustainable growth": "14.0%", "TTM revenue vs 5y average": "1.20",
+             "TTM EBIT vs 5y average": "1.30", "Revenue acceleration": "+2%",
+             "EBIT margin change on a year earlier": "+0.5%", "Incremental ROIC": "25%",
+             "Run-rate value": "120.00", "Run-rate 3-year growth": "10%", "Run-rate decay": "4%",
+             "Implied 3-year growth": "8%"}
+    lines.update(values)
+    return ("\n\n## Record and inflection\n\n" + "\n".join(f"- {k} {v}" for k, v in lines.items())
+            + "\n\nRecord: ROIC ≥ 20% in 5/5 years.\nInflection: n/a.\nRun-rate: n/a.")
+
+
+_INFLECTING = {"TTM EBIT vs 5y average": "2.40", "Revenue acceleration": "+21%", "Incremental ROIC": "38%"}
+
+
+def _compounder(**overrides):
+    return _decision(**{"rating": PortfolioRating.BUY, "lane": "compounder",
+                        "lane_evidence": ["ROIC ≥ 20% 5/5 years", "revenue 11.2%/yr 10y",
+                                          "sustainable growth 14%", "implied growth 6%", "price 1.08× base"],
+                        **overrides})
+
+
+def _inflection(**overrides):
+    scen = Scenarios(bear=Scenario(value=42, probability=0.30, basis="growth stops now"),
+                     base=Scenario(value=56, probability=0.45, basis="run-rate"),
+                     bull=Scenario(value=72.8, probability=0.25, basis="demand holds"))
+    return _decision(**{"rating": PortfolioRating.BUY, "lane": "inflection", "scenarios": scen,
+                        "kill_criteria": ["ROIC below 12% two years running", "net debt above 3x EBIT",
+                                          "Backlog falls two quarters running"],
+                        "lane_evidence": ["TTM EBIT 2.40× the 5-year average",
+                                          "verified: Microsoft raised FY27 capex guidance, 2026-07-30 call"],
+                        **overrides})
+
+
+@pytest.mark.unit
+def test_lane_and_its_evidence_round_trip_through_render_and_parse():
+    d = _compounder()
+    text = render_pm_decision(d)
+    assert ("**Lane**: compounder — ROIC ≥ 20% 5/5 years; revenue 11.2%/yr 10y; sustainable growth 14%; "
+            "implied growth 6%; price 1.08× base") in text
+    assert text.index("**Checklist**:") < text.index("**Lane**:") < text.index("**Red Flags**:")
+    assert parse.lane(text) == "compounder" and parse.lane_evidence(text) == d.lane_evidence
+    assert parse.checklist(text)["cheap"]["passed"] is True and parse.red_flags(text) == []
+
+
+@pytest.mark.unit
+def test_a_decision_without_a_lane_reads_as_value():
+    assert _good_decision().lane == "value" and _good_decision().lane_evidence == []
+    text = render_pm_decision(_good_decision())
+    assert "**Lane**: value\n" in text
+    assert parse.lane(text) == "value" and parse.lane_evidence(text) == []
+    old = "**Rating**: Buy\n\n**Checklist**:\nCheap — PASS: x\n\n**Red Flags**: none"
+    assert parse.lane(old) == "value" and parse.lane_evidence(old) == []
+    assert parse.lane("**Lane**: something else") == "value"
+    assert parse.lane_evidence("**Lane**: Inflection—verified: backlog up 40%; TTM EBIT 2.4×") == [
+        "verified: backlog up 40%", "TTM EBIT 2.4×"]
+
+
+@pytest.mark.unit
+def test_worksheet_record_and_inflection_read_the_labelled_lines():
+    from tradingagents.agents.decision_math import worksheet_inflection, worksheet_record
+
+    sheet = _SHEET + _record(**{"Incremental ROIC": "n/a", "EBIT margin change on a year earlier": "-1.5%"})
+    rec = worksheet_record(sheet)
+    assert rec["roic_years_above_20"] == 5 and rec["roic_years_counted"] == 5
+    assert rec["roic_min_5y"] == pytest.approx(0.241) and rec["revenue_cagr"] == pytest.approx(0.112)
+    assert rec["revenue_cagr_years"] == 10 and rec["sustainable_growth"] == pytest.approx(0.14)
+    assert rec["reinvestment_rate"] == pytest.approx(0.62) and rec["implied_growth"] == pytest.approx(0.06)
+    inf = worksheet_inflection(sheet)
+    assert inf["ttm_vs_5y_ebit"] == pytest.approx(1.3) and inf["revenue_acceleration"] == pytest.approx(0.02)
+    assert inf["ebit_margin_change_4q"] == pytest.approx(-0.015) and inf["incremental_roic"] is None
+    assert inf["run_rate_value"] == pytest.approx(120.0) and inf["implied_g3"] == pytest.approx(0.08)
+    assert set(worksheet_record("").values()) == {None} and set(worksheet_inflection("").values()) == {None}
+
+
+@pytest.mark.unit
+def test_worksheet_record_reads_the_real_rendered_section():
+    from tests.test_value_metrics import _year
+    from tradingagents.agents.decision_math import (
+        record_excerpt,
+        worksheet_inflection,
+        worksheet_record,
+    )
+    from tradingagents.dataflows import value_metrics as vm
+
+    m = vm.company_metrics([_year() for _ in range(6)], price=25.0, market_cap=2500.0, shares=100)
+    report = vm.render_report("X", "2026-10-23", m)
+    excerpt = record_excerpt(report)
+    assert excerpt.startswith("## Record and inflection")
+    rec, inf = worksheet_record(excerpt), worksheet_inflection(excerpt)
+    assert rec["roic_years_counted"] == 5 and rec["roic_years_above_20"] is not None
+    assert set(rec) >= {"revenue_cagr", "revenue_cagr_years", "sustainable_growth"}
+    assert set(inf) >= {"ttm_vs_5y_ebit", "revenue_acceleration", "incremental_roic"}
+
+
+@pytest.mark.unit
+def test_a_qualifying_compounder_passes():
+    assert decision_checks(_compounder(), None, None, worksheet=_SHEET + _record()) == []
+    four = _record(**{"ROIC years above 20%": "4", "ROIC years counted": "4"})
+    assert decision_checks(_compounder(), None, None, worksheet=_SHEET + four) == []
+
+
+@pytest.mark.unit
+def test_compounder_claim_without_the_record_is_sent_back():
+    problems = decision_checks(_compounder(), None, None, worksheet=_SHEET)
+    assert problems and all("compounder" in p for p in problems)
+    assert any("ROIC above 20% in every one of the last five years" in p for p in problems)
+    weak = _record(**{"ROIC years above 20%": "3", "Revenue CAGR": "6.0%", "Sustainable growth": "8.0%"})
+    problems = decision_checks(_compounder(), None, None, worksheet=_SHEET + weak)
+    assert len(problems) == 3
+    assert any("3/5" in p for p in problems) and any("6.0%" in p for p in problems)
+    assert any("8.0%" in p for p in problems)
+    short = _record(**{"Revenue CAGR years": "4"})
+    assert len(decision_checks(_compounder(), None, None, worksheet=_SHEET + short)) == 1
+    dear_growth = _SHEET.replace("assumes 6.0%", "assumes 15.0%") + _record()
+    assert any("implied" in p for p in decision_checks(_compounder(), None, None, worksheet=dear_growth))
+
+
+@pytest.mark.unit
+def test_a_compounder_buy_is_held_to_a_modest_premium_over_the_base():
+    dear = _SHEET.replace("Price today 108.00", "Price today 120.00") + _record()
+    problems = decision_checks(_compounder(), None, None, worksheet=dear)
+    assert problems == ["The compounder lane buys at no more than 1.15× the worksheet base (100.00); "
+                        "today's price 120.00 is 1.20×."]
+    assert decision_checks(_compounder(rating=PortfolioRating.OVERWEIGHT), None, None, worksheet=dear) == []
+    assert decision_checks(_compounder(rating=PortfolioRating.HOLD), None, 130.0, worksheet=dear) == []
+    assert len(decision_checks(_compounder(rating=PortfolioRating.OVERWEIGHT), None, 130.0,
+                               worksheet=dear)) == 1
+
+
+@pytest.mark.unit
+def test_inflection_claim_needs_verified_demand_and_a_demand_kill_criterion():
+    sheet = _SHEET + _record(**_INFLECTING)
+    assert decision_checks(_inflection(), None, None, worksheet=sheet) == []
+    unverified = _inflection(lane_evidence=["TTM EBIT 2.40×", "unverified: channel checks"],
+                             kill_criteria=["ROIC below 12% two years running", "net debt above 3x EBIT",
+                                            "the CEO sells half his stake"])
+    problems = decision_checks(unverified, None, None, worksheet=sheet)
+    assert len(problems) == 2
+    assert any("verified:" in p for p in problems) and any("backlog" in p for p in problems)
+    bear = Scenarios(bear=Scenario(value=42, probability=0.2, basis="b"),
+                     base=Scenario(value=56, probability=0.55, basis="m"),
+                     bull=Scenario(value=66.4, probability=0.25, basis="u"))
+    problems = decision_checks(_inflection(scenarios=bear), None, None, worksheet=sheet)
+    assert len(problems) == 1 and "30%" in problems[0]
+
+
+@pytest.mark.unit
+def test_inflection_claim_without_the_inflection_numbers_is_sent_back():
+    problems = decision_checks(_inflection(), None, None, worksheet=_SHEET + _record())
+    assert len(problems) == 2            # EBIT only 1.30x, acceleration only +2%
+    assert any("1.30" in p for p in problems) and any("2%" in p for p in problems)
+    problems = decision_checks(_inflection(), None, None, worksheet="")
+    assert len(problems) == 3 and all("inflection" in p for p in problems)
+
+
+@pytest.mark.unit
+def test_lane_checks_skip_the_value_lane_and_a_sell():
+    assert decision_checks(_good_decision(), None, None, worksheet="") == []
+    assert decision_checks(_compounder(rating=PortfolioRating.SELL), None, None, worksheet="") == []

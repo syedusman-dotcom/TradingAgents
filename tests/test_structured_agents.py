@@ -802,3 +802,99 @@ def test_fundamentals_report_carries_the_tools_worksheet_when_the_analyst_omits_
     monkeypatch.setattr(fundamentals_analyst, "take_turn",
                         lambda prompt, llm, tools, msgs: (AIMessage(content=own), own))
     assert fundamentals_analyst.create_fundamentals_analyst(MagicMock())(state)["fundamentals_report"] == own
+
+
+@pytest.mark.unit
+def test_lane_fields_carry_the_lane_rules():
+    fields = PortfolioDecision.model_fields
+    lane = " ".join(fields["lane"].description.split())
+    for words in ("value", "compounder", "inflection", "1.15", "20%", "verified"):
+        assert words in lane
+    assert "verified:" in fields["lane_evidence"].description
+    with pytest.raises(ValidationError):
+        PortfolioDecision(rating=PortfolioRating.HOLD, executive_summary="s", investment_thesis="t",
+                          lane="momentum")
+
+
+@pytest.mark.unit
+def test_pm_prompt_describes_the_three_lanes():
+    from tests.test_decision_math import _good_decision
+
+    prompts = []
+    llm, _ = _sequenced_pm_llm(prompts, [_good_decision()])
+    create_portfolio_manager(llm)(_make_pm_state())
+    flat = " ".join(prompts[0].split())
+    for sentence in (
+        "pick the lane the evidence supports: value first; compounder when the record qualifies; "
+        "inflection only with verified demand evidence from the news report; state the lane's numbers "
+        "in `**Lane**:`",
+        "ROIC above 20% in every one of the last five years",
+        "no more than 1.15× the worksheet base",
+        "TTM EBIT at least 1.5× its five-year average",
+        "a bear case (growth stops now) of at least 30%",
+        "Do not propose position sizes, starter positions or tranches",
+    ):
+        assert sentence in flat
+    assert prompts[0].index("**Checklist**") < prompts[0].index("- **Lane**") < prompts[0].index("**Red Flags**")
+
+
+@pytest.mark.unit
+def test_pm_sends_back_a_compounder_claim_the_record_does_not_support():
+    from tests.test_decision_math import _SHEET, _compounder, _record
+
+    prompts = []
+    llm, structured = _sequenced_pm_llm(prompts, [_compounder()] * 2)
+    weak = _record(**{"ROIC years above 20%": "3"})
+    state = {**_make_pm_state(), "fundamentals_report": "## Prose\nx\n" + _SHEET + weak}
+    result = create_portfolio_manager(llm)(state)
+    assert structured.invoke.call_count == 2
+    assert "## Record and inflection" in prompts[0] and "- ROIC years above 20% 3" in prompts[0]
+    assert "3/5" in prompts[1] and "**Unresolved Checks**:" in result["final_trade_decision"]
+
+    prompts.clear()       # the bridge starts from the worksheet's base, 100.00
+    fits = _compounder(formula_value=100.0, value_bridge=[Adjustment(reason="peak margins", amount=-44.0)])
+    llm, structured = _sequenced_pm_llm(prompts, [fits])
+    create_portfolio_manager(llm)({**state, "fundamentals_report": _SHEET + _record()})
+    assert structured.invoke.call_count == 1
+
+
+@pytest.mark.unit
+def test_news_analyst_briefs_the_demand_evidence_and_the_cause_of_a_fall():
+    from tradingagents.agents.analysts import news_analyst
+
+    source = " ".join(inspect.getsource(news_analyst).replace('"', " ").split())
+    source = " ".join(source.split())
+    for sentence in (
+        "When the fundamentals show accelerating revenue or EBIT, look for the demand behind it",
+        "customers' stated spending plans, backlog, bookings, lead times, pricing",
+        "label each item verified (a filing, a dated company statement, a customer's dated guidance) "
+        "or unverified.",
+        "When the stock fell 20% or more in the last three months, classify the cause: "
+        "company-specific deterioration, sector-wide sentiment, or macro, with sources.",
+    ):
+        assert sentence in source
+
+
+@pytest.mark.unit
+def test_fundamentals_analyst_quotes_the_record_and_appends_the_tools_record(monkeypatch):
+    from langchain_core.messages import AIMessage, ToolMessage
+
+    from tests.test_decision_math import _SHEET, _record
+    from tradingagents.agents.analysts import fundamentals_analyst
+    from tradingagents.agents.decision_math import record_excerpt, worksheet_record
+
+    source = " ".join(inspect.getsource(fundamentals_analyst).replace('"', " ").split())
+    assert "Quote the Record and inflection lines and the run-rate value." in source
+
+    tool_text = "# Verified value metrics\n" + _SHEET + _record()
+    messages = [AIMessage(content="", tool_calls=[{"name": "get_value_metrics", "args": {}, "id": "1"}]),
+                ToolMessage(content=tool_text, name="get_value_metrics", tool_call_id="1")]
+    state = {"trade_date": "2026-10-23", "company_of_interest": "X", "messages": messages}
+    monkeypatch.setattr(fundamentals_analyst, "get_instrument_context_from_state", lambda s: "")
+    for prose in ("## Is it cheap? Yes", "## Valuation worksheet\n- Price today 108.00",
+                  "## Record and inflection\nROIC has been high."):
+        monkeypatch.setattr(fundamentals_analyst, "take_turn",
+                            lambda prompt, llm, tools, msgs, p=prose: (AIMessage(content=p), p))
+        report = fundamentals_analyst.create_fundamentals_analyst(MagicMock())(state)["fundamentals_report"]
+        assert report.startswith(prose)
+        assert worksheet_record(record_excerpt(report))["roic_years_above_20"] == 5

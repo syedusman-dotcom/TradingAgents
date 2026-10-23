@@ -400,6 +400,7 @@ def _run(paths: Paths, cfg: dict, *, yes: bool, dry_run: bool, today: str | None
             weighted_mos=(scenarios[r.ticker] or {}).get("weighted_mos"),
             currency=fx[r.ticker][0],
             fx_to_usd=fx[r.ticker][1],
+            lane=parse.lane(r.decision),
         ))
     reviewed = {d.ticker for d in decisions}
     others = [(p.ticker, _holding_value(p, prices.get(p.ticker), fx[p.ticker]),
@@ -427,7 +428,8 @@ def _run(paths: Paths, cfg: dict, *, yes: bool, dry_run: bool, today: str | None
          "currency": fx[r.ticker][0], "fx_to_usd": fx[r.ticker][1],
          "entry_price": parse.entry_price(r.decision), "kill_criteria": parse.kill_criteria(r.decision),
          "checklist": parse.checklist(r.decision), "scenarios": scenarios[r.ticker],
-         "value_bridge": parse.value_bridge(r.decision), "red_flags": parse.red_flags(r.decision)}
+         "value_bridge": parse.value_bridge(r.decision), "red_flags": parse.red_flags(r.decision),
+         "lane": parse.lane(r.decision), "lane_evidence": parse.lane_evidence(r.decision)}
         for r in results
     ]
 

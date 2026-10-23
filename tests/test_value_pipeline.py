@@ -1268,3 +1268,15 @@ def test_fundamentals_cache_quarterly_statements(tmp_path, monkeypatch):
     monkeypatch.setattr(market_data.yf, "Ticker", lambda t: FakeTicker())
     assert len(market_data.fundamentals("XYZ", paths)["quarters"]) == 2
     assert market_data.fundamentals("XYZ", paths)["from_cache"] is True
+
+
+@pytest.mark.unit
+def test_results_json_and_the_decision_carry_the_lane(tmp_path, monkeypatch):
+    from tests.test_decision_math import _compounder, _good_decision
+
+    row, d = _review_one(tmp_path, monkeypatch, _compounder(), 50.0)
+    assert row["lane"] == "compounder" and d.lane == "compounder"
+    assert row["lane_evidence"][0] == "ROIC ≥ 20% 5/5 years" and len(row["lane_evidence"]) == 5
+    row, d = _review_one(tmp_path / "old", monkeypatch, _good_decision(), 50.0)
+    assert row["lane"] == "value" and row["lane_evidence"] == [] and d.lane == "value"
+    assert Decision("X", "Hold", 10.0).lane == "value"
