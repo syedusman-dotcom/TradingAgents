@@ -528,7 +528,8 @@ def _ev_ebit_target(years: list[dict], avg_prices: dict | None, shares) -> float
 
 
 def expected_return(years: list[dict], price, market_cap, shares, avg_prices: dict | None = None,
-                    horizon: int = ER_HORIZON, target_multiple: float | None = None) -> dict | None:
+                    horizon: int = ER_HORIZON, target_multiple: float | None = None,
+                    revenue_usd: float | None = None) -> dict | None:
     """Annual return if held ``horizon`` years: shareholder yield + growth + EV/EBIT reversion
     to the company's own history. None when owner earnings or EV/EBIT cannot be computed."""
     market_cap = num(market_cap)
@@ -549,7 +550,7 @@ def expected_return(years: list[dict], price, market_cap, shares, avg_prices: di
     reinvestment = _clamp(1 - sum(payout(y) for y, _ in priced) / sum(oe), 0.0, 1.0)
     roics = [min(r, 1.0) for r in (roic(y) for y in years[:5]) if r is not None]
     sustainable = (mean(roics) if roics else 0.0) * reinvestment
-    br = growth_base_rates(years[0].get("revenue"))
+    br = growth_base_rates(revenue_usd if revenue_usd is not None else years[0].get("revenue"))
     cap = br["cap"] if br else ER_MAX_GROWTH
     growth = max(0.0, min(sustainable, cap, ER_MAX_GROWTH))
     now = ev / ebit
@@ -572,7 +573,7 @@ def expected_return(years: list[dict], price, market_cap, shares, avg_prices: di
 
 def company_metrics(years: list[dict], price, market_cap, shares,
                     rate: float = DISCOUNT_RATE, treasury_10y: float | None = None,
-                    avg_prices: dict | None = None) -> dict:
+                    avg_prices: dict | None = None, revenue_usd: float | None = None) -> dict:
     """Everything the fundamentals analyst needs, computed once from the statements."""
     cur = years[0]
     net_debt = (num(cur.get("total_debt")) or 0.0) - (num(cur.get("cash")) or 0.0)
@@ -618,7 +619,9 @@ def company_metrics(years: list[dict], price, market_cap, shares,
         "valuation": formula_value(years, price, shares, net_debt, rate),
         "treasury_10y": treasury_10y,
         "capital_allocation": capital_allocation(years, avg_prices, price),
-        "expected_return": expected_return(years, price, market_cap, shares, avg_prices),
+        "expected_return": expected_return(years, price, market_cap, shares, avg_prices,
+                                           revenue_usd=revenue_usd),
+        "revenue_usd": num(revenue_usd),  # the base-rate cohorts are in dollars
     }
 
 
@@ -771,7 +774,11 @@ def render_report(symbol: str, as_of: str, m: dict, currency: str | None = None)
             for key, rr in (("r-1", r - 0.01), ("r", r), ("r+1", r + 0.01)):
                 cells = " | ".join("n/a" if x is None else f"{x:,.2f}" for x in grid[key])
                 lines.append(f"| {key.replace('-', '−')} ({rr:.1%}) | {cells} |")
-        note = base_rate_note(v.get("implied_growth"), (m.get("per_year") or [{}])[0].get("revenue"))
+        # Cohorts are in USD: with no dollar revenue, only a USD reporter's own figure will do.
+        revenue = m.get("revenue_usd")
+        if revenue is None and currency in (None, "USD"):
+            revenue = (m.get("per_year") or [{}])[0].get("revenue")
+        note = base_rate_note(v.get("implied_growth"), revenue)
         if note:
             lines += ["", note]
         er = m.get("expected_return")

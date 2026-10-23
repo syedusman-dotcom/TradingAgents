@@ -131,6 +131,15 @@ def get_value_metrics(
 
 
 @tool
+def get_peer_comparison(
+    ticker: Annotated[str, InjectedState("company_of_interest")],
+    trade_date: Annotated[str, InjectedState("trade_date")] = "",
+) -> str:
+    """Peer comparison for the instrument under analysis: Yahoo's industry peers with market cap (USD), EV/EBIT, margins, ROIC, FCF yield, 5-year revenue growth and share-count change, plus the peer median. Call it when judging whether the stock is cheap relative to its peers."""
+    return route_to_vendor("get_peer_comparison", ticker, as_of("", trade_date))
+
+
+@tool
 def get_financial_history(
     ticker: Annotated[str, InjectedState("company_of_interest")],
     curr_date: Annotated[str, "current date you are trading at, yyyy-mm-dd"],

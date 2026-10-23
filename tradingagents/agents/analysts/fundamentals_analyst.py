@@ -10,12 +10,14 @@ from tradingagents.agents.tools import (
     get_fundamentals,
     get_income_statement,
     get_insider_transactions,
+    get_peer_comparison,
     get_value_metrics,
 )
 
 # The tools this analyst is offered; its tool node is built from the same tuple.
 TOOLS = (
     get_value_metrics,
+    get_peer_comparison,
     get_financial_history,
     get_annual_report,
     get_fundamentals,
@@ -58,6 +60,7 @@ def create_fundamentals_analyst(llm):
             " normalized cash flow only for identified one-offs or a cyclical peak or trough, and state each adjustment and"
             " its effect. Give your intrinsic value per share and the margin of safety = (value - price) / value."
             " For a growing company, also give the PEG ratio."
+            " Call `get_peer_comparison`: say whether it is cheap relative to peers and why (quote the table)."
             "\n\nSAFETY CHECKS: report the Piotroski F-Score (0-9, list each point), Altman Z-Score, debt/equity,"
             " interest coverage and current ratio from `get_value_metrics`. Flag accounting red flags: receivables or inventory growing much faster than revenue,"
             " falling cash conversion, frequent one-off charges."

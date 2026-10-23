@@ -42,6 +42,9 @@ from tradingagents.dataflows.vendors.yahoo.market import (
     get_YFin_data_online,
 )
 from tradingagents.dataflows.vendors.yahoo.news import get_global_news_yfinance, get_news_yfinance
+from tradingagents.dataflows.vendors.yahoo.peers import (
+    get_peer_comparison as get_yfinance_peer_comparison,
+)
 from tradingagents.dataflows.vendors.yahoo.value_metrics import (
     get_value_metrics as get_yfinance_value_metrics,
 )
@@ -70,6 +73,7 @@ TOOLS_CATEGORIES = {
             "get_cashflow",
             "get_income_statement",
             "get_value_metrics",
+            "get_peer_comparison",
             "get_financial_history",
             "get_annual_report",
         ]
@@ -137,6 +141,9 @@ VENDOR_METHODS = {
     },
     "get_value_metrics": {
         "yfinance": get_yfinance_value_metrics,
+    },
+    "get_peer_comparison": {
+        "yfinance": get_yfinance_peer_comparison,
     },
     "get_financial_history": {
         "sec_edgar": get_sec_edgar_financial_history,

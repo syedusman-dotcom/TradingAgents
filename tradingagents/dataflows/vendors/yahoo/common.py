@@ -74,3 +74,29 @@ def yf_retry(func, max_retries=3, base_delay=2.0):
             if _answered_empty(exc):
                 return None
             raise VendorUnavailableError(f"Yahoo Finance request failed: {type(exc).__name__}") from exc
+
+
+# Quote currencies Yahoo gives in a minor unit, and the major unit each is 1/100 of.
+MINOR_UNITS = {"GBp": "GBP", "GBX": "GBP", "ZAc": "ZAR", "ILA": "ILS"}
+_RATES: dict[str, float | None] = {}
+
+
+def usd_rate(currency: str | None) -> float | None:
+    """US dollars per unit of ``currency``; None when unknown or the lookup fails.
+
+    A minor-unit code (pence) answers with its major unit's rate: the caller divides a
+    minor-unit *price* by 100, while Yahoo's market cap is already in the major unit.
+    Cached for the process, failures included.
+    """
+    if not currency:
+        return None
+    code = MINOR_UNITS.get(currency, currency)
+    if code == "USD":
+        return 1.0
+    if code not in _RATES:
+        try:
+            close = yf.Ticker(f"{code}USD=X").history(period="5d")["Close"].dropna()
+            _RATES[code] = float(close.iloc[-1]) if len(close) else None
+        except Exception:
+            _RATES[code] = None
+    return _RATES[code]

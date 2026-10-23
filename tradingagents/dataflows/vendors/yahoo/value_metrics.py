@@ -21,7 +21,7 @@ from tradingagents.dataflows.value_metrics import (
     render_report,
     share_count,
 )
-from tradingagents.dataflows.vendors.yahoo.common import raise_for_empty, yf_retry
+from tradingagents.dataflows.vendors.yahoo.common import raise_for_empty, usd_rate, yf_retry
 
 # Each field's Yahoo row label, best first.
 ROWS: dict[str, tuple[str, ...]] = {
@@ -132,6 +132,11 @@ def get_value_metrics(
             avg_prices = yearly_average_closes(yf_retry(lambda: t.history(period="10y", auto_adjust=True)))
         except Exception:
             avg_prices = {}
+    revenue_usd = None  # the growth base rates are in dollars; revenue arrives in the reporting currency
+    fx = usd_rate(reported or quote)
+    if fx and years[0].get("revenue") is not None:
+        revenue_usd = years[0]["revenue"] * fx
     metrics = company_metrics(years, price, info.get("marketCap") if price else None, shares,
-                              rate=rate["rate"], treasury_10y=rate["treasury_10y"], avg_prices=avg_prices)
+                              rate=rate["rate"], treasury_10y=rate["treasury_10y"], avg_prices=avg_prices,
+                              revenue_usd=revenue_usd)
     return render_report(canonical, as_of_date or "today", metrics, currency=reported or quote) + note
