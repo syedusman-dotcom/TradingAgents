@@ -18,7 +18,7 @@ import yfinance as yf
 
 from tradingagents.dataflows.vendors.yahoo.common import MINOR_UNITS, usd_rate
 from tradingagents.dataflows.vendors.yahoo.value_metrics import (
-    quarterly_statements,
+    fetch_quarters,
     statement_years,
 )
 from value_pipeline.config import Paths
@@ -81,7 +81,8 @@ def fundamentals(ticker: str, paths: Paths, cache_days: int = 7) -> dict:
     if cache.exists():
         data = json.loads(cache.read_text(encoding="utf-8"))
         fresh = datetime.fromisoformat(data["fetched_at"]) > datetime.now() - timedelta(days=cache_days)
-        if fresh and data.get("schema") == CACHE_SCHEMA:
+        # A record cached after a failed quarterly fetch has no "quarters": fetched again.
+        if fresh and data.get("schema") == CACHE_SCHEMA and "quarters" in data:
             return {**data, "from_cache": True}
     t = yf.Ticker(ticker)
     try:
@@ -92,7 +93,7 @@ def fundamentals(ticker: str, paths: Paths, cache_days: int = 7) -> dict:
         raise DataUnavailable(f"Yahoo request failed: {exc}") from exc
     if not years:
         raise DataUnavailable("no annual statements")
-    quarters = quarterly_statements(t)      # fail-open: the lane columns stay blank without them
+    quarters, complete = fetch_quarters(t)   # fail-open: the lane columns stay blank without them
     data = {
         "schema": CACHE_SCHEMA,
         "fetched_at": datetime.now().isoformat(timespec="seconds"),
@@ -108,7 +109,8 @@ def fundamentals(ticker: str, paths: Paths, cache_days: int = 7) -> dict:
         "closes": series,
     }
     paths.cache.mkdir(parents=True, exist_ok=True)
-    cache.write_text(json.dumps(data), encoding="utf-8")
+    stored = data if complete else {k: v for k, v in data.items() if k != "quarters"}
+    cache.write_text(json.dumps(stored), encoding="utf-8")
     return data
 
 

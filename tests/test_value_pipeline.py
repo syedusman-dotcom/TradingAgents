@@ -1263,3 +1263,8 @@ def test_fundamentals_cache_quarterly_statements(tmp_path, monkeypatch):
 
     monkeypatch.setattr(market_data.yf, "Ticker", lambda t: NoQuarters())
     assert market_data.fundamentals("XYZ", paths)["quarters"] == []
+    assert "quarters" not in json.loads((paths.cache / "XYZ.json").read_text())   # a failed fetch: not cached
+    assert not market_data.fundamentals("XYZ", paths).get("from_cache")           # so the next run retries
+    monkeypatch.setattr(market_data.yf, "Ticker", lambda t: FakeTicker())
+    assert len(market_data.fundamentals("XYZ", paths)["quarters"]) == 2
+    assert market_data.fundamentals("XYZ", paths)["from_cache"] is True

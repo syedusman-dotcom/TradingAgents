@@ -94,13 +94,26 @@ def statement_years(*frames: pd.DataFrame) -> list[dict]:
 QUARTERLY_FRAMES = ("quarterly_income_stmt", "quarterly_balance_sheet", "quarterly_cashflow")
 
 
-def quarterly_statements(t) -> list[dict]:
-    """The quarterly statements as ``statement_years`` dicts (one per quarter end, newest first);
-    [] when Yahoo has none or the request fails: the report renders without the TTM figures."""
+def fetch_quarters(t) -> tuple[list[dict], bool]:
+    """The quarterly statements as ``statement_years`` dicts (one per quarter end, newest first),
+    and whether every frame was fetched. Each frame is asked for on its own, so one failure keeps
+    the others; Yahoo answering it has none is not a failure."""
+    frames, complete = [], True
+    for attr in QUARTERLY_FRAMES:
+        try:
+            frames.append(yf_retry(lambda attr=attr: getattr(t, attr)))
+        except Exception:
+            frames.append(None)
+            complete = False
     try:
-        return statement_years(*(yf_retry(lambda attr=attr: getattr(t, attr)) for attr in QUARTERLY_FRAMES))
+        return statement_years(*frames), complete
     except Exception:
-        return []
+        return [], False
+
+
+def quarterly_statements(t) -> list[dict]:
+    """The quarters ``fetch_quarters`` could get; [] without any: the report renders without TTM."""
+    return fetch_quarters(t)[0]
 
 
 def sec_revenue_history(symbol: str, reported: str | None) -> dict[str, float] | None:

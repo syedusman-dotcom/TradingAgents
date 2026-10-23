@@ -695,6 +695,29 @@ def _invested_capital(period: dict) -> float | None:
     return max(0.0, ca - (num(period.get("cash")) or 0.0) - cl) + ppe
 
 
+TTM_SPAN_DAYS = (250, 300)   # first to fourth quarter end of four consecutive quarters
+
+
+def _consecutive(quarters: list[dict]) -> bool:
+    """Four quarters whose first and fourth end 250-300 days apart: a twelve-month run with no gap."""
+    if len(quarters) != 4:
+        return False
+    first, last = _date(quarters[0].get("fiscal_year_end")), _date(quarters[3].get("fiscal_year_end"))
+    return first is not None and last is not None and TTM_SPAN_DAYS[0] <= (first - last).days <= TTM_SPAN_DAYS[1]
+
+
+def _quarter_owner_earnings(q: dict) -> float | None:
+    """A quarter's owner earnings; when Yahoo leaves out its free cash flow, operating cash flow
+    less capex stands in for it (stock-based pay still deducted)."""
+    oe = owner_earnings(q)
+    if oe is not None:
+        return oe
+    ocf, capex = num(q.get("operating_cash_flow")), num(q.get("capex"))
+    if ocf is None or capex is None:
+        return None
+    return ocf - abs(capex) - abs(num(q.get("stock_based_comp")) or 0.0)
+
+
 def _year_before(periods: list[dict], i: int) -> dict | None:
     """The period ending about a year (350-380 days) before ``periods[i]`` ends, or None."""
     end = _date(periods[i].get("fiscal_year_end")) if i < len(periods) else None
@@ -734,7 +757,10 @@ def inflection(years: list[dict], quarters: list[dict]) -> dict:
     quarter with only the balance sheet, which is skipped. TTM is the latest four such quarters;
     a quarter's year-on-year growth is on the quarter that ended about a year before it."""
     avail = [q for q in (quarters or []) if num(q.get("revenue")) is not None and num(q.get("ebit")) is not None]
-    now, year_ago = avail[:4], avail[4:8]
+    # Positions alone would sum across a missing quarter (five quarters' span as twelve months).
+    now = avail[:4] if _consecutive(avail[:4]) else []
+    year_ago = (avail[4:8] if now and _year_before(avail, 0) is (avail[4] if len(avail) > 4 else None)
+                and _consecutive(avail[4:8]) else [])
     ttm_revenue, ttm_ebit = _sum4(now, "revenue"), _sum4(now, "ebit")
 
     def vs_5y(ttm, field):
@@ -767,7 +793,9 @@ def inflection(years: list[dict], quarters: list[dict]) -> dict:
     return {
         "ttm_revenue": ttm_revenue,
         "ttm_ebit": ttm_ebit,
-        "ttm_owner_earnings": _sum4(now, "", owner_earnings),
+        "ttm_owner_earnings": _sum4(now, "", _quarter_owner_earnings),
+        "ttm_fcf_derived_quarters": sum(1 for x in now if num(x.get("free_cash_flow")) is None
+                                        and _quarter_owner_earnings(x) is not None),
         "ttm_vs_5y_revenue": vs_5y(ttm_revenue, "revenue"),
         "ttm_vs_5y_ebit": vs_5y(ttm_ebit, "ebit"),
         "ttm_revenue_growth": _growth(ttm_revenue, _sum4(year_ago, "revenue")),
@@ -837,7 +865,7 @@ def _run_rate_inputs(years: list[dict], inf: dict) -> dict:
     latest quarter's year-on-year growth; the latest fiscal year's growth; 0."""
     cur = years[0] if years else {}
     ttm = inf.get("ttm_ebit") is not None
-    growth, source = inf.get("ttm_revenue_growth"), "TTM revenue growth on the TTM a year earlier"
+    growth, source = inf.get("ttm_revenue_growth"), "TTM revenue on the TTM a year earlier"
     if growth is None and inf.get("ttm_revenue") is not None:
         end = _date(inf.get("ttm_end"))
         fy = _fiscal_year_before(years, end, MIN_TTM_VS_FY_DAYS)
@@ -847,16 +875,16 @@ def _run_rate_inputs(years: list[dict], inf: dict) -> dict:
             if _months_back(end, ANNUALISE_MIN_MONTHS) >= fy_end:
                 days = (end - fy_end).days
                 growth = ratio ** (365.25 / days) - 1
-                source = f"ttm_vs_fy (annualised over {round(days / 30.44)} months)"
+                source = f"TTM revenue on fiscal {fy_end.year}, annualised over {round(days / 30.44)} months"
             else:
-                growth, source = ratio - 1, "ttm_vs_fy (not annualised)"
+                growth, source = ratio - 1, f"TTM revenue on fiscal {fy_end.year}, not annualised"
     if growth is None:
-        growth, source = inf.get("yoy_growth_latest"), "the latest quarter's revenue growth on a year earlier"
+        growth, source = inf.get("yoy_growth_latest"), "latest quarter's revenue on the same quarter a year earlier"
     if growth is None:
         prev = years[1] if len(years) > 1 else {}
-        growth, source = _growth(cur.get("revenue"), prev.get("revenue")), "the latest fiscal year's revenue growth"
+        growth, source = _growth(cur.get("revenue"), prev.get("revenue")), "latest fiscal year's revenue on the year before"
     if growth is None:
-        growth, source = 0.0, "0% (no revenue growth available)"
+        growth, source = 0.0, "no revenue growth reported, so 0%"
     return {
         "owner_earnings": inf.get("ttm_owner_earnings") if ttm else owner_earnings(cur),
         "ebit": inf["ttm_ebit"] if ttm else num(cur.get("ebit")),
@@ -1115,54 +1143,38 @@ def _fmt(x, spec: str, suffix: str = "") -> str:
 
 
 def _record_section(m: dict) -> list[str]:
-    """One number per labelled line (the decision checks parse them), then two plain-English lines."""
-    rec, inf, rr = m.get("record") or {}, m.get("inflection") or {}, m.get("run_rate")
+    """``- Label value`` lines, each exactly one number (no thousands separators) or n/a, which the
+    decision checks parse; then plain-English summaries that are not parsed."""
+    rec, inf, rr = m.get("record") or {}, m.get("inflection") or {}, m.get("run_rate") or {}
     n_years = rec.get("years_available") or 0
     k = min(RECORD_YEARS, n_years)
-    roic_line = (f"- ROIC ≥ 20% in {rec.get('roic_years_above_20', 0)}/{k} years" if k
-                 else "- ROIC ≥ 20% in n/a")
-    if rec.get("revenue_cagr") is not None:
-        n, x = rec["revenue_cagr_years"], rec["revenue_cagr"]
-        sec = " (SEC filings for the early years)" if rec.get("revenue_cagr_source") == "SEC filings" else ""
-        cagr_line, cagr_words = f"- Revenue CAGR {n}y {x:.1%}{sec}", f"revenue {x:.1%}/yr over {n} years"
-    else:
-        cagr_line, cagr_words = "- Revenue CAGR n/a", None
-    if rr:
-        run_line = (f"- Run-rate value (3y at {rr['g3']:.0%}, then {rr['decay_to']:.0%}) {rr['base']:,.2f}; "
-                    f"implied 3-year growth {_fmt(rr['implied_g3'], '.0%')}")
-    else:
-        run_line = "- Run-rate value n/a; implied 3-year growth n/a"
-    used = inf.get("quarters_used") or []
-    ttm_note = (f"TTM = the four quarters ending {used[-1]} to {used[0]}" if used
-                else f"TTM n/a ({inf.get('quarters_available', 0)} quarters with revenue and EBIT)")
-    lines = [
-        "",
-        "## Record and inflection",
-        "",
-        f"From the annual statements ({n_years} fiscal year{'' if n_years == 1 else 's'}) and the quarterly "
-        f"ones; {ttm_note}.",
-        "",
-        roic_line,
-        f"- ROIC worst of last 5 years {_pct(rec.get('roic_min_5y'))}",
-        cagr_line,
-        f"- FCF CAGR 5y {_pct(rec.get('fcf_cagr_5y'))}",
-        f"- Reinvestment rate {_fmt(rec.get('reinvestment_rate'), '.0%')}",
-        f"- Sustainable growth {_pct(rec.get('sustainable_growth'))}",
-        f"- TTM revenue vs 5y average {_fmt(inf.get('ttm_vs_5y_revenue'), '.2f', '×')}",
-        f"- TTM EBIT vs 5y average {_fmt(inf.get('ttm_vs_5y_ebit'), '.2f', '×')}",
-        f"- Revenue acceleration {_fmt(inf.get('revenue_acceleration'), '+.0%', ' points')}",
-        f"- EBIT margin change on a year earlier {_fmt(inf.get('ebit_margin_change_4q'), '+.1%', ' points')}",
-        f"- Incremental ROIC {_fmt(inf.get('incremental_roic'), '.0%')}",
-        run_line,
+    pct0, pct1 = ".0%", ".1%"
+    labelled = [
+        ("ROIC years above 20%", rec.get("roic_years_above_20") if k else None, "d"),
+        ("ROIC years counted", k, "d"),
+        ("ROIC worst of last 5 years", rec.get("roic_min_5y"), pct1),
+        ("Revenue CAGR", rec.get("revenue_cagr"), pct1),
+        ("Revenue CAGR years", rec.get("revenue_cagr_years"), "d"),
+        ("FCF CAGR 5y", rec.get("fcf_cagr_5y"), pct1),
+        ("Reinvestment rate", rec.get("reinvestment_rate"), pct0),
+        ("Sustainable growth", rec.get("sustainable_growth"), pct1),
+        ("TTM revenue vs 5y average", inf.get("ttm_vs_5y_revenue"), ".2f"),
+        ("TTM EBIT vs 5y average", inf.get("ttm_vs_5y_ebit"), ".2f"),
+        ("Revenue acceleration", inf.get("revenue_acceleration"), "+.0%"),
+        ("EBIT margin change on a year earlier", inf.get("ebit_margin_change_4q"), "+.1%"),
+        ("Incremental ROIC", inf.get("incremental_roic"), pct0),
+        ("Run-rate value", rr.get("base"), ".2f"),
+        ("Run-rate 3-year growth", rr.get("g3"), pct0),
+        ("Run-rate decay", rr.get("decay_to"), pct0),
+        ("Implied 3-year growth", rr.get("implied_g3"), pct0),
     ]
-    if rr:
-        lines.append(f"  ({rr['basis']} earnings; three-year growth = {rr['g3_source']}, held to 0-"
-                     f"{RUN_RATE_MAX_G3:.0%}; then the revenue cohort's base-rate cap, at most "
-                     f"{RUN_RATE_MAX_DECAY:.0%} and {RUN_RATE_MIN_SPREAD:.0%} below the "
-                     f"{rr['discount_rate']:.1%} discount rate)")
-    words = [roic_line[2:]] if k else []
-    if cagr_words:
-        words.append(cagr_words)
+    lines = ["", "## Record and inflection", ""]
+    lines += [f"- {label} {_fmt(value, spec)}" for label, value, spec in labelled]
+
+    words = [f"ROIC ≥ 20% in {rec.get('roic_years_above_20', 0)}/{k} years"] if k else []
+    if rec.get("revenue_cagr") is not None:
+        sec = " (SEC filings for the early years)" if rec.get("revenue_cagr_source") == "SEC filings" else ""
+        words.append(f"revenue {rec['revenue_cagr']:.1%}/yr over {rec['revenue_cagr_years']} years{sec}")
     if rec.get("reinvestment_rate") is not None:
         words.append(f"reinvesting {rec['reinvestment_rate']:.0%} at those returns → sustainable growth "
                      f"{rec['sustainable_growth']:.0%}")
@@ -1176,6 +1188,23 @@ def _record_section(m: dict) -> list[str]:
         parts.append(f"revenue growth {verb} from {before:.0%} to {now:.0%} y/y in the latest quarter")
     if inf.get("incremental_roic") is not None:
         parts.append(f"incremental ROIC {inf['incremental_roic']:.0%}")
+    used = inf.get("quarters_used") or []
+    if used:
+        parts.append(f"TTM is the four quarters ending {used[-1]} to {used[0]}")
     lines.append("Inflection: " + ("; ".join(parts) if parts else
-                                   f"not enough quarterly data ({inf.get('quarters_available', 0)} quarters)") + ".")
+                                   f"not enough quarterly data ({inf.get('quarters_available', 0)} quarters "
+                                   "with revenue and EBIT, four consecutive needed for TTM)") + ".")
+    if rr:
+        derived = inf.get("ttm_fcf_derived_quarters") or 0
+        oe_note = (f"; owner earnings use operating cash flow less capex for {derived} of the 4 quarters, "
+                   "which report no free cash flow" if rr.get("basis") == "TTM" and derived else "")
+        implied = (f"; today's price implies {rr['implied_g3']:.0%} for three years"
+                   if rr.get("implied_g3") is not None else "")
+        lines.append(f"Run-rate: {rr['basis']} earnings growing {rr['g3']:.0%} a year for three years "
+                     f"({rr['g3_source']}, held to 0-{RUN_RATE_MAX_G3:.0%}), then {rr['decay_to']:.0%} for ever "
+                     f"(the revenue cohort's base-rate cap, at most {RUN_RATE_MAX_DECAY:.0%} and "
+                     f"{RUN_RATE_MIN_SPREAD:.0%} below the {rr['discount_rate']:.1%} discount rate), "
+                     f"worth {rr['base']:,.2f} a share{implied}{oe_note}.")
+    else:
+        lines.append("Run-rate: not computable (no price, or run-rate owner earnings and EBIT are not positive).")
     return lines
