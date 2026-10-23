@@ -8,11 +8,13 @@ from tradingagents.agents.tools import (
     get_annual_report,
     get_balance_sheet,
     get_cashflow,
+    get_earnings_release,
     get_financial_history,
     get_fundamentals,
     get_income_statement,
     get_insider_transactions,
     get_peer_comparison,
+    get_quarterly_report,
     get_value_metrics,
 )
 from tradingagents.dataflows.router import route_to_vendor
@@ -23,6 +25,8 @@ TOOLS = (
     get_peer_comparison,
     get_financial_history,
     get_annual_report,
+    get_quarterly_report,
+    get_earnings_release,
     get_fundamentals,
     get_balance_sheet,
     get_cashflow,
@@ -63,7 +67,11 @@ def create_fundamentals_analyst(llm):
             " and `get_insider_transactions`. Call `get_financial_history` for up to 20 years of revenue, margins and"
             " cash flow, to judge the business across a full cycle, and `get_annual_report` for management's own account"
             " of its risks and results; cite it for events such as lawsuits, tax disputes or acquisitions."
-            " `get_financial_history` and `get_annual_report` answer only for US SEC filers; if they say so, do not retry them."
+            " Call `get_quarterly_report` for the latest quarter's drivers and management's guidance;"
+            " quote it with the filing date."
+            " `get_earnings_release` gives the latest results announcement and its outlook, as filed."
+            " `get_financial_history`, `get_annual_report`, `get_quarterly_report` and `get_earnings_release`"
+            " answer only for US SEC filers; if they say so, do not retry them."
             " Never state a figure or event from memory as fact; if you rely on background knowledge, label it as unverified."
             "\n\nAnswer three questions with numbers:"
             "\n1. GOOD BUSINESS? Return on invested capital (EBIT / (net working capital + net fixed assets)) and ROE for each year;"

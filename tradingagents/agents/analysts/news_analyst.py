@@ -3,10 +3,12 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from tradingagents.agents.analysts.turn import take_turn
 from tradingagents.agents.context import get_instrument_context_from_state, get_language_instruction
 from tradingagents.agents.tools import (
+    get_earnings_release,
     get_global_news,
     get_macro_indicators,
     get_news,
     get_prediction_markets,
+    get_quarterly_report,
     get_verified_market_snapshot,
 )
 
@@ -17,6 +19,8 @@ TOOLS = (
     get_global_news,
     get_macro_indicators,
     get_prediction_markets,
+    get_earnings_release,
+    get_quarterly_report,
 )
 
 
@@ -36,6 +40,8 @@ def create_news_analyst(llm):
             " competitive position (new entrants, lost customers, pricing pressure, industry disruption);"
             " one-off events that may have made the stock temporarily cheap (the reason it is cheap, and whether it looks temporary or permanent)."
             " When the pipeline note or the snapshot shows a 3-month fall of 20% or more or a drawdown of 25% or more from the 52-week high, classify the cause: company-specific deterioration, sector-wide sentiment, or macro, with sources."
+            " `get_earnings_release` and `get_quarterly_report` are verified sources: a quoted sentence with its filing date counts as verified demand evidence and as evidence for the cause of a fall."
+            " They answer only for US SEC filers; if they say so, do not retry them."
             " Use macro tools only for factors that change the company's long-term earnings power (rates for lenders/real estate, commodity prices for producers)."
             " Ignore day-to-day market noise."
             f" Use the available tools: get_news(start_date, end_date) for news about the {asset_label} under analysis, get_global_news(curr_date, look_back_days, limit) for broader macroeconomic news, get_macro_indicators(indicator, curr_date, look_back_days) to ground macro commentary in actual data from FRED (e.g. 'cpi', 'core_pce', 'unemployment', 'fed_funds_rate', '10y_treasury', 'yield_curve'), and get_prediction_markets(topic, limit) for live market-implied probabilities of forward-looking events (e.g. 'Fed rate cut', 'recession 2026', geopolitical or sector events)."

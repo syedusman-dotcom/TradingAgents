@@ -29,6 +29,8 @@ from tradingagents.dataflows.vendors.sec_edgar import (
 from tradingagents.dataflows.vendors.sec_filings import (
     get_annual_report as get_sec_edgar_annual_report,
     get_financial_history as get_sec_edgar_financial_history,
+    latest_10q_mdna as get_sec_edgar_quarterly_report,
+    latest_earnings_release as get_sec_edgar_earnings_release,
 )
 from tradingagents.dataflows.vendors.yahoo.fundamentals import (
     get_balance_sheet as get_yfinance_balance_sheet,
@@ -76,6 +78,8 @@ TOOLS_CATEGORIES = {
             "get_peer_comparison",
             "get_financial_history",
             "get_annual_report",
+            "get_quarterly_report",
+            "get_earnings_release",
         ]
     },
     "news_data": {
@@ -150,6 +154,12 @@ VENDOR_METHODS = {
     },
     "get_annual_report": {
         "sec_edgar": get_sec_edgar_annual_report,
+    },
+    "get_quarterly_report": {
+        "sec_edgar": get_sec_edgar_quarterly_report,
+    },
+    "get_earnings_release": {
+        "sec_edgar": get_sec_edgar_earnings_release,
     },
     # news_data
     "get_news": {

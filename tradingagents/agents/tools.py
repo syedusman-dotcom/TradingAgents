@@ -174,6 +174,36 @@ def get_annual_report(
 
 
 @tool
+def get_quarterly_report(
+    ticker: Annotated[str, InjectedState("company_of_interest")],
+    trade_date: Annotated[str, InjectedState("trade_date")] = "",
+) -> str:
+    """
+    Retrieve management's discussion and analysis (Item 2) from the latest quarterly report
+    (10-Q) filed with the SEC by the analysis date: results of operations and liquidity, with
+    the filing date and period. A verified source: quote it with its filing date.
+    Returns:
+        str: The quarter's discussion, cut to a manageable length
+    """
+    return route_to_vendor("get_quarterly_report", ticker, trade_date or None)
+
+
+@tool
+def get_earnings_release(
+    ticker: Annotated[str, InjectedState("company_of_interest")],
+    trade_date: Annotated[str, InjectedState("trade_date")] = "",
+) -> str:
+    """
+    Retrieve the latest earnings release (exhibit 99.1 of an 8-K reporting results, Item 2.02)
+    filed with the SEC by the analysis date, with every outlook, guidance, backlog, bookings
+    and demand paragraph kept whole. A verified source: quote it with its filing date.
+    Returns:
+        str: The press release, cut to a manageable length, then its outlook and demand lines
+    """
+    return route_to_vendor("get_earnings_release", ticker, trade_date or None)
+
+
+@tool
 def get_balance_sheet(
     ticker: Annotated[str, InjectedState("company_of_interest")],
     freq: Annotated[str, "reporting frequency: annual/quarterly"] = "quarterly",

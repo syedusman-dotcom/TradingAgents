@@ -111,32 +111,54 @@ def _plain_text(document: bytes) -> str:
     return "\n".join(line for line in lines if line)
 
 
-def _latest_annual_filing(cik: str, as_of_date: str) -> dict | None:
+def _filings(cik: str, as_of_date: str, form: str) -> list[dict]:
+    """The company's filings of ``form`` filed on or before ``as_of_date``, newest first."""
     data = sec_edgar._cached_json(_SUBMISSIONS_URL.format(cik=cik), f"submissions_CIK{cik}.json")
     recent = (data.get("filings") or {}).get("recent") or {}
-    rows = zip(recent.get("form", []), recent.get("filingDate", []),
-               recent.get("accessionNumber", []), recent.get("primaryDocument", []), strict=False)
-    filings = [{"form": f, "filed": d, "accession": a, "document": doc}
-               for f, d, a, doc in rows if f == "10-K" and d <= as_of_date]
-    return max(filings, key=lambda f: f["filed"]) if filings else None
+    count = len(recent.get("form", []))
+    def column(name):
+        return list(recent.get(name) or []) + [""] * count
+    rows = zip(recent.get("form", []), column("filingDate"), column("accessionNumber"),
+               column("primaryDocument"), column("reportDate"), column("items"), strict=False)
+    filings = [{"form": f, "filed": d, "accession": a, "document": doc, "period": period,
+                "items": [i.strip() for i in (items or "").split(",") if i.strip()]}
+               for f, d, a, doc, period, items in rows if f == form and d and d <= as_of_date]
+    return sorted(filings, key=lambda f: f["filed"], reverse=True)
 
 
-def _sections(cik: str, filing: dict) -> dict[str, str]:
-    """A filing's sections, cached forever: a filed document never changes."""
-    path = Path(get_config()["data_cache_dir"]) / "sec_edgar" / f"10k_{cik}_{filing['accession']}.json"
-    if path.exists():
-        try:
-            return json.loads(path.read_text(encoding="utf-8"))
-        except ValueError:
-            pass
-    url = _DOCUMENT_URL.format(cik=int(cik), accession=filing["accession"].replace("-", ""),
-                               document=filing["document"])
+def _latest_annual_filing(cik: str, as_of_date: str) -> dict | None:
+    filings = _filings(cik, as_of_date, "10-K")
+    return filings[0] if filings else None
+
+
+def _fetch(url: str) -> bytes:
+    """One EDGAR archive document; a failed request is the vendor being unavailable."""
     try:
         response = requests.get(url, headers={"User-Agent": sec_edgar._user_agent()}, timeout=60)
         response.raise_for_status()
     except requests.RequestException as exc:
         raise VendorUnavailableError(f"SEC EDGAR filing request failed ({type(exc).__name__})") from exc
-    found = section_spans(_plain_text(response.content))
+    return response.content
+
+
+def _cache_dir() -> Path:
+    return Path(get_config()["data_cache_dir"]) / "sec_edgar"
+
+
+def _filing_url(cik: str, filing: dict, document: str) -> str:
+    return _DOCUMENT_URL.format(cik=int(cik), accession=filing["accession"].replace("-", ""),
+                                document=document)
+
+
+def _sections(cik: str, filing: dict) -> dict[str, str]:
+    """A filing's sections, cached forever: a filed document never changes."""
+    path = _cache_dir() / f"10k_{cik}_{filing['accession']}.json"
+    if path.exists():
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except ValueError:
+            pass
+    found = section_spans(_plain_text(_fetch(_filing_url(cik, filing, filing["document"]))))
     path.parent.mkdir(parents=True, exist_ok=True)
     replace_file(path, lambda temp: Path(temp).write_text(json.dumps(found), encoding="utf-8"))
     return found
@@ -161,4 +183,139 @@ def get_annual_report(ticker: str, as_of_date: str | None = None) -> str:
         cut = body[:SECTION_CHARS]
         more = "" if len(body) <= SECTION_CHARS else f" [... {len(body) - SECTION_CHARS:,} more characters not shown]"
         lines += [f"## {title}", "", cut + more, ""]
+    return "\n".join(lines)
+
+
+def _cut(body: str, limit: int) -> str:
+    more = "" if len(body) <= limit else f" [... {len(body) - limit:,} more characters not shown]"
+    return body[:limit] + more
+
+
+def _cached_text(name: str, build) -> str:
+    """Text extracted from a filing, cached forever: a filed document never changes."""
+    path = _cache_dir() / name
+    if path.exists():
+        return path.read_text(encoding="utf-8")
+    text = build()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    replace_file(path, lambda temp: Path(temp).write_text(text, encoding="utf-8"))
+    return text
+
+
+# A 10-Q's Item 2 (MD&A) heading on its own line. The table of contents lists it too, followed
+# closely by the next item's heading or a page number; Part II has an unrelated Item 2 later.
+_MDNA_START = re.compile(_ITEM + r"2\b[^\n]*$", re.I | re.M)
+_MDNA_END = re.compile(_ITEM + r"[34]\b", re.I | re.M)
+_TOC_FOLLOWS = re.compile(_ITEM + r"\d|^\s*(page\s*)?\d{1,3}\s*$", re.I | re.M)
+_PAGE_NUMBER_END = re.compile(r"\s\d{1,3}\s*$")
+# Sub-headings within the MD&A, each a short line of its own.
+_RESULTS = re.compile(r"^[ \t]*(results\s+of\s+operations|operations\s+review)\b[^\n]{0,60}$",
+                      re.I | re.M)
+_LIQUIDITY = re.compile(r"^[ \t]*liquidity[\s,]+(and\s+)?capital\s+resources\b[^\n]{0,60}$",
+                        re.I | re.M)
+_AFTER_LIQUIDITY = re.compile(
+    r"^[ \t]*(critical\s+accounting|recent(ly)?\s+(issued\s+|adopted\s+)?accounting|"
+    r"off[\s-]balance\s+sheet|contractual\s+obligations|non-gaap|"
+    r"(cautionary\s+)?(note|statement)s?\s+(regarding|about|on)\s+forward|forward[\s-]looking)"
+    r"[^\n]{0,80}$", re.I | re.M)
+
+
+def mdna_span(text: str) -> str:
+    """Item 2 of a 10-Q, trimmed to Results of Operations through Liquidity and Capital Resources
+    when both sub-headings are there, else the whole item; empty when no heading is found."""
+    for m in _MDNA_START.finditer(text):
+        if _PAGE_NUMBER_END.search(m.group(0)) or _TOC_FOLLOWS.search(text, m.end(), m.end() + 200):
+            continue
+        stop = _MDNA_END.search(text, m.end())
+        item = text[m.end(): stop.start() if stop else len(text)]
+        results, liquidity = _RESULTS.search(item), _LIQUIDITY.search(item)
+        if results and liquidity and results.start() < liquidity.start():
+            after = _AFTER_LIQUIDITY.search(item, liquidity.end())
+            item = item[results.start(): after.start() if after else len(item)]
+        return re.sub(r"\n{2,}", "\n", item.strip())
+    return ""
+
+
+def latest_10q_mdna(ticker: str, as_of_date: str | None = None) -> str:
+    """Management's discussion (Item 2) from the latest 10-Q filed by ``as_of_date``."""
+    as_of_date = as_of_date or datetime.now().strftime("%Y-%m-%d")
+    cik = sec_edgar.cik_for(ticker)
+    if cik is None:
+        return NOT_A_US_FILER
+    filings = _filings(cik, as_of_date, "10-Q")
+    if not filings:
+        raise NoMarketDataError(ticker, ticker, f"no 10-Q filed by {as_of_date}")
+    filing = filings[0]
+    body = _cached_text(f"10q_{cik}_{filing['accession']}.txt", lambda: mdna_span(
+        _plain_text(_fetch(_filing_url(cik, filing, filing["document"])))))
+    lines = [f"# Quarterly report (10-Q) for {ticker.upper()}, filed {filing['filed']}, "
+             f"period ending {filing['period'] or 'unknown'}",
+             "Management's discussion of the latest quarter (Item 2), as filed: results of "
+             "operations and liquidity where marked, cut to its first "
+             f"{SECTION_CHARS:,} characters. Quote it with the filing date.", ""]
+    lines.append(_cut(body, SECTION_CHARS) if body else
+                 "The filing's management's discussion (Item 2) could not be located in its text.")
+    return "\n".join(lines)
+
+
+# An earnings release is cut to this many characters (~2,500 tokens); paragraphs that speak to
+# outlook or demand are kept whole after the cut, wherever they fall.
+RELEASE_CHARS = 10_000
+OUTLOOK_WORDS = ("outlook", "guidance", "expect", "backlog", "bookings", "book-to-bill",
+                 "remaining performance obligations", "RPO", "demand")
+_OUTLOOK = re.compile(r"\b(" + "|".join(re.escape(w) for w in OUTLOOK_WORDS) + ")", re.I)
+_EXHIBIT_99 = re.compile(r"ex.?99.*\.(htm|html|txt)$", re.I)
+
+
+def _exhibit_by_type(cik: str, filing: dict, names: list[str]) -> str | None:
+    """The EX-99 document named in the filing's index page, for a filer whose exhibit file name
+    does not say 99 ("q2fy27pr.htm", "...earningsreleaseex-9.htm")."""
+    index = next((n for n in names if re.search(r"-index\.html?$", n, re.I)), None)
+    if index is None:
+        return None
+    tree = lxml_html.fromstring(_fetch(_filing_url(cik, filing, index)))
+    for row in tree.iter("tr"):
+        cells = [cell.text_content().strip().upper() for cell in row.iter("td")]
+        links = row.xpath(".//a/@href")
+        if links and any(cell.startswith("EX-99") for cell in cells):
+            return links[0].rsplit("/", 1)[-1]
+    return None
+
+
+def _release_text(cik: str, filing: dict) -> str:
+    index = json.loads(_fetch(_filing_url(cik, filing, "index.json")))
+    names = [item.get("name", "") for item in (index.get("directory") or {}).get("item") or []]
+    exhibit = (next((n for n in names if _EXHIBIT_99.search(n)), None)
+               or _exhibit_by_type(cik, filing, names))
+    if exhibit is None:
+        return ""
+    document = _fetch(_filing_url(cik, filing, exhibit))
+    if exhibit.lower().endswith(".txt"):
+        text = document.decode("utf-8", errors="replace")
+        lines = (re.sub(r"[ \t\xa0]+", " ", line).strip() for line in text.splitlines())
+        return "\n".join(line for line in lines if line)
+    return _plain_text(document)
+
+
+def latest_earnings_release(ticker: str, as_of_date: str | None = None) -> str:
+    """Exhibit 99.1 of the latest 8-K reporting results (Item 2.02) filed by ``as_of_date``."""
+    as_of_date = as_of_date or datetime.now().strftime("%Y-%m-%d")
+    cik = sec_edgar.cik_for(ticker)
+    if cik is None:
+        return NOT_A_US_FILER
+    filings = [f for f in _filings(cik, as_of_date, "8-K") if "2.02" in f["items"]]
+    if not filings:
+        raise NoMarketDataError(ticker, ticker, f"no earnings 8-K (Item 2.02) filed by {as_of_date}")
+    filing = filings[0]
+    text = _cached_text(f"8k_{cik}_{filing['accession']}.txt", lambda: _release_text(cik, filing))
+    lines = [f"# Earnings release (8-K exhibit 99.1) for {ticker.upper()}, filed {filing['filed']}",
+             "The company's own results announcement, as filed; cut to its first "
+             f"{RELEASE_CHARS:,} characters, with every outlook and demand paragraph kept whole "
+             "below. Quote it with the filing date.", ""]
+    if not text:
+        lines.append("The filing's exhibit 99 press release could not be located.")
+        return "\n".join(lines)
+    lines += [_cut(text, RELEASE_CHARS), "", "## Outlook and demand lines", ""]
+    outlook = [p for p in dict.fromkeys(text.splitlines()) if _OUTLOOK.search(p)]
+    lines += outlook or ["None found."]
     return "\n".join(lines)
