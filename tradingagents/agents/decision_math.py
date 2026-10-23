@@ -118,9 +118,29 @@ def worksheet_expected_return(excerpt: str) -> dict | None:
     return {"yield": y, "growth": g, "reversion": r}
 
 
+_LANE_BUYS = ("Buy", "Overweight")
+
+
+def _lane_buy_problems(decision, lane: str, verdicts: tuple[str, ...]) -> list[str]:
+    """A lane Buy or Overweight with a red flag, or with one of ``verdicts`` failed (a missing
+    verdict is reported by the checklist check)."""
+    if decision.rating.value not in _LANE_BUYS:
+        return []
+    problems = []
+    if decision.red_flags:
+        problems.append(f"The {lane} lane allows no red flag; the decision lists {len(decision.red_flags)}: "
+                        "resolve it or choose the value lane.")
+    labels = {"good_business": "Good business", "good_management": "Good management", "cheap": "Cheap"}
+    for key in verdicts:
+        verdict = getattr(decision, key)
+        if verdict is not None and not verdict.passed:
+            problems.append(f"The {lane} lane needs the {labels[key]} test to pass; it is FAIL.")
+    return problems
+
+
 def _upside_downside_problem(decision, today, bar, lane) -> str | None:
-    """A Buy's upside/downside at today's price below ``bar``; a price at or under the bear case
-    passes, one at or over the bull case fails."""
+    """A Buy's (or Overweight's) upside/downside at today's price below ``bar``; a price at or under
+    the bear case passes, one at or over the bull case fails."""
     if decision.scenarios is None or today is None:
         return None
     ratio = scenario_stats(decision.scenarios, today)["upside_downside"]
@@ -129,13 +149,13 @@ def _upside_downside_problem(decision, today, bar, lane) -> str | None:
     if ratio is not None and ratio >= bar:
         return None
     shown = f"{ratio:.1f}×" if ratio is not None else "none (the price is above the bull case)"
-    return (f"The {lane} lane's Buy needs an upside/downside of at least {bar:.1f}× at today's price "
-            f"{today:.2f}; the scenarios give {shown}.")
+    return (f"The {lane} lane's {decision.rating.value} needs an upside/downside of at least {bar:.1f}× at "
+            f"today's price {today:.2f}; the scenarios give {shown}.")
 
 
 def _compounder_problems(decision, formula_value, price, worksheet) -> list[str]:
     rec = worksheet_record(worksheet)
-    problems = []
+    problems = _lane_buy_problems(decision, "compounder", ("good_business", "good_management", "cheap"))
     above, counted, worst = rec["roic_gw_years_above_15"], rec["roic_years_counted"], rec["roic_gw_min"]
     if (above is None or counted is None or counted < COMPOUNDER_MIN_ROIC_YEARS or above != counted
             or (worst is not None and worst < COMPOUNDER_ROIC_INCL_GOODWILL - 1e-9)):
@@ -201,7 +221,7 @@ def _compounder_problems(decision, formula_value, price, worksheet) -> list[str]
 
 def _inflection_problems(decision, price, worksheet) -> list[str]:
     inf = worksheet_inflection(worksheet)
-    problems = []
+    problems = _lane_buy_problems(decision, "inflection", ("good_business", "good_management"))
     for key, bar, words, fmt in (
         ("ttm_vs_5y_ebit", INFLECTION_EBIT_MULTIPLE, "TTM EBIT at least 1.5× its five-year average",
          lambda x: f"{x:.2f}×"),
@@ -226,10 +246,11 @@ def _inflection_problems(decision, price, worksheet) -> list[str]:
         problems.append("The inflection lane needs verified demand evidence from the news report: add a lane "
                         "evidence item starting 'verified:' naming its source.")
     today = price if price is not None else worksheet_price(worksheet)
-    if decision.rating.value == "Buy" and decision.scenarios is not None and today is not None:
+    if decision.rating.value in _LANE_BUYS and decision.scenarios is not None and today is not None:
         mos = scenario_stats(decision.scenarios, today)["weighted_mos"]
         if mos is not None and mos < INFLECTION_WEIGHTED_MOS - 1e-9:
-            problems.append("The inflection lane's Buy needs a probability-weighted margin of safety of at "
+            problems.append(f"The inflection lane's {decision.rating.value} needs a probability-weighted "
+                            "margin of safety of at "
                             f"least {INFLECTION_WEIGHTED_MOS:.0%} at today's price {today:.2f}; the "
                             f"scenarios give {mos:.0%}.")
         problem = _upside_downside_problem(decision, today, INFLECTION_UPSIDE_DOWNSIDE, "inflection")

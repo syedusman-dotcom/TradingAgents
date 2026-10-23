@@ -115,7 +115,7 @@ Write these sections, in this order, starting with the rating on its own line:
 - **Price Target**: the per-share intrinsic value estimate as one number (e.g. "Price Target: 62"), not a range
 - **Time Horizon**: the holding period
 - **Checklist**: three lines, "Good business — PASS: note", "Good management — FAIL: note", "Cheap — PASS: Margin of safety: 32%"
-- **Lane**: value, compounder or inflection, then the numbers it rests on, e.g. "compounder — ROIC incl. goodwill ≥ 15% 5/5 years; revenue 11.2%/yr 10y; FCF 9.0%/yr 4y; earned growth 10.0%; implied growth 6%; expected return 13%; price 1.08× base"
+- **Lane**: "value" alone for the value lane (its bars are the checklist and scenarios); compounder or inflection, then the numbers it rests on, e.g. "compounder — ROIC incl. goodwill ≥ 15% 5/5 years; revenue 11.2%/yr 10y; FCF 9.0%/yr 4y; earned growth 10.0%; implied growth 6%; expected return 13%; price 1.08× base"
 - **Red Flags**: one "- " bullet per serious red flag, or "none"
 - **Kill Criteria**: 3 to 6 numbered, verifiable facts that would prove the thesis wrong
 - **Entry Price**: the price at or below which to buy, as one number (required unless the rating is Sell)

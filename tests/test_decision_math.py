@@ -539,8 +539,40 @@ def test_an_inflection_buy_needs_a_margin_of_safety_and_an_upside_downside():
     assert len(problems) == 1 and "14%" in problems[0]
     hold = _inflection(rating=PortfolioRating.HOLD, **_target(thin))
     assert decision_checks(hold, None, None, worksheet=sheet) == []
+    overweight = decision_checks(_inflection(rating=PortfolioRating.OVERWEIGHT, **_target(thin)), None, None,
+                                 worksheet=sheet)                     # the same bars for an Overweight
+    assert len(overweight) == 2 and any("lane's Overweight needs an upside/downside" in p for p in overweight)
     no_price = sheet.replace("- Price today 108.00\n", "")
     assert decision_checks(_inflection(**_target(thin)), None, None, worksheet=no_price) == []
+
+
+@pytest.mark.unit
+def test_a_lane_buy_allows_no_red_flag_and_needs_the_verdicts():
+    comp, infl = _SHEET + _record(), _SHEET + _record(**_INFLECTING)
+    flagged = _compounder(red_flags=["receivables up 40% on revenue up 10%"])
+    assert decision_checks(flagged, None, None, worksheet=comp) == [
+        "The compounder lane allows no red flag; the decision lists 1: resolve it or choose the value lane."]
+    two = _inflection(rating=PortfolioRating.OVERWEIGHT, red_flags=["a", "b"])
+    assert "The inflection lane allows no red flag; the decision lists 2: resolve it or choose the value lane." \
+        in decision_checks(two, None, None, worksheet=infl)
+    dear = _compounder(cheap=Verdict(passed=False, note="Margin of safety: 5%"))
+    assert decision_checks(dear, None, None, worksheet=comp) == [
+        "The compounder lane needs the Cheap test to pass; it is FAIL."]
+    # The inflection lane does not ask for Cheap, but does ask for the business and management.
+    assert decision_checks(_inflection(cheap=Verdict(passed=False, note="x")), None, None, worksheet=infl) == []
+    weak = _inflection(good_management=Verdict(passed=False, note="dilutes"))
+    assert decision_checks(weak, None, None, worksheet=infl) == [
+        "The inflection lane needs the Good management test to pass; it is FAIL."]
+    held = _compounder(rating=PortfolioRating.HOLD, red_flags=["x"], cheap=Verdict(passed=False, note="x"))
+    assert decision_checks(held, None, 130.0, worksheet=comp) == []        # a Hold is not a lane buy
+
+
+@pytest.mark.unit
+def test_the_value_lane_renders_without_evidence():
+    d = _decision(lane="value", lane_evidence=["margin of safety 32%"])
+    text = render_pm_decision(d)
+    assert "**Lane**: value\n" in text and "margin of safety 32%" not in text
+    assert parse.lane(text) == "value" and parse.lane_evidence(text) == []
 
 
 @pytest.mark.unit

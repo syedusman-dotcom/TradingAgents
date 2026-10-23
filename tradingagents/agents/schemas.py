@@ -365,6 +365,7 @@ class PortfolioDecision(BaseModel):
     lane_evidence: list[str] = Field(
         default_factory=list,
         description=(
+            "Empty for the value lane; the other lanes quote their numbers. "
             "The numbers the lane rests on, quoted from the worksheet's Record and inflection lines, "
             "e.g. 'ROIC incl. goodwill ≥ 15% 5/5 years', 'earned growth 10.0%', 'price 1.08× base'. An "
             "inflection claim includes at least one item starting 'verified:' naming the demand "
@@ -406,7 +407,8 @@ def render_pm_decision(decision: PortfolioDecision, price: float | None = None) 
             parts.append(f"{label} — not provided")
         else:
             parts.append(f"{label} — {'PASS' if verdict.passed else 'FAIL'}: {verdict.note}")
-    evidence = "; ".join(decision.lane_evidence)
+    # The value lane's bars are the checklist and scenarios above: its line carries no evidence.
+    evidence = "; ".join(decision.lane_evidence) if decision.lane != "value" else ""
     parts.extend(["", f"**Lane**: {decision.lane}" + (f" — {evidence}" if evidence else "")])
     flags = [f"- {flag}" for flag in decision.red_flags]
     parts.extend(["", "**Red Flags**:" + ("\n" + "\n".join(flags) if flags else " none")])
