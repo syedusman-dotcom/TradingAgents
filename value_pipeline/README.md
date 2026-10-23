@@ -17,7 +17,7 @@ uv run python -m value_pipeline <command>
 ## Monthly routine
 
 ```bash
-uv run python -m value_pipeline run-all                 # screen + review (asks before spending)
+uv run python -m value_pipeline run-all                 # screen + theme scan + review (asks before spending)
 open value_pipeline/data/reports/$(date +%F)/ACTIONS.html
 
 # place the orders at your broker, sells first, then record each fill:
@@ -51,7 +51,8 @@ uv run python -m value_pipeline status
 | `web [--port 8765] [--no-browser]` | Open the local website (this Mac only): dashboard, trades, history with undo, reviews and reports, stock pages, the screen, running jobs and settings. Stop with Ctrl+C. |
 | `screen [--top N]` | Rank the universe; writes `data/screens/screen_YYYY-MM-DD.csv`. |
 | `review [--yes] [--dry-run] [--candidates N]` | Run the agents and write the action list. |
-| `run-all [--yes] [--dry-run]` | `screen`, then `review`. |
+| `run-all [--yes] [--dry-run]` | `screen`, then the theme scan (when `lanes.themes` names any), then `review` with the scan's inflection candidates. |
+| `themes` | The theme scan alone (see Themes below): one quick model call per theme in `lanes.themes`, the named tickers fetched and checked, `reports/<date>/themes.md` written and printed. No review. |
 | `watch [--no-notify]` | The free weekly check (prices only, no agents): a holding above its intrinsic value or in FREEFALL, a stock last rated Buy/Overweight now at least 30% below its value, or a stock now at or below the entry price its last review gave (ENTRY PRICE). Lists each holding's kill criteria for you to check against the news. Writes `reports/watch_<date>.md` and shows a macOS notification when something needs a look. |
 
 Use `--data-dir PATH` before the command (or `VALUE_PIPELINE_DATA`) to keep data somewhere else, and `-v` to log every skipped ticker.
@@ -77,7 +78,7 @@ The first screen of a week fetches every ticker (roughly 20-40 minutes); later r
 ## The review
 
 1. Scores past decisions in the memory log (`settle_all_pending`).
-2. Runs TradingAgents (market, news, fundamentals analysts) on every holding, then on the top `review.candidates` (default 5) screen picks you don't own. Every run sees your holdings and cash.
+2. Runs TradingAgents (market, news, fundamentals analysts) on every holding, then on the names in `lanes.tickers`, the top `review.candidates` (default 5) screen picks you don't own, up to `lanes.compounder_candidates` (default 2) compounder-hinted names, and (in `run-all`) up to `lanes.inflection_candidates` (default 3) from the theme scan, in that order. Every run sees your holdings and cash.
 3. Prints the number of runs and the estimated cost (`cost_per_run`, default $2) and asks before starting, unless you pass `--yes`. Candidates are dropped from the end to stay under `max_cost_per_review` (default $40); holdings are never dropped, and if they alone exceed the cap the review refuses to start. Only one review runs at a time: the scheduled run, the website and a terminal share a lock in the data folder, and a second start is refused rather than spending twice.
    With `TRADINGAGENTS_LLM_PROVIDER=claude_code` the agents run on your Claude plan through Claude Code, so the cap is a usage budget rather than a bill; the ACTIONS report then shows the measured tokens and what the run would have cost at API prices. The website runs reviews in its own process: restart it after changing `.env`. Inside Claude Code, `/review HRB` runs one stock and relays the agents as they finish.
 4. Saves each report to `data/reports/YYYY-MM-DD/TICKER/`. A failed run is retried once, then reported.
@@ -144,6 +145,38 @@ Each stock is reviewed on its own, so after the last one a committee looks at al
 
 ACTIONS now shows company names next to tickers, the expected return of each new buy, "buy below X" for candidates not bought, and each holding's kill criteria under Holdings, with the committee section on top. The stock page shows the latest entry price and kill criteria. The weekly watch adds an ENTRY PRICE alert when a stock reaches the price its review said to buy at, and lists the kill criteria of each holding so you can check them against the week's news; it does not evaluate them for you.
 
+## Lanes
+
+A decision names the lane its evidence supports; the Portfolio Manager picks value first, compounder when the record qualifies, inflection only with verified demand evidence. The numeric parts of each bar are checked in code.
+
+- **Value**: the original rules (cheap on five-year averages, the three verdicts, margin of safety).
+- **Compounder**: a business that has earned high returns for years and can reinvest at them. Buy needs ROIC ≥ 20% in every one of the last five years, revenue growth ≥ 8%/yr over 10 years (5 when 10 are unavailable, flagged), sustainable growth ≥ 10%, the growth the price implies no higher than the sustainable growth, an expected return ≥ 12%/yr with no multiple expansion assumed, upside/downside ≥ 1.5 and a price ≤ 1.15× the worksheet base.
+- **Inflection**: a business whose earnings are stepping up now. Buy needs TTM EBIT ≥ 1.5× the five-year average, revenue growth accelerating by ≥ 10 points over four quarters, incremental ROIC ≥ 20%, verified demand evidence (customer capex, backlog or pricing, with a source), a weighted margin of safety ≥ 20% on the run-rate value, upside/downside ≥ 2, a bear case of at least 30%, no FREEFALL, and a demand indicator among the kill criteria.
+- **Caps**: a lane Buy is sized at half the target weight (Overweight a quarter); compounders stop at 30% and inflection names at 20% of the portfolio (`sizing.lane_caps`, `sizing.lane_size_factor`).
+
+The screen's `Lane hint` column (and the Screen page's filter) points at names worth a look; it is a hint, not the lane:
+
+- `compounder`: passes the hard filters, worst-year ROIC ≥ 20% over at least 4 years, revenue growth ≥ 8%/yr over at least 5 years, sustainable growth ≥ 10%.
+- `inflection`: passes the hard filters, TTM EBIT ≥ 1.5× the five-year average and revenue growth up ≥ 10 points.
+
+The review adds up to `lanes.compounder_candidates` (default 2) compounder-hinted names by expected return, not owned and not in FREEFALL, after the Magic Formula picks. ACTIONS shows a candidate's hint as `(hint: inflection)`, and `results.json` stores it as `lane_hint`.
+
+## Themes
+
+Name the themes and tickers you want looked at in `value_pipeline/config.yaml`:
+
+```yaml
+lanes:
+  themes: ["AI infrastructure", "grid equipment"]   # free text, one quick model call each
+  tickers: [CLS, VRT]                               # always reviewed (unless you hold them)
+  inflection_candidates: 3                          # theme ideas added to a review, at most
+  compounder_candidates: 2                          # compounder-hinted screen names added, at most
+```
+
+For each theme the scan asks: "Where is demand inflecting for this theme, and which listed suppliers with pricing power benefit? Name up to 8 tickers with one line of evidence each; label unverified claims." Each named ticker you don't own is fetched and evaluated like a screen row; those with TTM EBIT ≥ 1.3× the five-year average or revenue growth up ≥ 10 points join the review hinted `inflection`, best expected return first, up to `lanes.inflection_candidates`. A ticker that cannot be fetched, isn't inflecting or is over the cap is listed under Skipped. `reports/<date>/themes.md` has each theme's ideas with their evidence (verified or unverified), the candidates added and the skipped ones.
+
+`themes` runs the scan alone; `run-all` runs it before the review (a dry run makes no model call, so it finds no ideas). The scan's calls are not in the cost estimate; the candidates it adds are, and the cap drops them first. `lanes.tickers` join every review except a `--tickers` one.
+
 ## Files
 
 ```
@@ -154,7 +187,7 @@ value_pipeline/data/            (gitignored: your holdings)
   cache/<TICKER>.json           Yahoo data, refreshed after 7 days
   universe.csv                  last index membership fetched
   screens/screen_<date>.csv     every screened ticker with all metrics
-  reports/<date>/ACTIONS.md|html, results.json, committee.json, <TICKER>/complete_report.html
+  reports/<date>/ACTIONS.md|html, results.json, committee.json, themes.md, <TICKER>/complete_report.html
   logs/monthly_<date>.log       output of scheduled runs
 ```
 

@@ -36,6 +36,7 @@ class Decision:
     fx_to_usd: float | None = 1.0           # US dollars per quoted unit; None when the rate is unknown
     lane: str = "value"                     # value / compounder / inflection, from the decision
     lane_unresolved: bool = False           # the lane claim failed the checks twice: size it as Hold
+    lane_hint: str = ""                     # the screen's/theme scan's pointer: compounder / inflection / ""
 
     @property
     def held(self) -> bool:

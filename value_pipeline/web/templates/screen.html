@@ -8,14 +8,15 @@
 <fieldset>
   <label>Sector <select id="f-sector"><option value="">All</option>{% for s in screen.sectors %}<option>{{ s }}</option>{% endfor %}</select></label>
   <label>Trend <select id="f-trend"><option value="">All</option><option>UPTREND</option><option>BASING</option><option>DOWNTREND</option><option>FREEFALL</option></select></label>
+  <label>Lane hint <select id="f-hint"><option value="">All</option><option value="compounder">compounder</option><option value="inflection">inflection</option></select></label>
   <label><input type="checkbox" id="f-pass" checked> Passes filters only</label>
   <label>Min formula margin of safety <input id="f-mos" type="number" step="5" size="4">%</label>
 </fieldset>
 <div class="table"><table id="screen">
-<thead><tr><th data-k="n">#</th><th>Ticker</th><th>Sector</th><th class="num" data-k="n">EBIT/EV avg</th><th class="num" data-k="n">ROIC avg</th><th class="num" data-k="n">FCF yield</th><th class="num" data-k="n">F</th><th class="num" data-k="n">Z</th><th class="num" data-k="n">Formula MoS</th><th class="num" data-k="n">Exp. return</th><th>Superinvestors</th><th>Trend</th><th>Accounting</th><th>Fails</th></tr></thead>
+<thead><tr><th data-k="n">#</th><th>Ticker</th><th>Sector</th><th class="num" data-k="n">EBIT/EV avg</th><th class="num" data-k="n">ROIC avg</th><th class="num" data-k="n">FCF yield</th><th class="num" data-k="n">F</th><th class="num" data-k="n">Z</th><th class="num" data-k="n">Formula MoS</th><th class="num" data-k="n">Exp. return</th><th>Superinvestors</th><th>Trend</th><th>Lane hint</th><th>Accounting</th><th>Fails</th></tr></thead>
 <tbody>
-{% for r in screen.rows %}
-<tr data-sector="{{ r.sector or '' }}" data-trend="{{ r.trend or '' }}" data-pass="{{ 'y' if r.passes_filters in (true, 'True') else 'n' }}" data-mos="{{ r.mos_formula if r.mos_formula is not none else '' }}">
+{% for r in screen.rows %}{% set hint = r.lane_hint if r.lane_hint is string else "" %}
+<tr data-sector="{{ r.sector or '' }}" data-trend="{{ r.trend or '' }}" data-pass="{{ 'y' if r.passes_filters in (true, 'True') else 'n' }}" data-mos="{{ r.mos_formula if r.mos_formula is not none else '' }}" data-hint="{{ hint }}">
 <td class="num">{{ r.mf_position | int if r.mf_position is not none else "" }}</td>
 <td><a href="/stock/{{ r.ticker }}">{{ r.ticker }}</a></td><td>{{ r.sector or "" }}</td>
 <td class="num">{{ "{:.1%}".format(r.earnings_yield_avg) if r.earnings_yield_avg is not none else "–" }}</td>
@@ -26,7 +27,7 @@
 <td class="num">{{ "{:.0%}".format(r.mos_formula) if r.mos_formula is not none else "–" }}</td>
 <td class="num">{{ "{:.0%}".format(r.expected_return) if r.expected_return is not none else "–" }}</td>
 <td>{% if r.superinvestors %}{{ r.superinvestors | int }}: {{ r.superinvestor_names }}{% endif %}</td>
-<td>{{ r.trend or "–" }}</td><td class="muted">{{ r.accounting_flags or "" }}</td><td class="muted">{{ r.fail_reasons or "" }}</td></tr>
+<td>{{ r.trend or "–" }}</td><td>{{ hint }}</td><td class="muted">{{ r.accounting_flags or "" }}</td><td class="muted">{{ r.fail_reasons or "" }}</td></tr>
 {% endfor %}
 </tbody></table></div>
 <h2>Excluded sectors ({{ screen.excluded | length }})</h2>
@@ -40,13 +41,14 @@
   const f = id => document.getElementById(id);
   function apply() {
     const sector = f("f-sector").value, trend = f("f-trend").value, pass = f("f-pass").checked;
+    const hint = f("f-hint").value;
     const mos = f("f-mos").value === "" ? null : Number(f("f-mos").value) / 100;
     for (const r of rows) {
       r.hidden = !((!sector || r.dataset.sector === sector) && (!trend || r.dataset.trend === trend)
-        && (!pass || r.dataset.pass === "y") && (mos === null || (r.dataset.mos !== "" && Number(r.dataset.mos) >= mos)));
+        && (!hint || r.dataset.hint === hint) && (!pass || r.dataset.pass === "y") && (mos === null || (r.dataset.mos !== "" && Number(r.dataset.mos) >= mos)));
     }
   }
-  ["f-sector", "f-trend", "f-pass", "f-mos"].forEach(id => f(id).addEventListener("input", apply));
+  ["f-sector", "f-trend", "f-hint", "f-pass", "f-mos"].forEach(id => f(id).addEventListener("input", apply));
   document.querySelectorAll("#screen th").forEach((th, i) => th.addEventListener("click", () => {
     const numeric = th.dataset.k === "n", dir = th.dataset.dir === "asc" ? -1 : 1;
     th.dataset.dir = dir === 1 ? "asc" : "desc";

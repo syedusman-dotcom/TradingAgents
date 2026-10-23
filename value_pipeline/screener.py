@@ -53,6 +53,7 @@ def evaluate(data: dict, normalize_years: int = 5, roic_cap: float = 1.0,
         "earnings_yield_avg": metrics.earnings_yield(norm["ebit_avg"], ev),
         "roic_avg": norm["roic_avg"],
         "roic_min": norm["roic_min"],
+        "roic_years": norm["roic_years"],
         "roic_ranked": None if norm["roic_avg"] is None else min(norm["roic_avg"], roic_cap),
         "dilution_per_year": norm["dilution_per_year"],
         "fcf_yield": metrics.fcf_yield(cur.get("free_cash_flow"), mcap),
@@ -177,15 +178,49 @@ def latest_screen(paths: Paths) -> Path | None:
     return files[-1] if files else None
 
 
-def top_candidates(paths: Paths, owned: set[str], n: int) -> list[dict]:
-    """The best-ranked, not-owned, not-FREEFALL tickers from the latest screen."""
+def top_candidates(paths: Paths, owned: set[str], n: int, compounders: int = 0) -> list[dict]:
+    """The best-ranked, not-owned, not-FREEFALL tickers from the latest screen, then up to
+    ``compounders`` compounder-hinted ones (best expected return first) not already listed."""
     path = latest_screen(paths)
     if path is None:
         return []
     df = pd.read_csv(path)
-    df = df[df["mf_position"].notna()].sort_values("mf_position")
     df = df[~df["ticker"].isin(owned) & (df["trend"] != "FREEFALL")]
-    return df.head(n).to_dict("records")
+    picks = df[df["mf_position"].notna()].sort_values("mf_position").head(n)
+    if compounders > 0 and "lane_hint" in df:
+        hinted = df[(df["lane_hint"] == "compounder") & ~df["ticker"].isin(picks["ticker"])]
+        hinted = hinted.sort_values("expected_return", ascending=False, na_position="last")
+        picks = pd.concat([picks, hinted.head(compounders)])
+    return picks.to_dict("records")
+
+
+# The lane hints: a pointer for the review, not a verdict (the Portfolio Manager decides the lane).
+COMPOUNDER_ROIC, COMPOUNDER_ROIC_YEARS = 0.20, 4
+COMPOUNDER_CAGR, COMPOUNDER_CAGR_YEARS, COMPOUNDER_GROWTH = 0.08, 5, 0.10
+INFLECTION_EBIT, INFLECTION_ACCELERATION = 1.5, 0.10
+
+
+def _at_least(row: dict, key: str, floor: float) -> bool:
+    v = row.get(key)
+    return isinstance(v, (int, float)) and v == v and v >= floor
+
+
+def lane_hint(row: dict) -> str:
+    """"compounder" when the record clears the compounder bar, "inflection" when the TTM numbers
+    clear the inflection bar, else "". Only for rows that pass the hard filters."""
+    if row.get("passes_filters") not in (True, "True"):
+        return ""
+    years = row.get("roic_years")
+    roic_ok = _at_least(row, "roic_min", COMPOUNDER_ROIC) and (
+        years is None or years != years or years >= COMPOUNDER_ROIC_YEARS)
+    if (roic_ok and _at_least(row, "revenue_cagr", COMPOUNDER_CAGR)
+            and _at_least(row, "revenue_cagr_years", COMPOUNDER_CAGR_YEARS)
+            and _at_least(row, "sustainable_growth", COMPOUNDER_GROWTH)):
+        return "compounder"
+    if _at_least(row, "ttm_vs_5y_ebit", INFLECTION_EBIT) and _at_least(
+            row, "revenue_acceleration", INFLECTION_ACCELERATION):
+        return "inflection"
+    return ""
 
 
 def run(paths: Paths, cfg: dict, owned: set[str], today: str | None = None) -> dict:
@@ -234,6 +269,7 @@ def run(paths: Paths, cfg: dict, owned: set[str], today: str | None = None) -> d
         r.setdefault("er_rank", None)
         r["passes_filters"] = not r["fail_reasons"]
         r["fail_reasons"] = "; ".join(r["fail_reasons"])
+        r["lane_hint"] = lane_hint(r)
 
     paths.screens.mkdir(parents=True, exist_ok=True)
     out = paths.screens / f"screen_{today}.csv"

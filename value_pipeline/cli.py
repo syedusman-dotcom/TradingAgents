@@ -101,11 +101,11 @@ def cmd_screen(args, paths: Paths, cfg) -> None:
         console.print("Watch, falling knives (FREEFALL): " + ", ".join(r["ticker"] for r in res["knives"][:10]))
 
 
-def cmd_review(args, paths: Paths, cfg) -> None:
+def cmd_review(args, paths: Paths, cfg, discover: bool = False) -> None:
     if args.candidates is not None:
         cfg["review"]["candidates"] = args.candidates
     only = args.tickers.split(",") if getattr(args, "tickers", None) else None
-    out = review.run(paths, cfg, yes=args.yes, dry_run=args.dry_run, only=only)
+    out = review.run(paths, cfg, yes=args.yes, dry_run=args.dry_run, only=only, discover=discover)
     console.print(Markdown(out.read_text(encoding="utf-8")))
     console.print(f"\nSaved {out} and {out.with_suffix('.html')}")
 
@@ -152,9 +152,28 @@ def cmd_web(args, paths: Paths, cfg) -> None:
     uvicorn.run(create_app(paths), host="127.0.0.1", port=args.port, log_level="warning")
 
 
+def cmd_themes(args, paths: Paths, cfg) -> None:
+    """The theme scan alone: ideas, the inflection candidates the numbers confirm, the report."""
+    from value_pipeline import themes
+
+    names = cfg["lanes"]["themes"]
+    if not names:
+        raise SystemExit("No themes: name some under lanes.themes in value_pipeline/config.yaml.")
+    owned = {p.ticker for p in pfmod.load(paths).positions} if paths.portfolio.exists() else set()
+    today = date.today().isoformat()
+    rcfg = cfg["review"]
+    console.print(f"Scanning {len(names)} theme(s) (one quick model call each)...")
+    llm = review.make_graph(rcfg["analysts"], rcfg.get("statement_vendor")).quick_thinking_llm
+    ideas = themes.scan(llm, names, today)
+    kept, skipped = themes.candidates(paths, cfg, ideas, owned)
+    out = themes.write_report(paths, today, ideas, kept, skipped)
+    console.print(Markdown(out.read_text(encoding="utf-8")))
+    console.print(f"\nSaved {out}")
+
+
 def cmd_run_all(args, paths: Paths, cfg) -> None:
     cmd_screen(args, paths, cfg)
-    cmd_review(args, paths, cfg)
+    cmd_review(args, paths, cfg, discover=True)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -203,6 +222,9 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--force", action="store_true", help="refresh even if the data is under a week old")
     s.set_defaults(func=cmd_superinvestors)
 
+    s = sub.add_parser("themes", help="scan the themes in lanes.themes for inflection candidates (no review)")
+    s.set_defaults(func=cmd_themes)
+
     s = sub.add_parser("web", help="open the local website (this Mac only)")
     s.add_argument("--port", type=int, default=8765)
     s.add_argument("--no-browser", action="store_true", help="don't open the browser")
@@ -211,7 +233,7 @@ def build_parser() -> argparse.ArgumentParser:
     for name, func in (("screen", cmd_screen), ("review", cmd_review), ("run-all", cmd_run_all)):
         s = sub.add_parser(name, help={"screen": "rank the S&P 500 + 400 by the Magic Formula",
                                        "review": "run the agents on holdings + top candidates; write ACTIONS.md",
-                                       "run-all": "screen, then review"}[name])
+                                       "run-all": "screen, scan the themes, then review"}[name])
         if name in ("screen", "run-all"):
             s.add_argument("--top", type=int, help="how many top candidates to list")
         if name in ("review", "run-all"):

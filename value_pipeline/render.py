@@ -97,7 +97,7 @@ def actions_markdown(date: str, actions: list[Action], summary: dict, *, reports
             shares = "–" if a.shares is None else f"{a.shares:g}"
             values = f"{_money(d.intrinsic_value)} / {_money(d.formula_value)}"
             flags = "".join(f" **⚑ {f}**" for f in a.flags)
-            lines.append(f"| {who(a.ticker)}{flags} | {a.rating} | {a.lane} | {_money(a.amount)} | {shares} | {values} | {_pct(d.margin_of_safety)} | {_er(d.expected_return, '–')} | "
+            lines.append(f"| {who(a.ticker)}{_hint_note(a.decision)}{flags} | {a.rating} | {a.lane} | {_money(a.amount)} | {shares} | {values} | {_pct(d.margin_of_safety)} | {_er(d.expected_return, '–')} | "
                          f"{d.fscore if d.fscore is not None else '–'} | {d.trend or '–'} | {_link(reports, a.ticker)} |")
     else:
         lines.append("No new buys this month.")
@@ -105,7 +105,7 @@ def actions_markdown(date: str, actions: list[Action], summary: dict, *, reports
 
     if skipped:
         lines += ["## Candidates not bought", ""]
-        lines += [f"- {who(a.ticker)}: {a.reason}{_lane_note(a)}{_entry_note(a.decision)}{_er_note(a.decision)} "
+        lines += [f"- {who(a.ticker)}{_hint_note(a.decision)}: {a.reason}{_lane_note(a)}{_entry_note(a.decision)}{_er_note(a.decision)} "
                   f"({_link(reports, a.ticker)})" for a in skipped]
         lines.append("")
     if knives:
@@ -132,6 +132,11 @@ def demand_first(items: list[str], lane: str) -> list[str]:
     if lane != "inflection":
         return list(items)
     return [c for c in items if _DEMAND.search(c)] + [c for c in items if not _DEMAND.search(c)]
+
+
+def _hint_note(d) -> str:
+    hint = getattr(d, "lane_hint", "") if d is not None else ""
+    return f" (hint: {hint})" if hint else ""
 
 
 def _lane_note(a) -> str:

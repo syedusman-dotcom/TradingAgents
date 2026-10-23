@@ -22,6 +22,7 @@ from value_pipeline import (
     portfolio as pfmod,
     render,
     screener,
+    themes as themes_mod,
 )
 from value_pipeline.actions import Decision, plan
 from value_pipeline.config import Paths
@@ -231,13 +232,24 @@ def fit_to_cap(tickers: list[str], n_held: int, cost_per_run: float, limit: floa
     return tickers[:keep], keep - n_held, len(tickers) - keep
 
 
-def preview(paths: Paths, cfg: dict, only: list[str] | None = None) -> dict:
-    """What a review would run and cost, without running anything."""
-    rcfg = cfg["review"]
+def preview(paths: Paths, cfg: dict, only: list[str] | None = None,
+            discovered: list[str] | None = None) -> dict:
+    """What a review would run and cost, without running anything.
+
+    Candidates: the names in ``lanes.tickers``, the screen's best Magic Formula names, up to
+    ``lanes.compounder_candidates`` compounder-hinted ones, then ``discovered`` (the theme scan's
+    inflection candidates); the cost cap drops from the end."""
+    rcfg, lanes = cfg["review"], cfg.get("lanes", {})
     pf = pfmod.load(paths)
     owned = {p.ticker for p in pf.positions}
-    candidates = [] if only else screener.top_candidates(paths, owned, rcfg["candidates"])
-    tickers, n_held, n_new = select_tickers([p.ticker for p in pf.positions], [c["ticker"] for c in candidates], only)
+    candidates: list[str] = []
+    if not only:
+        named = [t.strip().upper() for t in lanes.get("tickers") or [] if t.strip()]
+        screened = screener.top_candidates(paths, owned, rcfg["candidates"],
+                                           compounders=int(lanes.get("compounder_candidates", 0)))
+        candidates = [t for t in dict.fromkeys(named + [c["ticker"] for c in screened] + (discovered or []))
+                      if t not in owned]
+    tickers, n_held, n_new = select_tickers([p.ticker for p in pf.positions], candidates, only)
     dropped = 0
     if not only:
         tickers, n_new, dropped = fit_to_cap(tickers, n_held, rcfg["cost_per_run"], rcfg["max_cost_per_review"])
@@ -294,21 +306,54 @@ def screen_row_for(ticker: str, paths: Paths, cfg: dict, screen: dict[str, dict]
 
 
 def run(paths: Paths, cfg: dict, *, yes: bool = False, dry_run: bool = False,
-        today: str | None = None, confirm=input, only: list[str] | None = None) -> Path:
+        today: str | None = None, confirm=input, only: list[str] | None = None,
+        discover: bool = False) -> Path:
+    """``discover`` (the ``run-all`` path) runs the theme scan first and adds its inflection
+    candidates to the review."""
     try:
         with lock.exclusive(paths, "review"):
-            return _run(paths, cfg, yes=yes, dry_run=dry_run, today=today, confirm=confirm, only=only)
+            return _run(paths, cfg, yes=yes, dry_run=dry_run, today=today, confirm=confirm, only=only,
+                        discover=discover)
     except lock.Locked:
         raise ReviewRunning("Not started: another review is running (the scheduled one, or the website's); "
                             "wait for it to finish.") from None
 
 
-def _run(paths: Paths, cfg: dict, *, yes: bool, dry_run: bool, today: str | None, confirm, only) -> Path:
+def discover_themes(paths: Paths, cfg: dict, llm, today: str, owned: set[str],
+                    folder: str | None = None) -> list[dict]:
+    """The theme scan's inflection candidates (screen rows hinted ``inflection``), with the
+    report written to ``reports/<folder or today>/themes.md``. Fails open: no candidates."""
+    names = cfg.get("lanes", {}).get("themes") or []
+    if not names:
+        return []
+    try:
+        ideas = themes_mod.scan(llm, names, today)
+        kept, skipped = themes_mod.candidates(paths, cfg, ideas, owned)
+        out = themes_mod.write_report(paths, folder or today, ideas, kept, skipped)
+    except Exception as exc:  # noqa: BLE001 - discovery is extra; the review stands without it
+        log.warning("theme scan failed: %s: %s", type(exc).__name__, exc)
+        return []
+    print(f"Theme scan: {len(ideas)} idea(s), {len(kept)} inflection candidate(s); see {out}")
+    return kept
+
+
+def _run(paths: Paths, cfg: dict, *, yes: bool, dry_run: bool, today: str | None, confirm, only,
+         discover: bool = False) -> Path:
     today = today or date.today().isoformat()
     rcfg = cfg["review"]
     pf = pfmod.load(paths)
     owned = {p.ticker for p in pf.positions}
-    plan_ = preview(paths, cfg, only)
+    ta = tally = None
+    discovered: dict[str, dict] = {}
+    if discover and not only and cfg.get("lanes", {}).get("themes"):
+        if not dry_run:
+            ta, tally = _graph(rcfg)
+        exclude = owned | set(preview(paths, cfg)["tickers"])
+        kept = discover_themes(paths, cfg, ta.quick_thinking_llm if ta else None, today, exclude,
+                               folder=today + ("-dry-run" if dry_run else ""))
+        discovered = {r["ticker"]: r for r in kept}
+    scan_usage = tally.snapshot() if tally else {}
+    plan_ = preview(paths, cfg, only, list(discovered))
     tickers = plan_["tickers"]
     if not only and plan_["n_new"] == 0 and not plan_["dropped"]:
         print("No screen found (or no candidates); reviewing holdings only. Run `screen` first for new ideas.")
@@ -343,28 +388,24 @@ def _run(paths: Paths, cfg: dict, *, yes: bool, dry_run: bool, today: str | None
     screen = _screen_rows(paths)
     prices = {t: market_data.latest_price(t) for t in sorted(set(tickers) | owned)}
     fx = {t: _quote_fx(t) for t in sorted(set(tickers) | owned)}
-    screen_row = {t: screen_row_for(t, paths, cfg, screen) for t in tickers}
+    screen_row = {t: discovered.get(t) or screen_row_for(t, paths, cfg, screen) for t in tickers}
 
     results: list[RunResult] = []
     usage = None
     if dry_run:
         results = [fake_run(t, i, t in owned, prices[t]) for i, t in enumerate(tickers)]
     else:
-        from tradingagents.llm_clients.usage import UsageTally
-
-        logging.getLogger("tradingagents.llm_clients.claude_code_client").setLevel(logging.INFO)
-        if not logging.getLogger().handlers:
-            logging.basicConfig(format="%(levelname)s %(message)s")
-        tally = UsageTally()
-        ta = make_graph(rcfg["analysts"], rcfg.get("statement_vendor"), tally)
+        if ta is None:
+            ta, tally = _graph(rcfg)
         print("Scoring past decisions (memory log)...")
         ta.settle_all_pending()
         ctx = pf.to_context()
         for i, t in enumerate(tickers, 1):
             print(f"[{i}/{len(tickers)}] {t}...", flush=True)
             results.append(run_agents(ta, t, today, ctx, out_dir, tally))
-        usage = {"tokens_in": sum(r.tokens_in for r in results), "tokens_out": sum(r.tokens_out for r in results),
-                 "nominal_cost_usd": sum(r.nominal_cost_usd for r in results),
+        usage = {key: sum(getattr(r, key) for r in results) + scan_usage.get(key, 0)
+                 for key in ("tokens_in", "tokens_out", "nominal_cost_usd")}
+        usage = {**usage,
                  "on_plan": str(ta.config.get("llm_provider", "")).lower() == "claude_code"}
 
     for r in results:
@@ -401,6 +442,7 @@ def _run(paths: Paths, cfg: dict, *, yes: bool, dry_run: bool, today: str | None
             currency=fx[r.ticker][0],
             fx_to_usd=fx[r.ticker][1],
             lane=parse.lane(r.decision),
+            lane_hint=_hint(row),
             lane_unresolved=bool(parse.section(r.decision, "Unresolved Checks")),
         ))
     reviewed = {d.ticker for d in decisions}
@@ -430,7 +472,8 @@ def _run(paths: Paths, cfg: dict, *, yes: bool, dry_run: bool, today: str | None
          "entry_price": parse.entry_price(r.decision), "kill_criteria": parse.kill_criteria(r.decision),
          "checklist": parse.checklist(r.decision), "scenarios": scenarios[r.ticker],
          "value_bridge": parse.value_bridge(r.decision), "red_flags": parse.red_flags(r.decision),
-         "lane": parse.lane(r.decision), "lane_evidence": parse.lane_evidence(r.decision)}
+         "lane": parse.lane(r.decision), "lane_evidence": parse.lane_evidence(r.decision),
+         "lane_hint": _hint(screen_row.get(r.ticker))}
         for r in results
     ]
 
@@ -460,6 +503,23 @@ def _run(paths: Paths, cfg: dict, *, yes: bool, dry_run: bool, today: str | None
     if not dry_run:
         _record_ratings(paths, pf, actions, today, {r.ticker: r.earnings_date for r in results})
     return out_dir / "ACTIONS.md"
+
+
+def _graph(rcfg: dict):
+    """The agents' graph and its usage tally, for a real (not dry) run."""
+    from tradingagents.llm_clients.usage import UsageTally
+
+    logging.getLogger("tradingagents.llm_clients.claude_code_client").setLevel(logging.INFO)
+    if not logging.getLogger().handlers:
+        logging.basicConfig(format="%(levelname)s %(message)s")
+    tally = UsageTally()
+    return make_graph(rcfg["analysts"], rcfg.get("statement_vendor"), tally), tally
+
+
+def _hint(row: dict | None) -> str:
+    """The row's lane hint ("compounder", "inflection" or ""); "" for a screen from before it."""
+    hint = (row or {}).get("lane_hint")
+    return hint if isinstance(hint, str) else ""
 
 
 def _holding_value(p, price: float | None, fx: tuple[str | None, float | None]) -> float:
