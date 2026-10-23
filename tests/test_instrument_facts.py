@@ -146,3 +146,43 @@ def test_run_agents_records_the_company_name(monkeypatch, tmp_path):
     monkeypatch.setattr(context, "resolve_instrument_identity", boom)
     assert review.run_agents(FakeGraph(), "000270.KS", "2026-10-23", None, tmp_path).name is None
     assert review.fake_run("X", 0, False, 10.0).name is None
+
+
+@pytest.mark.unit
+def test_next_earnings_date_reads_the_calendar(monkeypatch):
+    import datetime as dt
+
+    from tradingagents.dataflows.vendors.yahoo import fundamentals
+
+    class Cal:
+        def __init__(self, calendar):
+            self.calendar = calendar
+
+    def use(calendar):
+        monkeypatch.setattr(fundamentals.yf, "Ticker", lambda s: Cal(calendar))
+
+    use({"Earnings Date": [dt.date(2026, 11, 5), dt.date(2026, 11, 9)]})
+    assert fundamentals.next_earnings_date("AAPL") == "2026-11-05"
+    use({"Earnings Date": []})
+    assert fundamentals.next_earnings_date("AAPL") is None
+    use({})
+    assert fundamentals.next_earnings_date("AAPL") is None
+
+    def boom(s):
+        raise RuntimeError("down")
+
+    monkeypatch.setattr(fundamentals.yf, "Ticker", boom)
+    assert fundamentals.next_earnings_date("AAPL") is None
+
+
+@pytest.mark.unit
+def test_resolve_instrument_context_passes_the_earnings_date(monkeypatch):
+    from tradingagents.graph import trading_graph as tg
+
+    monkeypatch.setattr(tg, "resolve_instrument_identity", lambda t: {})
+    monkeypatch.setattr(tg, "next_earnings_date", lambda t: "2026-11-05")
+    graph = object.__new__(tg.TradingAgentsGraph)
+    text = graph.resolve_instrument_context("AAPL", "stock", "2026-10-23")
+    assert "Next earnings report: 2026-11-05 (13 days away)." in text
+    crypto = graph.resolve_instrument_context("BTC-USD", "crypto", "2026-10-23")
+    assert "Next earnings" not in crypto

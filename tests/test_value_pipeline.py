@@ -12,6 +12,14 @@ from value_pipeline.config import DEFAULTS, Paths
 SIZING = DEFAULTS["sizing"]
 
 
+@pytest.fixture(autouse=True)
+def _no_company_name_lookup(monkeypatch):
+    """run_agents looks the company name up; never from Yahoo in a test."""
+    from tradingagents.agents import context
+
+    monkeypatch.setattr(context, "resolve_instrument_identity", lambda ticker: {})
+
+
 # --- portfolio math ---------------------------------------------------------------
 
 @pytest.mark.unit

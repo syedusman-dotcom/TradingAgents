@@ -106,6 +106,12 @@ def test_global_news_empty_after_filter_is_informative(monkeypatch):
     assert "unavailable" in out and "not an absence" in out
 
 
+@pytest.fixture(autouse=True)
+def _no_company_profile_lookup(monkeypatch):
+    """The name fallback must never reach Yahoo from these tests."""
+    monkeypatch.setattr(ynews, "get_company_profile", lambda ticker: {})
+
+
 def _ticker_with(articles, monkeypatch, search_news=(), search_quotes=("AAPL",)):
     """A quote feed answering ``articles``, and a search answering the rest.
 
