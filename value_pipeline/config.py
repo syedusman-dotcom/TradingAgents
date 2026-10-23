@@ -36,6 +36,7 @@ DEFAULTS: dict = {
         "committee": True,
     },
     "watch": {"buy_margin_of_safety": 0.30, "max_rating_age_days": 120},
+    "daily": {"enabled": True, "max_reviews": 3, "cooldown_days": 5, "big_move": 0.15},
     "superinvestors": {
         "refresh_days": 7,
         "investors": [
@@ -72,7 +73,8 @@ def _merge(base: dict, override: dict) -> dict:
 
 
 # Numbers that disable a safeguard at zero: the cost cap would never block, sizes would be nothing.
-_POSITIVE = {"cost_per_run", "max_cost_per_review", "max_position_weight", "max_sector_weight", "min_holdings"}
+_POSITIVE = {"cost_per_run", "max_cost_per_review", "max_position_weight", "max_sector_weight", "min_holdings",
+             "max_reviews", "big_move"}
 
 
 def validate_config(cfg: dict) -> None:

@@ -52,6 +52,12 @@ watch:
   # not alerted on; the next review refreshes it.
   max_rating_age_days: 120
 
+daily:
+  enabled: true        # the weekday price check that re-reviews what changed
+  max_reviews: 3       # re-reviews per day; the rest wait until tomorrow
+  cooldown_days: 5     # skip a ticker reviewed this recently (EARNINGS and REACHED VALUE ignore it)
+  big_move: 0.15       # a move this far from the last review's price triggers a re-review
+
 superinvestors:
   # Concentrated value investors whose latest 13F holdings are shown beside the
   # screen and on stock pages, as a second opinion. Add or remove any SEC filer by
