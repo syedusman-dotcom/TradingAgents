@@ -19,6 +19,7 @@ from tradingagents.dataflows.value_metrics import (  # noqa: F401 - re-exported 
     debt_to_equity,
     earnings_yield,
     enterprise_value,
+    expected_return,
     fcf_yield,
     formula_value,
     interest_coverage,

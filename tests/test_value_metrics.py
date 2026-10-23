@@ -373,3 +373,32 @@ def test_worksheet_renders_epv_grid_and_base_rate_note():
     text = vm.render_report("X", "2026-10-23", m)
     assert "## Valuation worksheet" in text and "Earnings-power value" in text and "base rate" in text
     assert "| r" in text
+
+
+@pytest.mark.unit
+def test_expected_return_sums_yield_growth_and_reversion_and_orders_scenarios():
+    years = [_year(dividends_paid=-50, buybacks=-30, free_cash_flow=180)] * 3 + [_year()] * 2
+    er = vm.expected_return(years, price=20.0, market_cap=2000, shares=100,
+                            avg_prices={"2021": 20, "2022": 20, "2023": 20, "2024": 20, "2025": 20})
+    assert er["expected_return"] == pytest.approx(er["yield"] + er["growth"] + er["reversion"])
+    assert er["bear"] <= er["base"] <= er["bull"] and er["growth"] <= 0.10
+    assert er["yield"] == pytest.approx(80 / 2000)
+
+
+@pytest.mark.unit
+def test_expected_return_caps_growth_at_the_base_rate_and_reversion_at_five_points():
+    rich = [_year(ebit=2000, revenue=30e9)] * 5         # ROIC huge, revenue in the >$25B cohort
+    er = vm.expected_return(rich, price=1.0, market_cap=100, shares=100)
+    assert er["growth"] <= vm.growth_base_rates(30e9)["cap"] and abs(er["reversion"]) <= 0.05
+
+
+@pytest.mark.unit
+def test_expected_return_is_none_without_positive_owner_earnings():
+    assert vm.expected_return([_year(free_cash_flow=-50)] * 3, price=20, market_cap=2000, shares=100) is None
+
+
+@pytest.mark.unit
+def test_company_metrics_carries_the_expected_return_line():
+    m = vm.company_metrics([_year()] * 5, price=20.0, market_cap=2000, shares=100)
+    assert m["expected_return"] is not None
+    assert "Expected return (7-year):" in vm.render_report("X", "2026-01-01", m)

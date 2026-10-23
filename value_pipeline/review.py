@@ -277,6 +277,7 @@ def _run(paths: Paths, cfg: dict, *, yes: bool, dry_run: bool, today: str | None
             fscore=int(fscore) if fscore is not None and not pd.isna(fscore) else None,
             formula_value=_float(row.get("value_base")) if row else None,
             sector=_sector(paths, r.ticker, row),
+            expected_return=_float(row.get("expected_return")) if row else None,
             days_since_last_review=_days_between(held.last_review_date, today) if held else None,
         ))
     reviewed = {d.ticker for d in decisions}

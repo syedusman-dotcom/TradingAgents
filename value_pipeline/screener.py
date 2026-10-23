@@ -37,6 +37,7 @@ def evaluate(data: dict, normalize_years: int = 5, roic_cap: float = 1.0,
     tr = metrics.trend(data.get("closes") or [])
     norm = metrics.normalized(years, normalize_years)
     acc = metrics.accounting_checks(years)
+    er = metrics.expected_return(years, data.get("price"), mcap, shares) or {}
     row = {
         "ticker": data["ticker"],
         "fiscal_year_end": cur["fiscal_year_end"],
@@ -67,6 +68,10 @@ def evaluate(data: dict, normalize_years: int = 5, roic_cap: float = 1.0,
         "mos_formula": value.get("margin_of_safety"),
         "implied_growth": value.get("implied_growth"),
         "discount_rate": rate,
+        "expected_return": er.get("expected_return"),
+        "er_yield": er.get("yield"),
+        "er_growth": er.get("growth"),
+        "er_reversion": er.get("reversion"),
         "trend": tr.get("trend"),
         "vs_sma200": tr.get("vs_sma200"),
         "momentum_12_1": tr.get("momentum_12_1"),
@@ -115,6 +120,12 @@ def rank(rows: list[dict], filters: dict, owned: set[str], top_n: int) -> dict:
     ranked = metrics.magic_formula_rank(passing, EY_KEY, ROIC_KEY)
     for i, r in enumerate(ranked, 1):
         r["mf_position"] = i
+    by_er = sorted((r for r in passing if r.get("expected_return") is not None),
+                   key=lambda r: r["expected_return"], reverse=True)
+    for r in passing:
+        r["er_rank"] = None
+    for i, r in enumerate(by_er, 1):
+        r["er_rank"] = i
     not_owned = [r for r in ranked if r["ticker"] not in owned]
     knives = [r for r in not_owned if r.get("trend") == "FREEFALL"]
     top = [r for r in not_owned if r.get("trend") != "FREEFALL"][:top_n]
@@ -178,6 +189,7 @@ def run(paths: Paths, cfg: dict, owned: set[str], today: str | None = None) -> d
     positions = {r["ticker"]: r["mf_position"] for r in result["ranked"]}
     for r in rows:
         r["mf_position"] = positions.get(r["ticker"])
+        r.setdefault("er_rank", None)
         r["passes_filters"] = not r["fail_reasons"]
         r["fail_reasons"] = "; ".join(r["fail_reasons"])
 

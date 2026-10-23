@@ -25,6 +25,7 @@ class Decision:
     fscore: int | None = None
     formula_value: float | None = None      # the screen's base value (3% growth)
     sector: str | None = None
+    expected_return: float | None = None    # per year over seven years, from the screen
     days_since_last_review: int | None = None
 
     @property

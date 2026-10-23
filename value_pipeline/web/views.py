@@ -78,7 +78,7 @@ def safe_report_path(paths: Paths, rel: str) -> Path | None:
 
 
 _INTL_COLUMNS = ("ticker", "name", "region", "sector", "market_cap", "mf_position", "earnings_yield_avg",
-                 "roic_avg", "fscore", "altman_z", "mos_formula", "trend", "passes_filters", "fail_reasons")
+                 "roic_avg", "fscore", "altman_z", "mos_formula", "expected_return", "trend", "passes_filters", "fail_reasons")
 
 
 def intl_screen_table(paths: Paths) -> dict | None:
@@ -104,7 +104,7 @@ def _csv_records(path: Path) -> list[dict]:
 
 
 _SCREEN_COLUMNS = ("ticker", "sector", "mf_position", "earnings_yield_avg", "roic_avg", "fcf_yield", "fscore",
-                   "altman_z", "mos_formula", "superinvestors", "superinvestor_names", "trend", "passes_filters",
+                   "altman_z", "mos_formula", "expected_return", "superinvestors", "superinvestor_names", "trend", "passes_filters",
                    "fail_reasons", "accounting_flags")
 
 

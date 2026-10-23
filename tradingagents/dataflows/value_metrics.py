@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 import math
 from datetime import date
-from statistics import mean
+from statistics import mean, median
 
 logger = logging.getLogger(__name__)
 
@@ -505,6 +505,66 @@ def capital_allocation(years: list[dict], avg_prices: dict[str, float] | None = 
     return {"per_year": rows, "totals": totals, "price": num(price)}
 
 
+ER_HORIZON = 7
+ER_DEFAULT_TARGET = 12.0       # EV/EBIT to revert to when the company has too little price history
+ER_MAX_GROWTH, ER_BULL_BONUS, ER_BULL_MAX = 0.10, 0.03, 0.13
+ER_MAX_REVERSION = 0.05
+
+
+def _clamp(x: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, x))
+
+
+def _ev_ebit_target(years: list[dict], avg_prices: dict | None, shares) -> float:
+    """Median of the company's own EV/EBIT at each year's average price (needs 3+ years)."""
+    multiples = []
+    for y in years:
+        px = num((avg_prices or {}).get(str(y.get("fiscal_year_end") or "")[:4]))
+        ebit, n = num(y.get("ebit")), num(y.get("shares")) or num(shares)
+        if px is None or n is None or ebit is None or ebit <= 0:
+            continue
+        multiples.append((px * n + (num(y.get("total_debt")) or 0.0) - (num(y.get("cash")) or 0.0)) / ebit)
+    return median(multiples) if len(multiples) >= 3 else ER_DEFAULT_TARGET
+
+
+def expected_return(years: list[dict], price, market_cap, shares, avg_prices: dict | None = None,
+                    horizon: int = ER_HORIZON) -> dict | None:
+    """Annual return if held ``horizon`` years: shareholder yield + growth + EV/EBIT reversion
+    to the company's own history. None when owner earnings or EV/EBIT cannot be computed."""
+    market_cap = num(market_cap)
+    if not years or not market_cap or market_cap <= 0:
+        return None
+    ebit = num(years[0].get("ebit"))
+    ev = enterprise_value(market_cap, years[0].get("total_debt"), years[0].get("cash"))
+    recent = years[:3]
+    oe = [o for o in (owner_earnings(y) for y in recent) if o is not None]
+    if not oe or sum(oe) <= 0 or ebit is None or ebit <= 0 or ev is None or ev <= 0:
+        return None
+    paid = [abs(num(y.get("dividends_paid")) or 0.0) + abs(num(y.get("buybacks")) or 0.0) for y in recent]
+    shareholder_yield = mean(p / market_cap for p in paid)       # no issuance field exists: counted as 0
+    reinvestment = _clamp(1 - sum(paid) / sum(oe), 0.0, 1.0)
+    roics = [min(r, 1.0) for r in (roic(y) for y in years[:5]) if r is not None]
+    sustainable = (mean(roics) if roics else 0.0) * reinvestment
+    br = growth_base_rates(years[0].get("revenue"))
+    cap = br["cap"] if br else ER_MAX_GROWTH
+    growth = max(0.0, min(sustainable, cap, ER_MAX_GROWTH))
+    now, target = ev / ebit, _ev_ebit_target(years, avg_prices, shares)
+
+    def reversion(t: float) -> float:
+        return _clamp((t / now) ** (1 / horizon) - 1, -ER_MAX_REVERSION, ER_MAX_REVERSION)
+
+    rev = reversion(target)
+    bull_growth = min(growth + ER_BULL_BONUS, ER_BULL_MAX)
+    return {
+        "expected_return": shareholder_yield + growth + rev, "yield": shareholder_yield, "growth": growth,
+        "reversion": rev, "growth_cap": cap, "sustainable_growth": sustainable,
+        "ev_ebit_now": now, "ev_ebit_target": target,
+        "bear": shareholder_yield + reversion(target * 0.8),
+        "base": shareholder_yield + growth + rev,
+        "bull": shareholder_yield + bull_growth + reversion(target * 1.2),
+    }
+
+
 def company_metrics(years: list[dict], price, market_cap, shares,
                     rate: float = DISCOUNT_RATE, treasury_10y: float | None = None,
                     avg_prices: dict | None = None) -> dict:
@@ -553,6 +613,7 @@ def company_metrics(years: list[dict], price, market_cap, shares,
         "valuation": formula_value(years, price, shares, net_debt, rate),
         "treasury_10y": treasury_10y,
         "capital_allocation": capital_allocation(years, avg_prices, price),
+        "expected_return": expected_return(years, price, market_cap, shares, avg_prices),
     }
 
 
@@ -708,6 +769,11 @@ def render_report(symbol: str, as_of: str, m: dict, currency: str | None = None)
         note = base_rate_note(v.get("implied_growth"), (m.get("per_year") or [{}])[0].get("revenue"))
         if note:
             lines += ["", note]
+        er = m.get("expected_return")
+        if er:
+            lines += ["", f"Expected return ({ER_HORIZON}-year): {er['expected_return']:.1%}/yr = yield "
+                      f"{er['yield']:.1%} + growth {er['growth']:.1%} + multiple reversion {er['reversion']:.1%} "
+                      f"(bear {er['bear']:.1%} / base {er['base']:.1%} / bull {er['bull']:.1%})"]
         lines += ["", "Start from this range. Judge which growth rate the business can sustain and whether the "
                   "averages need adjusting (one-off cash flows, a cyclical peak or trough), and state each change "
                   "and its effect on the value."]

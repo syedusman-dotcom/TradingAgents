@@ -752,3 +752,26 @@ def test_review_runs_holdings_and_candidates_or_only_the_named_tickers():
 
     assert select_tickers(["HRB"], ["CI", "G"], None) == (["HRB", "CI", "G"], 1, 2)
     assert select_tickers(["HRB"], [], ["hog", " ingr", "HRB", "hog"]) == (["HOG", "INGR", "HRB"], 1, 2)
+
+
+@pytest.mark.unit
+def test_screen_ranks_passers_by_expected_return_in_er_rank():
+    rows = [dict(GOOD, ticker="A", earnings_yield_avg=0.2, expected_return=0.05, fail_reasons=[]),
+            dict(GOOD, ticker="B", earnings_yield_avg=0.1, expected_return=0.12, fail_reasons=[]),
+            dict(GOOD, ticker="C", earnings_yield_avg=0.1, expected_return=None, fail_reasons=[]),
+            dict(GOOD, ticker="D", expected_return=0.30, fail_reasons=["F-Score"])]
+    screener.rank(rows, DEFAULTS["filters"], owned=set(), top_n=10)
+    by = {r["ticker"]: r.get("er_rank") for r in rows}
+    assert by == {"A": 2, "B": 1, "C": None, "D": None}
+
+
+@pytest.mark.unit
+def test_actions_show_expected_return_for_candidates():
+    actions, summary = plan([_new("Hold", expected_return=0.09)], cash=50_000.0, sizing=SIZING)
+    md = render.actions_markdown("2026-11-07", actions, summary, reports={}, comparison=None,
+                                 cost=0.0, failures=[], dry_run=False)
+    assert "expected return 9%/yr" in md
+    buy, _ = plan([_new("Buy", expected_return=0.09)], cash=50_000.0, sizing=SIZING)
+    md = render.actions_markdown("2026-11-07", buy, summary, reports={}, comparison=None,
+                                 cost=0.0, failures=[], dry_run=False)
+    assert "| Expected return |" in md and "9%/yr" in md
