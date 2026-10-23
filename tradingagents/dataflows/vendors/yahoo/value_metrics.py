@@ -126,10 +126,12 @@ def get_value_metrics(
         note = (f"\n\nThe quote is in {quote} but the statements are in {reported}, so price-based "
                 "figures and the formula valuation are left out rather than mixed.")
     rate = current_discount_rate()
-    try:
-        avg_prices = yearly_average_closes(yf_retry(lambda: t.history(period="10y", auto_adjust=True)))
-    except Exception:
-        avg_prices = {}  # fail-open: the report renders without average prices
+    avg_prices = {}  # fail-open: the report renders without average prices
+    if price is not None:  # None means the quote currency differs; its averages would mix currencies
+        try:
+            avg_prices = yearly_average_closes(yf_retry(lambda: t.history(period="10y", auto_adjust=True)))
+        except Exception:
+            avg_prices = {}
     metrics = company_metrics(years, price, info.get("marketCap") if price else None, shares,
                               rate=rate["rate"], treasury_10y=rate["treasury_10y"], avg_prices=avg_prices)
     return render_report(canonical, as_of_date or "today", metrics, currency=reported or quote) + note

@@ -326,3 +326,12 @@ def test_report_has_a_capital_allocation_section_with_the_totals_line():
     m = vm.company_metrics([_year(), _year()], price=20, market_cap=2000, shares=100)
     text = vm.render_report("X", "2026-10-23", m)
     assert "## Capital allocation" in text and "Over 2 years" in text
+
+
+@pytest.mark.unit
+def test_capital_allocation_net_debt_change_is_none_when_a_balance_value_is_missing():
+    ca = vm.capital_allocation([_year(cash=None), _year()])
+    assert ca["per_year"][0]["net_debt_change"] is None
+    assert ca["totals"]["net_debt_change"] == 0
+    ca = vm.capital_allocation([_year(), _year(total_debt=None)])
+    assert ca["per_year"][0]["net_debt_change"] is None

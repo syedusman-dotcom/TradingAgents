@@ -410,9 +410,9 @@ def capital_allocation(years: list[dict], avg_prices: dict[str, float] | None = 
         prev = years[i + 1] if i + 1 < len(years) else None
         net_debt_change = shares_retired = shares_change = None
         if prev:
-            nd = (num(y.get("total_debt")) or 0.0) - (num(y.get("cash")) or 0.0)
-            nd_prev = (num(prev.get("total_debt")) or 0.0) - (num(prev.get("cash")) or 0.0)
-            net_debt_change = nd - nd_prev
+            parts = [num(d.get(k)) for d in (y, prev) for k in ("total_debt", "cash")]
+            if None not in parts:
+                net_debt_change = (parts[0] - parts[1]) - (parts[2] - parts[3])
             s, s_prev = num(y.get("shares")), num(prev.get("shares"))
             if s is not None and s_prev:
                 shares_retired = s_prev - s
