@@ -11,6 +11,7 @@ import logging
 import time
 from datetime import date, datetime, timedelta
 from io import StringIO
+from pathlib import Path
 
 import pandas as pd
 import requests
@@ -169,6 +170,42 @@ def closes_between(ticker: str, start: str, end: str | None = None) -> pd.Series
     s = hist["Close"].dropna()
     s.index = [d.date() for d in s.index]
     return s
+
+
+def close_on_or_before(ticker: str, day: str, cache_dir: Path | None = None,
+                       fetch: bool = True) -> float | None:
+    """The last unadjusted close on or before ``day``, cached as JSON per ticker, keyed by day.
+
+    The cache is ``<cache_dir>/<ticker>.json`` (by default ``data/cache/prices/``). With
+    ``fetch=False`` only the cache is read, so a page can call it on every request. Fail-open:
+    None when Yahoo has no close in the ten days up to ``day`` or the request fails; a miss is
+    not cached, and neither is a close for today or later (the day is not over).
+    """
+    cache = (cache_dir or Paths().cache / "prices") / f"{ticker}.json"
+    try:
+        known = json.loads(cache.read_text(encoding="utf-8")) if cache.exists() else {}
+    except (OSError, ValueError):
+        known = {}
+    if day in known:
+        return known[day]
+    if not fetch:
+        return None
+    start = (date.fromisoformat(day) - timedelta(days=10)).isoformat()
+    try:
+        s = closes_between(ticker, start, day)
+        s = s[[d <= date.fromisoformat(day) for d in s.index]] if len(s) else s
+        price = float(s.iloc[-1]) if len(s) else None
+    except Exception as exc:  # noqa: BLE001 - Yahoo raises many types
+        log.warning("no close for %s on %s: %s", ticker, day, exc)
+        return None
+    if price is not None and date.fromisoformat(day) < date.today():
+        known[day] = price
+        try:
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            cache.write_text(json.dumps(known, sort_keys=True), encoding="utf-8")
+        except OSError as exc:
+            log.warning("could not cache the close for %s: %s", ticker, exc)
+    return price
 
 
 def throttle(seconds: float) -> None:

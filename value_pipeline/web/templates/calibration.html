@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% macro pct(x) %}{{ "{:+.0%}".format(x) if x is not none else "–" }}{% endmacro %}
+{% macro share(s) %}{{ "{}/{} ({:.0%})".format(s.k, s.n, s.share) if s else "–" }}{% endmacro %}
+{% macro yes(x) %}{{ "–" if x is none else ("yes" if x else "no") }}{% endmacro %}
+{% block content %}
+<h1>Calibration</h1>
+<p class="muted">Every past decision against the closes that followed it (not dividend-adjusted). The page reads cached closes only; run <code>python -m value_pipeline calibration</code> to fetch the ones not cached yet.</p>
+{% if not has_horizons %}
+<p class="muted">No decisions old enough yet{% if rows %} ({{ rows | length }} recorded; or their closes are not cached yet){% endif %}.</p>
+{% else %}
+<h2>Verdicts</h2>
+<ul>{% for v in scores.verdicts %}<li>{{ v }}</li>{% endfor %}</ul>
+<h2>Scores</h2>
+<div class="cards">
+  <div class="card"><span class="muted">Decisions</span><b>{{ rows | length }}</b></div>
+  <div class="card"><span class="muted">Agents' value vs formula value (median)</span><b>{{ pct(scores.median_value_gap) }}</b></div>
+  {% set cp = scores.calibrated_probabilities %}
+  <div class="card"><span class="muted">Ended below the bear case at 180 days</span><b>{{ "{:.0%}".format(cp.below_bear) if cp and cp.below_bear is not none else "–" }}</b>
+    <span class="muted">{% if cp %}stated {{ "{:.0%}".format(cp.bear_probability) if cp.bear_probability is not none else "–" }} · {{ cp.n }} decisions{% else %}needs 10 decisions past 180 days{% endif %}</span></div>
+  <div class="card"><span class="muted">Ended above the bull case at 180 days</span><b>{{ "{:.0%}".format(cp.above_bull) if cp and cp.above_bull is not none else "–" }}</b>
+    <span class="muted">{% if cp %}stated {{ "{:.0%}".format(cp.bull_probability) if cp.bull_probability is not none else "–" }}{% else %}needs 10 decisions past 180 days{% endif %}</span></div>
+</div>
+{% for title, key in (("By rating", "by_rating"), ("By lane", "by_lane")) %}
+<h2>{{ title }}</h2>
+<div class="cards">
+{% for name, g in scores[key].items() %}
+  <div class="card"><span class="muted">{{ name }} · {{ g.n }} decision{{ "" if g.n == 1 else "s" }}</span><b>{{ pct(g.median_ret_180) }}</b>
+    <span class="muted">median at 180 days{% if g.hit_value_365 %} · reached value within a year {{ share(g.hit_value_365) }}{% endif %}{% if g.sells_fell_180 %} · sells fell {{ share(g.sells_fell_180) }}{% endif %}</span></div>
+{% endfor %}
+</div>
+{% endfor %}
+{% endif %}
+{% if rows %}
+<h2>Decisions</h2>
+<p class="muted">Click a column heading to sort. "Reached value" is yes when a checkpoint within a year closed at or above the agents' value.</p>
+<div class="table"><table id="calibration">
+<thead><tr><th>Date</th><th>Ticker</th><th>Lane</th><th>Rating</th><th class="num" data-k="n">Price then</th><th class="num" data-k="n">Value</th><th class="num" data-k="n">Formula</th><th class="num" data-k="n">Bear</th>{% for n in horizons %}<th class="num" data-k="n">{{ n }}d</th>{% endfor %}<th>Reached value</th><th>Below bear 180d</th><th>Below entry 180d</th></tr></thead>
+<tbody>
+{% for r in rows %}{% set h180 = r.h180 or {} %}
+<tr><td>{{ r.date }}</td><td><a href="/stock/{{ r.ticker }}">{{ r.ticker }}</a></td><td>{{ r.lane or "–" }}</td><td>{{ r.rating or "–" }}</td>
+<td class="num">{{ "{:,.2f}".format(r.price) if r.price is not none else "–" }}</td>
+<td class="num">{{ "{:,.2f}".format(r.value) if r.value is not none else "–" }}</td>
+<td class="num">{{ "{:,.2f}".format(r.formula_value) if r.formula_value is not none else "–" }}</td>
+<td class="num">{{ "{:,.2f}".format(r.bear) if r.bear is not none else "–" }}</td>
+{% for n in horizons %}{% set h = r["h" ~ n] %}<td class="num">{{ pct(h.ret) if h else "–" }}</td>{% endfor %}
+<td>{% set seen = [] %}{% for n in horizons %}{% if r["h" ~ n] %}{% set _ = seen.append(r["h" ~ n].reached_value) %}{% endif %}{% endfor %}{{ "–" if not seen or r.value is none else ("yes" if true in seen else "no") }}</td>
+<td>{{ yes(h180.below_bear) }}</td><td>{{ yes(h180.below_entry) }}</td></tr>
+{% endfor %}
+</tbody></table></div>
+<script>
+(() => {
+  const body = document.querySelector("#calibration tbody");
+  const rows = [...body.rows];
+  document.querySelectorAll("#calibration th").forEach((th, i) => th.addEventListener("click", () => {
+    const numeric = th.dataset.k === "n", dir = th.dataset.dir === "asc" ? -1 : 1;
+    th.dataset.dir = dir === 1 ? "asc" : "desc";
+    const key = r => { const t = r.cells[i].textContent.replace(/[%,+]/g, "").trim();
+      return numeric ? (t === "" || t === "–" ? Infinity : parseFloat(t)) : t; };
+    rows.sort((a, b) => (key(a) > key(b) ? 1 : key(a) < key(b) ? -1 : 0) * dir).forEach(r => body.appendChild(r));
+  }));
+})();
+</script>
+{% endif %}
+{% endblock %}

@@ -18,6 +18,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from value_pipeline import (
     benchmark,
+    calibration,
     history,
     lock,
     market_data,
@@ -218,6 +219,13 @@ def create_app(paths: Paths, *, config_path: Path = CONFIG_PATH, price_fn=market
                                   {"Intrinsic value": [r["intrinsic_value"] for r in valued]})
         return render(request, "stock.html", data=data, chart=chart, price=app.state.price_fn(data["ticker"]),
                       holders=superinvestors.holders(paths, data["ticker"]))
+
+    @app.get("/calibration", response_class=HTMLResponse)
+    def calibration_page(request: Request):
+        # Cached closes only: the page never calls Yahoo; `calibration` on the command line fills the cache.
+        rs = calibration.rows(paths, price_fn=calibration.price_fn_for(paths, fetch=False))
+        return render(request, "calibration.html", rows=rs, scores=calibration.score(rs),
+                      has_horizons=calibration.has_horizons(rs), horizons=calibration.HORIZONS)
 
     @app.get("/screen", response_class=HTMLResponse)
     def screen(request: Request):

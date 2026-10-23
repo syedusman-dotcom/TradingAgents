@@ -12,6 +12,7 @@ from rich.markdown import Markdown
 from rich.table import Table
 
 from value_pipeline import (
+    calibration,
     daily,
     operations as ops,
     portfolio as pfmod,
@@ -136,6 +137,11 @@ def cmd_daily(args, paths: Paths, cfg) -> int:
     return code
 
 
+def cmd_calibration(args, paths: Paths, cfg) -> None:
+    rs = calibration.rows(paths)   # fetches closes it has not cached yet
+    console.print(Markdown(calibration.markdown(rs, calibration.score(rs), args.horizon)))
+
+
 def cmd_web(args, paths: Paths, cfg) -> None:
     import threading
     import webbrowser
@@ -225,6 +231,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("themes", help="scan the themes in lanes.themes for inflection candidates (no review)")
     s.set_defaults(func=cmd_themes)
+
+    s = sub.add_parser("calibration", help="past decisions against the prices that followed (no agents)")
+    s.add_argument("--horizon", type=int, choices=calibration.HORIZONS, default=180,
+                   help="days after the review for the table's return (default 180)")
+    s.set_defaults(func=cmd_calibration)
 
     s = sub.add_parser("web", help="open the local website (this Mac only)")
     s.add_argument("--port", type=int, default=8765)

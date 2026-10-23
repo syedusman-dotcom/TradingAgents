@@ -35,6 +35,7 @@ uv run python -m value_pipeline status
 - **History**: every trade and deposit with realised gains, and undo for the last entry. Undo is refused once something else, such as a review, has changed the files since.
 - **Reviews** and **Stock**: past reviews and agent reports, and each ticker's ratings and values over time.
 - **Screen**: the latest screen, sortable and filterable.
+- **Calibration**: past decisions against the prices that followed (see Calibration below). Reads cached closes only.
 - **Run**: start a screen, a review, a watch or the daily check. A review shows its run count and cost first and starts only when you confirm. One job runs at a time, and it keeps running if you close the page.
 - **Settings**: edit `config.yaml`, validated and backed up on every save.
 
@@ -49,6 +50,7 @@ uv run python -m value_pipeline status
 | `status` | Each holding's price, value, gain, weight, last rating and days held; total value and return vs SPY. |
 | `superinvestors [--force]` | Refresh which tracked value investors (Buffett, Klarman, Li Lu, Pabrai, Russo, Akre; editable in `config.yaml`) hold what, from their latest 13F filings. Shown in the screen's Superinvestors column and on stock pages. A second opinion only: 13Fs are up to ~4.5 months old by the time you read them, and they never feed the agents or the action rules. The monthly screen refreshes it weekly at most. |
 | `web [--port 8765] [--no-browser]` | Open the local website (this Mac only): dashboard, trades, history with undo, reviews and reports, stock pages, the screen, running jobs and settings. Stop with Ctrl+C. |
+| `calibration [--horizon {30,90,180,365}]` | Every past decision against the closes that followed it, then the scores and one verdict per lane (see Calibration below). Fetches and caches the closes it has not seen. Default horizon 180 days. |
 | `screen [--top N]` | Rank the universe; writes `data/screens/screen_YYYY-MM-DD.csv`. |
 | `review [--yes] [--dry-run] [--candidates N]` | Run the agents and write the action list. |
 | `run-all [--yes] [--dry-run]` | `screen`, then the theme scan (when `lanes.themes` names any), then `review` with the scan's inflection candidates. |
@@ -184,6 +186,29 @@ For each theme the scan asks: "Where is demand inflecting for this theme, and wh
 
 `themes` runs the scan alone; `run-all` runs it before the review (a dry run makes no model call, so it finds no ideas). The scan's calls are not in the cost estimate; the candidates it adds are, and the cap drops them first. `lanes.tickers` join every review except a `--tickers` one.
 
+## Calibration
+
+Did the decisions work? `calibration` (and the website's Calibration page) reads every real
+review's `results.json` (dry runs and failed analyses left out) and, for each decision, looks
+at the close 30, 90, 180 and 365 days after the review day (the last close on or before that
+day, not dividend-adjusted). A horizon still in the future stays blank. For each it shows the
+return from the review price, whether the price was at or above the agents' value, below the
+bear case and below the entry price. Older rows without a recorded price use the close on the
+review day.
+
+The scores, by rating and by lane: the median 180-day return; for Buy/Overweight, how many
+reached the agents' value at a checkpoint within a year (30/90/180/365 days, not every day in
+between); for Sell/Underweight, how many fell by 180 days. Overall: the median gap between the
+agents' value and the formula value, and, once at least ten decisions are 180 days old, how
+often the price ended below the bear case or above the bull case against the probabilities the
+agents gave those cases. One verdict line per lane, such as `compounder: 3 decisions, none
+past 90 days yet`.
+
+The command fetches the closes it needs from Yahoo once and caches them in
+`data/cache/prices/`; the page reads only that cache, so it is cheap to reload and blank until
+the command (or a later run of it) has fetched the closes. A few decisions say little: read the
+counts before the shares.
+
 ## Files
 
 ```
@@ -192,6 +217,7 @@ value_pipeline/data/            (gitignored: your holdings)
   trades.csv                    date, ticker, action, shares, price, fees, note
   backups/<timestamp>/          copy of both files before every write
   cache/<TICKER>.json           Yahoo data, refreshed after 7 days
+  cache/prices/<TICKER>.json    closes on past days, for calibration (kept; past closes do not change)
   universe.csv                  last index membership fetched
   screens/screen_<date>.csv     every screened ticker with all metrics
   reports/<date>/ACTIONS.md|html, results.json, committee.json, <TICKER>/complete_report.html
