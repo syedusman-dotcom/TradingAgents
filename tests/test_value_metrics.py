@@ -1,5 +1,7 @@
 """The verified value metrics the fundamentals analyst quotes (no network)."""
 
+from datetime import date
+
 import pandas as pd
 import pytest
 
@@ -558,8 +560,8 @@ def _quarter(end, revenue, ebit, **kw):
     return {**base, **kw}
 
 
-# Newest first: q0 grows 30% on q4, q4 grew 10% on q8 -> acceleration +20 points.
-Q_REVENUE = [143, 130, 125, 120, 110, 108, 105, 102, 100]
+# Newest first: q0 grows 30% on q4, q1 grew 10% on q5 -> acceleration +20 points; TTM 518.
+Q_REVENUE = [143, 118.8, 136.2, 120, 110, 108, 105, 102, 100]
 Q_ENDS = ["2026-06-30", "2026-03-31", "2025-12-31", "2025-09-30", "2025-06-30",
           "2025-03-31", "2024-12-31", "2024-09-30", "2024-06-30"]
 
@@ -581,6 +583,7 @@ def test_record_counts_roic_years_and_cagrs():
     assert rec["years_available"] == 11
     assert rec["roic_years_above_20"] == 4
     assert rec["roic_min_5y"] == pytest.approx(100 / 700)
+    assert rec["revenue_cagr"] == pytest.approx(0.10) and rec["revenue_cagr_years"] == 10
     assert rec["revenue_cagr_10y"] == pytest.approx(0.10)
     assert rec["revenue_cagr_5y"] == pytest.approx(0.10)
     assert rec["fcf_cagr_5y"] == pytest.approx(2 ** (1 / 5) - 1)
@@ -592,17 +595,33 @@ def test_record_counts_roic_years_and_cagrs():
 
 @pytest.mark.unit
 def test_record_with_three_years_is_partial():
-    rec = vm.record([_year(), _year(), _year()])
+    rec = vm.record([_year(fiscal_year_end=f"{2025 - i}-12-31") for i in range(3)])
     assert rec["years_available"] == 3 and rec["roic_years_above_20"] == 3
+    assert rec["revenue_cagr"] is None and rec["revenue_cagr_years"] is None   # a 2-year span is too short
     assert rec["revenue_cagr_10y"] is None and rec["revenue_cagr_5y"] is None and rec["fcf_cagr_5y"] is None
+    five = vm.record([_year(fiscal_year_end=f"{2025 - i}-12-31", revenue=1000 * 1.1 ** (4 - i)) for i in range(5)])
+    assert five["revenue_cagr_years"] == 4 and five["revenue_cagr"] == pytest.approx(0.10)
+    assert five["revenue_cagr_5y"] is None
     empty = vm.record([])
     assert empty["years_available"] == 0 and empty["roic_min_5y"] is None
     assert empty["reinvestment_rate"] is None and empty["sustainable_growth"] is None
 
 
 @pytest.mark.unit
+def test_record_extends_the_revenue_cagr_with_the_sec_history():
+    years = [_year(fiscal_year_end=f"{2025 - i}-12-31", revenue=1000 * 1.1 ** (10 - i)) for i in range(5)]
+    history = {str(2015 + i): 1000 * 1.1 ** i for i in range(7)}       # 2015..2021, overlapping Yahoo's 2021
+    rec = vm.record(years, revenue_history=history)
+    assert rec["revenue_cagr_years"] == 10 and rec["revenue_cagr"] == pytest.approx(0.10)
+    assert rec["revenue_cagr_10y"] == pytest.approx(0.10) and rec["revenue_cagr_5y"] == pytest.approx(0.10)
+    assert rec["years_available"] == 5                                   # the history feeds the CAGR only
+    assert vm.record(years, revenue_history={"2015": None, "bad": 5})["revenue_cagr_years"] == 4
+
+
+@pytest.mark.unit
 def test_inflection_ttm_and_acceleration():
-    years = [_year(revenue=400, ebit=80) for _ in range(5)]
+    years = [_year(fiscal_year_end=f"{2025 - i}-12-31", revenue=400, ebit=80) for i in range(5)]
+    years[1]["net_ppe"] = 400                     # FY2024, the last one ended a year before the quarter
     inf = vm.inflection(years, _quarters())
     assert inf["quarters_available"] == 9
     assert inf["quarters_used"] == Q_ENDS[:4]
@@ -610,10 +629,12 @@ def test_inflection_ttm_and_acceleration():
     assert inf["ttm_ebit"] == pytest.approx(129.5)
     assert inf["ttm_vs_5y_revenue"] == pytest.approx(518 / 400)
     assert inf["ttm_vs_5y_ebit"] == pytest.approx(129.5 / 80)
+    assert inf["yoy_growth_latest"] == pytest.approx(0.30)
+    assert inf["yoy_growth_previous"] == pytest.approx(0.10)
     assert inf["revenue_acceleration"] == pytest.approx(0.30 - 0.10)
     assert inf["ebit_margin_change_4q"] == pytest.approx(0.05)
-    # (TTM EBIT 129.5 - 85 a year ago) after tax / (invested capital 700 - 600)
-    assert inf["incremental_roic"] == pytest.approx((129.5 - 85) * (1 - vm.TAX_RATE) / 100)
+    # (TTM EBIT 129.5 - FY2024's 80) after tax / (invested capital 700 now - 600 at FY2024's end)
+    assert inf["incremental_roic"] == pytest.approx((129.5 - 80) * (1 - vm.TAX_RATE) / 100)
     assert inf["ttm_revenue_growth"] == pytest.approx(518 / 425 - 1)
 
 
@@ -626,11 +647,17 @@ def test_inflection_uses_last_four_available_quarters():
     short = vm.inflection(years, _quarters()[:3])
     assert short["ttm_revenue"] is None and short["revenue_acceleration"] is None
     assert short["incremental_roic"] is None and short["quarters_available"] == 3
-    eight = vm.inflection(years, _quarters()[:8])
-    assert eight["revenue_acceleration"] is None and eight["incremental_roic"] is not None
+    six = vm.inflection(years, _quarters()[:6])
+    assert six["revenue_acceleration"] == pytest.approx(0.20)
+    assert vm.inflection(years, _quarters()[:5])["revenue_acceleration"] is None
     none = vm.inflection([], [])
     assert none["ttm_vs_5y_ebit"] is None and none["quarters_used"] == []
-    flat = vm.inflection(years, [{**q, "net_ppe": 500} for q in _quarters()])  # no new capital
+    # Incremental ROIC: FY2025 ended under a year before the latest quarter, so FY2024 is the base.
+    dated = [_year(fiscal_year_end="2025-12-31", ebit=10), _year(fiscal_year_end="2024-12-31", net_ppe=400)]
+    four = vm.inflection(dated, _quarters()[:4])
+    assert four["incremental_roic"] == pytest.approx((129.5 - 200) * (1 - vm.TAX_RATE) / 100)
+    assert vm.inflection(years, _quarters())["incremental_roic"] is None     # no dated fiscal year
+    flat = vm.inflection([_year(fiscal_year_end="2024-12-31")], _quarters())   # no new capital
     assert flat["incremental_roic"] is None
 
 
@@ -664,22 +691,36 @@ def test_report_has_record_and_inflection_lines():
                    net_ppe=100) for i in range(5)]
     m = vm.company_metrics(years, price=20, market_cap=2000, shares=100, quarters=_quarters())
     assert m["run_rate"]["g3"] == pytest.approx(518 / 425 - 1)
-    assert m["run_rate"]["decay_to"] == 0.07   # under $1B the cap is 10%, held 2 points below the 9% rate
+    assert "TTM a year earlier" in m["run_rate"]["g3_source"]
+    assert m["run_rate"]["decay_to"] == 0.05   # under $1B the cap is 10%; the worksheet's 5% is the ceiling
     assert m["record"]["roic_years_above_20"] == 5 and m["inflection"]["quarters_available"] == 9
     report = vm.render_report("ABC", "2026-10-23", m)
     section = report.split("## Record and inflection", 1)[1]
     assert "- ROIC ≥ 20% in 5/5 years" in section
-    assert "- Revenue CAGR 5y 0.0%" in section
+    assert "- Revenue CAGR 4y 0.0%" in section
     assert "- Reinvestment rate " in section and "- Sustainable growth " in section
     assert "- TTM EBIT vs 5y average 1.62×" in section
     assert "- Revenue acceleration +20% points" in section
-    assert "- Incremental ROIC 35%" in section
-    assert "- Run-rate value (3y at 22%, then 7%) " in section and "; implied 3-year growth " in section
+    assert "- Incremental ROIC 7%" in section        # (129.5 - 80) x 0.79 / (700 - 100)
+    assert "- Run-rate value (3y at 22%, then 5%) " in section and "; implied 3-year growth " in section
     assert "Record: ROIC ≥ 20% in 5/5 years" in section
-    assert "Inflection: TTM EBIT is 1.62× the 5-year average; revenue growth accelerated from 10% to 30%" in section
+    assert "Inflection: TTM EBIT is 1.62× the 5-year average; revenue growth accelerated from 10% to 30% y/y" in section
     bare = vm.render_report("ABC", "2026-10-23", vm.company_metrics([_year(), _year()], 20, 2000, 100))
     assert "- TTM EBIT vs 5y average n/a" in bare and "- Revenue acceleration n/a" in bare
-    assert "- Revenue CAGR 10y n/a" in bare
+    assert "- Revenue CAGR n/a" in bare
+
+
+@pytest.mark.unit
+def test_run_rate_growth_annualises_ttm_on_the_last_fiscal_year_without_eight_quarters():
+    years = [_year(fiscal_year_end="2025-12-31", revenue=480), _year(fiscal_year_end="2024-12-31")]
+    m = vm.company_metrics(years, price=20, market_cap=2000, shares=100, quarters=_quarters()[:5])
+    elapsed = (date(2026, 6, 30) - date(2025, 12, 31)).days / 365.25
+    assert m["run_rate"]["g3"] == pytest.approx((518 / 480) ** (1 / elapsed) - 1)
+    assert "annualised" in m["run_rate"]["g3_source"]
+    few = vm.company_metrics(years, price=20, market_cap=2000, shares=100,
+                             quarters=[_quarter("2026-06-30", 130, 30), _quarter("2025-06-30", 100, 20)])
+    assert "latest quarter" in few["run_rate"]["g3_source"] and few["run_rate"]["g3"] == pytest.approx(0.30)
+    assert vm.company_metrics(years, 20, 2000, 100, rate=0.06)["run_rate"]["decay_to"] == 0.04
 
 
 @pytest.mark.unit
@@ -732,3 +773,59 @@ def test_pence_scaling_covers_the_run_rate_value():
     assert (scaled["base"], scaled["low"], scaled["high"]) == (200.0, 150.0, 250.0)
     assert scaled["methods"] == {"fcf": 150.0, "ebit": 250.0}
     assert (scaled["implied_g3"], scaled["g3"]) == (0.1, 0.2)
+
+
+@pytest.mark.unit
+def test_yahoo_vendor_extends_the_record_with_the_sec_revenue_history(monkeypatch):
+    cols = [pd.Timestamp(f"{2025 - i}-12-31") for i in range(4)]
+    rows = {"Total Revenue": [1000 * 1.1 ** (10 - i) for i in range(4)], "EBIT": [200] * 4,
+            "Net Income": [150] * 4, "Total Assets": [2000] * 4, "Current Assets": [600] * 4,
+            "Current Liabilities": [300] * 4, "Net PPE": [500] * 4}
+
+    class FakeTicker:
+        def __init__(self, symbol):
+            self.info = {"currency": "USD", "financialCurrency": "USD", "currentPrice": 20.0, "marketCap": 2000}
+            self.income_stmt = pd.DataFrame({c: [v[i] for v in rows.values()] for i, c in enumerate(cols)},
+                                            index=list(rows))
+            self.balance_sheet = self.cashflow = None
+
+        def history(self, **kw):
+            return pd.DataFrame()
+
+    monkeypatch.setattr(yahoo_vm.yf, "Ticker", FakeTicker)
+    monkeypatch.setattr(yahoo_vm, "is_historical", lambda d: False)
+    monkeypatch.setattr(yahoo_vm, "current_discount_rate", lambda: {"rate": 0.09, "treasury_10y": None})
+    monkeypatch.setattr(yahoo_vm.sec_edgar, "cik_for", lambda t: "0000000001")
+    asked = []
+    monkeypatch.setattr(yahoo_vm.sec_filings, "annual_revenue",
+                        lambda t: asked.append(t) or {str(2015 + i): 1000 * 1.1 ** i for i in range(7)})
+    report = yahoo_vm.get_value_metrics("ABC", "2026-10-23")
+    assert asked == ["ABC"] and "- Revenue CAGR 10y 10.0%" in report
+    monkeypatch.setattr(yahoo_vm.sec_edgar, "cik_for", lambda t: None)
+    monkeypatch.setattr(yahoo_vm.sec_filings, "annual_revenue", lambda t: pytest.fail("not a US filer"))
+    assert "- Revenue CAGR 3y" not in yahoo_vm.get_value_metrics("ABC", "2026-10-23")   # 3-year span: n/a
+
+    def down(t):
+        raise RuntimeError("EDGAR down")
+
+    monkeypatch.setattr(yahoo_vm.sec_edgar, "cik_for", down)
+    assert "- Revenue CAGR n/a" in yahoo_vm.get_value_metrics("ABC", "2026-10-23")
+
+
+@pytest.mark.unit
+def test_sec_annual_revenue_by_fiscal_year(monkeypatch):
+    from tradingagents.dataflows.vendors import sec_edgar, sec_filings
+
+    def fact(start, end, val, form="10-K", filed=None):
+        return {"start": start, "end": end, "val": val, "form": form, "filed": filed or end[:4] + "-02-20"}
+
+    facts = {"facts": {"us-gaap": {
+        "Revenues": {"units": {"USD": [fact("2014-01-01", "2014-12-31", 50), fact("2015-01-01", "2015-12-31", 60)]}},
+        "RevenueFromContractWithCustomerExcludingAssessedTax": {"units": {"USD": [
+            fact("2016-01-01", "2016-12-31", 70), fact("2016-10-01", "2016-12-31", 20, form="10-Q")]}},
+    }}}
+    monkeypatch.setattr(sec_edgar, "cik_for", lambda t: "0000000001")
+    monkeypatch.setattr(sec_edgar, "_cached_json", lambda url, name: facts)
+    assert sec_filings.annual_revenue("ABC") == {"2016": 70, "2015": 60, "2014": 50}
+    monkeypatch.setattr(sec_edgar, "cik_for", lambda t: None)
+    assert sec_filings.annual_revenue("ABC") == {}

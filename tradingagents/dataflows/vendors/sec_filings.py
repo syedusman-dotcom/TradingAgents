@@ -63,6 +63,25 @@ def get_financial_history(ticker: str, as_of_date: str | None = None) -> str:
             "revenue, margins and cash flow.\n\n" + "\n".join(parts))
 
 
+def annual_revenue(ticker: str, as_of_date: str | None = None) -> dict[str, float]:
+    """Fiscal year (the year its period ends) -> revenue in dollars, from 10-K/20-F/40-F facts filed
+    on or before the date, tagged as in the income statement; {} for a non-filer or no dollar figures."""
+    cik = sec_edgar.cik_for(ticker)
+    if cik is None:
+        return {}
+    facts = sec_edgar._cached_json(sec_edgar._FACTS_URL.format(cik=cik), f"CIK{cik}.json")
+    us_gaap = (facts.get("facts") or {}).get("us-gaap") or {}
+    tags = dict(sec_edgar._STATEMENTS["income_statement"])["Revenue"]
+    values, unit = sec_edgar._as_of(us_gaap, tags, as_of_date or datetime.now().strftime("%Y-%m-%d"),
+                                    (sec_edgar._SPANS["annual"],), sec_edgar._ANNUAL_FORMS)
+    if unit != "USD":
+        return {}
+    out: dict[str, float] = {}
+    for (end, _), value in sorted(values.items(), reverse=True):
+        out.setdefault(end[:4], value)    # a changed fiscal year: the later period of that year
+    return out
+
+
 def section_spans(text: str) -> dict[str, str]:
     """The 10-K sections in ``SECTIONS``, each the longest span between its headings."""
     found = {}

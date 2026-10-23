@@ -1212,13 +1212,17 @@ def test_screen_rows_carry_lane_columns():
     year = {"fiscal_year_end": "2025-12-31", "revenue": 400, "ebit": 80, "net_income": 60,
             "total_assets": 2000, "operating_cash_flow": 90, "current_assets": 300, "cash": 100,
             "current_liabilities": 300, "net_ppe": 100, "shares": 100, "total_debt": 0}
-    quarters = [{"fiscal_year_end": f"2026-0{9 - i}-30", "revenue": 120 - i, "ebit": 30} for i in range(8)]
+    ends = ["2026-09-30", "2026-06-30", "2026-03-31", "2025-12-31", "2025-09-30", "2025-06-30",
+            "2025-03-31", "2024-12-31"]
+    quarters = [{"fiscal_year_end": end, "revenue": 120 - i, "ebit": 30} for i, end in enumerate(ends)]
     data = {"ticker": "LNE", "years": [year] * 5, "market_cap": 2000, "price": 20, "closes": []}
     row = screener.evaluate({**data, "quarters": quarters})
-    lane = ("revenue_cagr_10y", "sustainable_growth", "ttm_vs_5y_ebit", "revenue_acceleration")
+    lane = ("revenue_cagr_10y", "revenue_cagr", "revenue_cagr_years", "sustainable_growth",
+            "ttm_vs_5y_ebit", "revenue_acceleration")
     assert set(lane) <= set(row)
     assert row["ttm_vs_5y_ebit"] == pytest.approx(30 * 4 / 80)
     assert row["revenue_cagr_10y"] is None
+    assert row["revenue_acceleration"] == pytest.approx((120 / 116 - 1) - (119 / 115 - 1))
     old_cache = screener.evaluate(data)                   # a record cached before quarters were fetched
     assert all(old_cache[k] is None for k in ("revenue_cagr_10y", "ttm_vs_5y_ebit", "revenue_acceleration"))
 

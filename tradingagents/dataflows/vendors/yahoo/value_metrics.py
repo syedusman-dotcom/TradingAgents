@@ -21,6 +21,7 @@ from tradingagents.dataflows.value_metrics import (
     render_report,
     share_count,
 )
+from tradingagents.dataflows.vendors import sec_edgar, sec_filings
 from tradingagents.dataflows.vendors.yahoo.common import (
     MINOR_UNITS,
     raise_for_empty,
@@ -100,6 +101,19 @@ def quarterly_statements(t) -> list[dict]:
         return statement_years(*(yf_retry(lambda attr=attr: getattr(t, attr)) for attr in QUARTERLY_FRAMES))
     except Exception:
         return []
+
+
+def sec_revenue_history(symbol: str, reported: str | None) -> dict[str, float] | None:
+    """Fiscal year -> revenue from SEC EDGAR (about 20 years, cached by that vendor) for a US filer
+    reporting in dollars; None otherwise or when EDGAR fails: the CAGR then spans Yahoo's years."""
+    if reported not in (None, "USD"):
+        return None   # EDGAR's figures are dollars; another reporting currency would mix units
+    try:
+        if sec_edgar.cik_for(symbol) is None:
+            return None
+        return sec_filings.annual_revenue(symbol) or None
+    except Exception:
+        return None
 
 
 def fiscal_average_closes(history: pd.DataFrame, fiscal_year_ends: list[str]) -> dict[str, float]:
@@ -212,7 +226,8 @@ def get_value_metrics(
         revenue_usd = years[0]["revenue"] * fx
     metrics = company_metrics(years, price, info.get("marketCap") if price else None, shares,
                               rate=rate["rate"], treasury_10y=rate["treasury_10y"], avg_prices=avg_prices,
-                              revenue_usd=revenue_usd, quarters=quarters)
+                              revenue_usd=revenue_usd, quarters=quarters,
+                              revenue_history=sec_revenue_history(canonical, reported))
     if minor:
         metrics = _to_quote_unit(metrics, factor)
     return render_report(canonical, as_of_date or "today", metrics, currency=reported or quote) + note
