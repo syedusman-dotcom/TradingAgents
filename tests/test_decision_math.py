@@ -244,8 +244,10 @@ _SHEET = """## Valuation worksheet (per share; 5-year averages)
 
 def _record(**values):
     """A ``## Record and inflection`` section in the worksheet's format; a compounder's by default."""
-    lines = {"ROIC years above 20%": "5", "ROIC years counted": "5", "ROIC worst of last 5 years": "24.1%",
-             "Revenue CAGR": "11.2%", "Revenue CAGR years": "10", "FCF CAGR 5y": "12.0%",
+    lines = {"ROIC years above 20%": "5", "ROIC years counted": "5", "ROIC worst of counted years": "24.1%",
+             "ROIC incl. goodwill years above 15%": "5", "ROIC incl. goodwill worst of counted years": "18.0%",
+             "Revenue CAGR": "11.2%", "Revenue CAGR years": "10", "Earned growth": "10.0%",
+             "FCF CAGR": "12.0%", "FCF CAGR years": "4",
              "Reinvestment rate": "62%", "Sustainable growth": "14.0%", "TTM revenue vs 5y average": "1.20",
              "TTM EBIT vs 5y average": "1.30", "Revenue acceleration": "+2%",
              "EBIT margin change on a year earlier": "+0.5%", "Incremental ROIC": "25%",
@@ -321,6 +323,9 @@ def test_worksheet_record_and_inflection_read_the_labelled_lines():
     assert rec["roic_min_5y"] == pytest.approx(0.241) and rec["revenue_cagr"] == pytest.approx(0.112)
     assert rec["revenue_cagr_years"] == 10 and rec["sustainable_growth"] == pytest.approx(0.14)
     assert rec["reinvestment_rate"] == pytest.approx(0.62) and rec["implied_growth"] == pytest.approx(0.06)
+    assert rec["roic_gw_years_above_15"] == 5 and rec["roic_gw_min"] == pytest.approx(0.18)
+    assert rec["fcf_cagr"] == pytest.approx(0.12) and rec["fcf_cagr_years"] == 4
+    assert rec["earned_growth"] == pytest.approx(0.10)
     inf = worksheet_inflection(sheet)
     assert inf["ttm_vs_5y_ebit"] == pytest.approx(1.3) and inf["revenue_acceleration"] == pytest.approx(0.02)
     assert inf["ebit_margin_change_4q"] == pytest.approx(-0.015) and inf["incremental_roic"] is None
@@ -352,25 +357,65 @@ def test_worksheet_record_reads_the_real_rendered_section():
     assert er is not None and er["yield"] + er["growth"] + er["reversion"] == pytest.approx(
         m["expected_return"]["expected_return"], abs=0.002)
     assert worksheet_expected_return(_SHEET) is None
+    minus = worksheet_expected_return("Expected return (7-year): 4.0%/yr = yield 3.0% + growth 2.0% + "
+                                      "multiple reversion −1.0% (bear 1.0% / base 4.0% / bull 6.0%)")
+    assert minus == {"yield": pytest.approx(0.03), "growth": pytest.approx(0.02),
+                     "reversion": pytest.approx(-0.01)}
 
 
 @pytest.mark.unit
 def test_a_qualifying_compounder_passes():
     assert decision_checks(_compounder(), None, None, worksheet=_SHEET + _record()) == []
-    four = _record(**{"ROIC years above 20%": "4", "ROIC years counted": "4"})
+    four = _record(**{"ROIC incl. goodwill years above 15%": "4", "ROIC years counted": "4"})
     assert decision_checks(_compounder(), None, None, worksheet=_SHEET + four) == []
+
+
+@pytest.mark.unit
+def test_a_buyback_funded_compounder_passes_on_its_free_cash_flow_and_earned_growth():
+    # Reinvestment 0% (payouts exceed owner earnings): sustainable growth 0%, so the ER line's
+    # growth is 0% too; the record still earns 10% (revenue 11.9% over 18 years, held to the cap).
+    sheet = (_SHEET + "\n\nExpected return (7-year): 6.0%/yr = yield 8.0% + growth 0.0% + multiple "
+             "reversion -2.0% (bear 1.0% / base 6.0% / bull 9.0%)"
+             + _record(**{"Reinvestment rate": "0%", "Sustainable growth": "0.0%", "Revenue CAGR": "11.9%",
+                          "Revenue CAGR years": "18", "FCF CAGR": "9.0%", "Earned growth": "10.0%"}))
+    assert decision_checks(_compounder(), None, None, worksheet=sheet) == []
+    dear = sheet.replace("assumes 6.0%", "assumes 11.0%")
+    assert decision_checks(_compounder(), None, None, worksheet=dear) == [
+        "The compounder lane needs the price's implied growth (11.0%, reverse DCF) at or below the "
+        "earned growth (10.0%) or the sustainable growth (0.0%), whichever is higher."]
+    no_label = sheet.replace("- Earned growth 10.0%\n", "")    # falls back to the ER line's 0% growth
+    assert any("expected return of at least 12%" in p
+               for p in decision_checks(_compounder(), None, None, worksheet=no_label))
+
+
+@pytest.mark.unit
+def test_a_compounder_needs_roic_including_goodwill_in_every_counted_year():
+    three = _record(**{"ROIC incl. goodwill years above 15%": "3", "ROIC years counted": "4"})
+    assert decision_checks(_compounder(), None, None, worksheet=_SHEET + three) == [
+        "The compounder lane needs ROIC including goodwill ≥ 15% in every counted year (at least "
+        "four); the worksheet shows 3/4."]
+    short = _record(**{"ROIC incl. goodwill years above 15%": "3", "ROIC years counted": "3"})
+    assert len(decision_checks(_compounder(), None, None, worksheet=_SHEET + short)) == 1
+    slow_fcf = _record(**{"FCF CAGR": "4.0%"})
+    assert decision_checks(_compounder(), None, None, worksheet=_SHEET + slow_fcf) == [
+        "The compounder lane needs free cash flow growing at least 5%/yr over three or more years; "
+        "the worksheet shows 4.0% over 4 years."]
+    no_fcf = _record(**{"FCF CAGR": "n/a", "FCF CAGR years": "n/a"})
+    assert decision_checks(_compounder(), None, None, worksheet=_SHEET + no_fcf) == [
+        "The compounder lane needs free cash flow growing at least 5%/yr over three or more years; "
+        "the worksheet shows none."]
 
 
 @pytest.mark.unit
 def test_compounder_claim_without_the_record_is_sent_back():
     problems = decision_checks(_compounder(), None, None, worksheet=_SHEET)
     assert problems and all("compounder" in p for p in problems)
-    assert any("ROIC above 20% in every one of the last five years" in p for p in problems)
-    weak = _record(**{"ROIC years above 20%": "3", "Revenue CAGR": "6.0%", "Sustainable growth": "8.0%"})
+    assert any("ROIC including goodwill ≥ 15% in every counted year" in p for p in problems)
+    weak = _record(**{"ROIC incl. goodwill years above 15%": "3", "Revenue CAGR": "6.0%", "FCF CAGR": "2.0%"})
     problems = decision_checks(_compounder(), None, None, worksheet=_SHEET + weak)
     assert len(problems) == 3
     assert any("3/5" in p for p in problems) and any("6.0%" in p for p in problems)
-    assert any("8.0%" in p for p in problems)
+    assert any("2.0%" in p for p in problems)
     short = _record(**{"Revenue CAGR years": "4"})
     assert len(decision_checks(_compounder(), None, None, worksheet=_SHEET + short)) == 1
     dear_growth = _SHEET.replace("assumes 6.0%", "assumes 15.0%") + _record()
@@ -466,12 +511,14 @@ def test_a_compounder_needs_the_worksheets_expected_return():
     good = sheet(er("11.0", "4.0", "10.0", "-3.0"))             # 4 + 10 - 3 = 11%
     problems = decision_checks(_compounder(), None, None, worksheet=good)
     assert problems == ["The compounder lane's Buy needs an expected return of at least 12%/yr with no "
-                        "multiple expansion; the worksheet gives 11.0% (yield 4.0% + growth 10.0% + "
+                        "multiple expansion; the worksheet gives 11.0% (yield 4.0% + earned growth 10.0% + "
                         "reversion -3.0%)."]
     assert decision_checks(_compounder(rating=PortfolioRating.OVERWEIGHT), None, None, worksheet=good) == []
-    weak = sheet(er("9.0", "3.0", "8.0", "-2.0"))
+    weak = (_SHEET + "\n\n" + er("9.0", "3.0", "8.0", "-2.0")
+            + _record(**{"Earned growth": "8.0%"}))
     assert len(decision_checks(_compounder(rating=PortfolioRating.OVERWEIGHT), None, None, worksheet=weak)) == 1
-    expansion = sheet(er("14.0", "3.0", "8.0", "3.0"))          # expansion is not counted: 11%
+    expansion = (_SHEET + "\n\n" + er("14.0", "3.0", "8.0", "3.0")   # expansion is not counted: 11%
+                 + _record(**{"Earned growth": "8.0%"}))
     assert len(decision_checks(_compounder(), None, None, worksheet=expansion)) == 1
     strong = sheet(er("13.0", "4.0", "10.0", "-1.0"))
     assert decision_checks(_compounder(), None, None, worksheet=strong) == []

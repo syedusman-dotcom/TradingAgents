@@ -349,20 +349,24 @@ class PortfolioDecision(BaseModel):
         default="value",
         description=(
             "The investment lane the evidence supports; value first. 'value': the margin-of-safety "
-            "bars. 'compounder': ROIC above 20% in every one of the last five years, revenue CAGR at "
-            "least 8% (ten years, or five flagged), sustainable growth at least 10% and at or above "
-            "the reverse-DCF implied growth, and for a Buy a price no more than 1.15x the worksheet "
+            "bars. 'compounder': ROIC including goodwill at least 15% in every counted year (at "
+            "least four), revenue CAGR at least 8% (ten years, or five flagged), free cash flow "
+            "growing at least 5%/yr over at least 3 years, the reverse-DCF implied growth no higher "
+            "than the earned growth (revenue CAGR capped at the cohort base rate) or the sustainable "
+            "growth, whichever is higher, expected return = yield + earned growth + reversion (at "
+            "most 0) of at least 12%/yr, and for a Buy a price no more than 1.15x the worksheet "
             "base (1.25x for Overweight). 'inflection': TTM EBIT at least 1.5x its five-year average, "
-            "revenue growth up at least 10 points, incremental ROIC at least 20%, demand evidence the "
-            "news report marks verified, a bear case of at least 30% probability and a kill "
-            "criterion on a demand indicator (orders, backlog, customer capex)."
+            "revenue growth in the latest quarter at least 10 points above the last fiscal year's, "
+            "incremental ROIC at least 20%, demand evidence the news report marks verified, a bear "
+            "case of at least 30% probability and a kill criterion on a demand indicator (orders, "
+            "backlog, customer capex)."
         ),
     )
     lane_evidence: list[str] = Field(
         default_factory=list,
         description=(
             "The numbers the lane rests on, quoted from the worksheet's Record and inflection lines, "
-            "e.g. 'ROIC ≥ 20% 5/5 years', 'sustainable growth 14%', 'price 1.08× base'. An "
+            "e.g. 'ROIC incl. goodwill ≥ 15% 5/5 years', 'earned growth 10.0%', 'price 1.08× base'. An "
             "inflection claim includes at least one item starting 'verified:' naming the demand "
             "source (a filing, a dated company statement, a customer's dated guidance)."
         ),

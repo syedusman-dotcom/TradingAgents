@@ -21,7 +21,7 @@ YEAR_FIELDS = (
     "long_term_debt", "total_debt", "equity", "retained_earnings", "total_liabilities",
     "shares", "operating_cash_flow", "free_cash_flow",
     "capex", "dividends_paid", "buybacks", "stock_based_comp",
-    "receivables", "depreciation", "sga", "acquisitions",
+    "receivables", "depreciation", "sga", "acquisitions", "goodwill",
 )
 
 def num(x) -> float | None:
@@ -80,6 +80,18 @@ def roic(year: dict) -> float | None:
         return None
     nwc = max(0.0, ca - (num(year.get("cash")) or 0.0) - cl)
     capital = nwc + ppe
+    if capital <= 0:
+        return None
+    return div(year.get("ebit"), capital)
+
+
+def roic_incl_goodwill(year: dict) -> float | None:
+    """EBIT / (net working capital ex cash, floored at 0, + net PPE + goodwill): the return on
+    what the company paid for its businesses too. A missing goodwill row counts as 0."""
+    ca, cl, ppe = num(year.get("current_assets")), num(year.get("current_liabilities")), num(year.get("net_ppe"))
+    if ca is None or cl is None or ppe is None:
+        return None
+    capital = max(0.0, ca - (num(year.get("cash")) or 0.0) - cl) + ppe + (num(year.get("goodwill")) or 0.0)
     if capital <= 0:
         return None
     return div(year.get("ebit"), capital)
@@ -591,27 +603,49 @@ def expected_return(years: list[dict], price, market_cap, shares, avg_prices: di
 # --- record, inflection and run-rate value ---------------------------------------------
 
 ROIC_RECORD_BAR = 0.20
+ROIC_GOODWILL_BAR = 0.15
 RECORD_YEARS = 5
+FCF_CAGR_MIN_SPAN = 3           # intervals between the positive ends of the FCF CAGR
 RUN_RATE_YEARS = 3
 RUN_RATE_MAX_G3 = 0.40
-# The decay rate is the revenue cohort's base-rate cap, but never above the worksheet's top
-# perpetual scenario (the cap is a ten-year rate and reaches 10%), nor within 2 points of the rate.
-RUN_RATE_MAX_DECAY = max(GROWTH_SCENARIOS)
+# The run-rate value decays to the worksheet's base growth, and never within 2 points of the rate.
+RUN_RATE_DECAY = GROWTH_SCENARIOS[1]
 RUN_RATE_MIN_SPREAD = 0.02
+# The run-rate value is shown only when the numbers show an inflection: either is enough.
+RUN_RATE_SHOW_EBIT, RUN_RATE_SHOW_ACCEL = 1.3, 0.10
 MIN_CAGR_SPAN = 4               # years between the ends of the revenue CAGR
 
 
-def _cagr(years: list[dict], field: str, n: int) -> float | None:
-    """Compound annual growth of ``field`` over the last ``n`` years: needs ``n`` fiscal years and
-    spans up to ``n`` intervals (n - 1 when exactly n years are reported); None unless both ends
-    are positive."""
-    if len(years) < n or n < 2:
+def _fcf_cagr(years: list[dict]) -> tuple[float | None, int | None]:
+    """Free cash flow's compound annual growth between the newest and the oldest positive-FCF year
+    among the last five, and the intervals it spans; (None, None) under three intervals."""
+    positive = [(i, num(y.get("free_cash_flow"))) for i, y in enumerate(years[:RECORD_YEARS])]
+    positive = [(i, v) for i, v in positive if v is not None and v > 0]
+    if len(positive) < 2:
+        return None, None
+    (i_new, new), (i_old, old) = positive[0], positive[-1]
+    span = i_old - i_new
+    if span < FCF_CAGR_MIN_SPAN:
+        return None, None
+    return (new / old) ** (1 / span) - 1, span
+
+
+def earned_growth(revenue_cagr: float | None, revenue: float | None) -> float | None:
+    """The growth the record has earned: the revenue CAGR held to the revenue cohort's base-rate
+    cap (``ER_MAX_GROWTH`` when the cohort is unknown); None without a CAGR."""
+    revenue_cagr = num(revenue_cagr)
+    if revenue_cagr is None:
         return None
-    span = min(n, len(years) - 1)
-    new, old = num(years[0].get(field)), num(years[span].get(field))
-    if new is None or old is None or new <= 0 or old <= 0:
-        return None
-    return (new / old) ** (1 / span) - 1
+    br = growth_base_rates(revenue)
+    return min(revenue_cagr, br["cap"] if br else ER_MAX_GROWTH)
+
+
+def inflection_shows(inf: dict) -> bool:
+    """Whether the numbers show an inflection: TTM EBIT at least 1.3x its five-year average, or
+    revenue growth at least 10 points above the last fiscal year's."""
+    ebit, accel = num(inf.get("ttm_vs_5y_ebit")), num(inf.get("revenue_acceleration"))
+    return (ebit is not None and ebit >= RUN_RATE_SHOW_EBIT) or (
+        accel is not None and accel >= RUN_RATE_SHOW_ACCEL)
 
 
 def _date(x) -> date | None:
@@ -635,14 +669,18 @@ def _revenue_by_year(years: list[dict], revenue_history: dict | None) -> dict[in
 
 
 def record(years: list[dict], revenue_history: dict[str, float] | None = None) -> dict:
-    """The track record a compounder rests on: how often ROIC cleared 20% in the last five years,
-    its worst year, revenue and FCF growth, and the growth the business funds itself.
+    """The track record a compounder rests on: how often ROIC cleared 20% (and ROIC including
+    goodwill 15%) in the last five years, the worst years, revenue and FCF growth, and the growth
+    the business funds itself. ``roic_years_counted``: the years with a computable ROIC including
+    goodwill.
 
     ``revenue_history`` (fiscal year -> revenue, e.g. SEC EDGAR's ~20 years) lengthens the revenue
     CAGR only. ``revenue_cagr`` spans the longest history available, at least four years
     (``revenue_cagr_years``); the 10y/5y keys are set when a figure exactly that far back exists."""
     roics = [r for r in (roic(y) for y in years[:RECORD_YEARS]) if r is not None]
+    roics_gw = [r for r in (roic_incl_goodwill(y) for y in years[:RECORD_YEARS]) if r is not None]
     reinvestment, sustainable = reinvestment_and_sustainable_growth(years)
+    fcf_cagr, fcf_span = _fcf_cagr(years)
     series = _revenue_by_year(years, revenue_history)
     yahoo_years = {int(str(y.get("fiscal_year_end"))[:4]) for y in years
                    if str(y.get("fiscal_year_end") or "")[:4].isdigit()}
@@ -660,12 +698,16 @@ def record(years: list[dict], revenue_history: dict[str, float] | None = None) -
     return {
         "roic_min_5y": min(roics) if roics else None,
         "roic_years_above_20": sum(1 for r in roics if r >= ROIC_RECORD_BAR),
+        "roic_gw_min": min(roics_gw) if roics_gw else None,
+        "roic_gw_years_above_15": sum(1 for r in roics_gw if r >= ROIC_GOODWILL_BAR),
+        "roic_years_counted": len(roics_gw),
         "revenue_cagr": cagr,
         "revenue_cagr_years": span,
         "revenue_cagr_source": source,
         "revenue_cagr_10y": by_span.get(10),
         "revenue_cagr_5y": by_span.get(5),
-        "fcf_cagr_5y": _cagr(years, "free_cash_flow", 5),
+        "fcf_cagr": fcf_cagr,
+        "fcf_cagr_years": fcf_span,
         "reinvestment_rate": reinvestment,
         "sustainable_growth": sustainable,
         "years_available": len(years),
@@ -776,7 +818,11 @@ def inflection(years: list[dict], quarters: list[dict]) -> dict:
     def margin(q):
         return div(q.get("ebit"), q.get("revenue")) if q else None
 
-    growth_now, growth_prev = yoy(0), yoy(1)
+    # Yahoo serves five quarters, too few for the previous quarter's year-on-year growth: the
+    # latest quarter's is compared with the last fiscal year's instead.
+    growth_now = yoy(0)
+    fy_growth = (_growth(years[0].get("revenue"), years[1].get("revenue"))
+                 if len(years) >= 2 and (num(years[0].get("revenue")) or 0) > 0 else None)
     latest = avail[0] if avail else None
     margin_now, margin_before = margin(latest), margin(_year_before(avail, 0))
     # Incremental ROIC: the TTM on the last fiscal year that ended a full year before the latest quarter.
@@ -800,8 +846,9 @@ def inflection(years: list[dict], quarters: list[dict]) -> dict:
         "ttm_vs_5y_ebit": vs_5y(ttm_ebit, "ebit"),
         "ttm_revenue_growth": _growth(ttm_revenue, _sum4(year_ago, "revenue")),
         "yoy_growth_latest": growth_now,
-        "yoy_growth_previous": growth_prev,
-        "revenue_acceleration": None if growth_now is None or growth_prev is None else growth_now - growth_prev,
+        "fiscal_year_growth": fy_growth,
+        "fiscal_year_growth_end": years[0].get("fiscal_year_end") if fy_growth is not None else None,
+        "revenue_acceleration": None if growth_now is None or fy_growth is None else growth_now - fy_growth,
         "ebit_margin_change_4q": None if margin_now is None or margin_before is None else margin_now - margin_before,
         "incremental_roic": incremental,
         "quarters_available": len(avail),
@@ -928,19 +975,29 @@ def company_metrics(years: list[dict], price, market_cap, shares,
             "interest_coverage": interest_coverage(y),
         })
     inf = inflection(years, quarters or [])
-    rr_in = _run_rate_inputs(years, inf)
-    br = growth_base_rates(revenue_usd if revenue_usd is not None else cur.get("revenue"))
-    decay_to = min(br["cap"] if br else RUN_RATE_MAX_DECAY, RUN_RATE_MAX_DECAY,
-                   round(rate - RUN_RATE_MIN_SPREAD, 4))
-    # No price means the quote and statement currencies differ: no per-share value, as the worksheet.
-    run_rate = run_rate_value(rr_in["owner_earnings"], rr_in["ebit"], net_debt, shares, price,
-                              rr_in["g3"], rate, decay_to) if num(price) else None
-    if run_rate:
-        run_rate.update(basis=rr_in["basis"], g3_source=rr_in["g3_source"])
+    rec = record(years, revenue_history)
+    rec["earned_growth"] = earned_growth(rec["revenue_cagr"],
+                                         revenue_usd if revenue_usd is not None else cur.get("revenue"))
+    run_rate, run_rate_note = None, None
+    if inflection_shows(inf):
+        rr_in = _run_rate_inputs(years, inf)
+        decay_to = min(RUN_RATE_DECAY, round(rate - RUN_RATE_MIN_SPREAD, 4))
+        # No price means the quote and statement currencies differ: no per-share value, as the worksheet.
+        run_rate = run_rate_value(rr_in["owner_earnings"], rr_in["ebit"], net_debt, shares, price,
+                                  rr_in["g3"], rate, decay_to) if num(price) else None
+        if run_rate:
+            run_rate.update(basis=rr_in["basis"], g3_source=rr_in["g3_source"])
+    else:
+        ebit_x, accel = inf.get("ttm_vs_5y_ebit"), inf.get("revenue_acceleration")
+        run_rate_note = ("no inflection in the numbers (TTM EBIT "
+                         + ("n/a" if ebit_x is None else f"{ebit_x:.2f}× the 5-year average")
+                         + ", acceleration " + ("n/a" if accel is None else f"{accel * 100:+.0f} points")
+                         + "): value on the worksheet base")
     return {
-        "record": record(years, revenue_history),
+        "record": rec,
         "inflection": inf,
         "run_rate": run_rate,
+        "run_rate_note": run_rate_note,
         "price": num(price),
         "market_cap": num(market_cap),
         "enterprise_value": ev,
@@ -1146,16 +1203,19 @@ def _record_section(m: dict) -> list[str]:
     """``- Label value`` lines, each exactly one number (no thousands separators) or n/a, which the
     decision checks parse; then plain-English summaries that are not parsed."""
     rec, inf, rr = m.get("record") or {}, m.get("inflection") or {}, m.get("run_rate") or {}
-    n_years = rec.get("years_available") or 0
-    k = min(RECORD_YEARS, n_years)
+    k = rec.get("roic_years_counted") or 0
     pct0, pct1 = ".0%", ".1%"
     labelled = [
         ("ROIC years above 20%", rec.get("roic_years_above_20") if k else None, "d"),
         ("ROIC years counted", k, "d"),
-        ("ROIC worst of last 5 years", rec.get("roic_min_5y"), pct1),
+        ("ROIC worst of counted years", rec.get("roic_min_5y"), pct1),
+        ("ROIC incl. goodwill years above 15%", rec.get("roic_gw_years_above_15") if k else None, "d"),
+        ("ROIC incl. goodwill worst of counted years", rec.get("roic_gw_min"), pct1),
         ("Revenue CAGR", rec.get("revenue_cagr"), pct1),
         ("Revenue CAGR years", rec.get("revenue_cagr_years"), "d"),
-        ("FCF CAGR 5y", rec.get("fcf_cagr_5y"), pct1),
+        ("Earned growth", rec.get("earned_growth"), pct1),
+        ("FCF CAGR", rec.get("fcf_cagr"), pct1),
+        ("FCF CAGR years", rec.get("fcf_cagr_years"), "d"),
         ("Reinvestment rate", rec.get("reinvestment_rate"), pct0),
         ("Sustainable growth", rec.get("sustainable_growth"), pct1),
         ("TTM revenue vs 5y average", inf.get("ttm_vs_5y_revenue"), ".2f"),
@@ -1171,10 +1231,15 @@ def _record_section(m: dict) -> list[str]:
     lines = ["", "## Record and inflection", ""]
     lines += [f"- {label} {_fmt(value, spec)}" for label, value, spec in labelled]
 
-    words = [f"ROIC ≥ 20% in {rec.get('roic_years_above_20', 0)}/{k} years"] if k else []
+    words = [f"ROIC ≥ 20% in {rec.get('roic_years_above_20', 0)}/{k} years",
+             f"ROIC incl. goodwill ≥ 15% in {rec.get('roic_gw_years_above_15', 0)}/{k} years"] if k else []
     if rec.get("revenue_cagr") is not None:
         sec = " (SEC filings for the early years)" if rec.get("revenue_cagr_source") == "SEC filings" else ""
         words.append(f"revenue {rec['revenue_cagr']:.1%}/yr over {rec['revenue_cagr_years']} years{sec}")
+    if rec.get("earned_growth") is not None:
+        words.append(f"earned growth {rec['earned_growth']:.1%} (that CAGR held to the cohort's base rate)")
+    if rec.get("fcf_cagr") is not None:
+        words.append(f"free cash flow {rec['fcf_cagr']:.1%}/yr over {rec['fcf_cagr_years']} years")
     if rec.get("reinvestment_rate") is not None:
         words.append(f"reinvesting {rec['reinvestment_rate']:.0%} at those returns → sustainable growth "
                      f"{rec['sustainable_growth']:.0%}")
@@ -1182,10 +1247,12 @@ def _record_section(m: dict) -> list[str]:
     parts = []
     if inf.get("ttm_vs_5y_ebit") is not None:
         parts.append(f"TTM EBIT is {inf['ttm_vs_5y_ebit']:.2f}× the 5-year average")
-    before, now = inf.get("yoy_growth_previous"), inf.get("yoy_growth_latest")
+    before, now = inf.get("fiscal_year_growth"), inf.get("yoy_growth_latest")
     if before is not None and now is not None:
         verb = "accelerated" if now > before else "slowed" if now < before else "held"
-        parts.append(f"revenue growth {verb} from {before:.0%} to {now:.0%} y/y in the latest quarter")
+        fy = str(inf.get("fiscal_year_growth_end") or "")[:4]
+        parts.append(f"revenue growth {verb} from {before:.0%} in fiscal {fy} to {now:.0%} y/y in the "
+                     "latest quarter")
     if inf.get("incremental_roic") is not None:
         parts.append(f"incremental ROIC {inf['incremental_roic']:.0%}")
     used = inf.get("quarters_used") or []
@@ -1202,9 +1269,11 @@ def _record_section(m: dict) -> list[str]:
                    if rr.get("implied_g3") is not None else "")
         lines.append(f"Run-rate: {rr['basis']} earnings growing {rr['g3']:.0%} a year for three years "
                      f"({rr['g3_source']}, held to 0-{RUN_RATE_MAX_G3:.0%}), then {rr['decay_to']:.0%} for ever "
-                     f"(the revenue cohort's base-rate cap, at most {RUN_RATE_MAX_DECAY:.0%} and "
-                     f"{RUN_RATE_MIN_SPREAD:.0%} below the {rr['discount_rate']:.1%} discount rate), "
-                     f"worth {rr['base']:,.2f} a share{implied}{oe_note}.")
+                     f"(the worksheet's base growth, at least {RUN_RATE_MIN_SPREAD:.0%} below the "
+                     f"{rr['discount_rate']:.1%} discount rate), worth {rr['base']:,.2f} a share"
+                     f"{implied}{oe_note}. For an inflection candidate only.")
+    elif m.get("run_rate_note"):
+        lines.append(f"Run-rate: not shown — {m['run_rate_note']}.")
     else:
         lines.append("Run-rate: not computable (no price, or run-rate owner earnings and EBIT are not positive).")
     return lines

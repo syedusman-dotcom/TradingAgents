@@ -18,6 +18,7 @@ from tradingagents.dataflows.value_metrics import (  # noqa: F401 - re-exported 
     altman_z,
     current_discount_rate,
     debt_to_equity,
+    earned_growth,
     earnings_yield,
     enterprise_value,
     expected_return,

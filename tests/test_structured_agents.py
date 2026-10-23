@@ -828,7 +828,12 @@ def test_pm_prompt_describes_the_three_lanes():
         "pick the lane the evidence supports: value first; compounder when the record qualifies; "
         "inflection only with verified demand evidence from the news report; state the lane's numbers "
         "in `**Lane**:`",
-        "ROIC above 20% in every one of the last five years",
+        "ROIC including goodwill of at least 15% in every counted year (at least four)",
+        "free cash flow growing ≥ 5%/yr over ≥ 3 years; the price's implied growth (reverse DCF) no "
+        "higher than the earned growth (revenue CAGR capped at the cohort base rate) or the "
+        "sustainable growth, whichever is higher; expected return = yield + earned growth + "
+        "reversion (≤ 0) ≥ 12%/yr",
+        "revenue growth in the latest quarter at least 10 points above the last fiscal year's",
         "no more than 1.15× the worksheet base",
         "TTM EBIT at least 1.5× its five-year average",
         "a bear case (growth stops now) of at least 30%",
@@ -844,11 +849,11 @@ def test_pm_sends_back_a_compounder_claim_the_record_does_not_support():
 
     prompts = []
     llm, structured = _sequenced_pm_llm(prompts, [_compounder()] * 2)
-    weak = _record(**{"ROIC years above 20%": "3"})
+    weak = _record(**{"ROIC incl. goodwill years above 15%": "3"})
     state = {**_make_pm_state(), "fundamentals_report": "## Prose\nx\n" + _SHEET + weak}
     result = create_portfolio_manager(llm)(state)
     assert structured.invoke.call_count == 2
-    assert "## Record and inflection" in prompts[0] and "- ROIC years above 20% 3" in prompts[0]
+    assert "## Record and inflection" in prompts[0] and "- ROIC incl. goodwill years above 15% 3" in prompts[0]
     assert "3/5" in prompts[1] and "**Unresolved Checks**:" in result["final_trade_decision"]
 
     prompts.clear()
@@ -883,7 +888,8 @@ def test_fundamentals_analyst_quotes_the_record_and_appends_the_tools_record(mon
     from tradingagents.agents.decision_math import record_excerpt, worksheet_record
 
     source = " ".join(inspect.getsource(fundamentals_analyst).replace('"', " ").split())
-    assert "Quote the Record and inflection lines and the run-rate value." in source
+    assert ("Quote the Record and inflection lines and the run-rate value; the run-rate value applies "
+            "to inflection candidates only; otherwise value on the worksheet base.") in source
 
     tool_text = "# Verified value metrics\n" + _SHEET + _record()
     messages = [AIMessage(content="", tool_calls=[{"name": "get_value_metrics", "args": {}, "id": "1"}]),

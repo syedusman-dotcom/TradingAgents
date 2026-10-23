@@ -1222,7 +1222,10 @@ def test_screen_rows_carry_lane_columns():
     assert set(lane) <= set(row)
     assert row["ttm_vs_5y_ebit"] == pytest.approx(30 * 4 / 80)
     assert row["revenue_cagr_10y"] is None
-    assert row["revenue_acceleration"] == pytest.approx((120 / 116 - 1) - (119 / 115 - 1))
+    assert row["revenue_acceleration"] == pytest.approx(120 / 116 - 1)    # fiscal 2025 grew 0%
+    assert row["roic_years_counted"] == 5 and row["roic_gw_min"] == pytest.approx(0.80)
+    assert row["fcf_cagr"] is None and row["earned_growth"] is None       # no FCF reported
+    assert row["compounder_return"] is None
     old_cache = screener.evaluate(data)                   # a record cached before quarters were fetched
     assert all(old_cache[k] is None for k in ("revenue_cagr_10y", "ttm_vs_5y_ebit", "revenue_acceleration"))
 
@@ -1253,7 +1256,7 @@ def test_fundamentals_cache_quarterly_statements(tmp_path, monkeypatch):
     monkeypatch.setattr(market_data, "closes", lambda t: [20.0])
     paths = Paths(tmp_path)
     data = market_data.fundamentals("ABC", paths)
-    assert market_data.CACHE_SCHEMA == 5 and data["schema"] == 5
+    assert market_data.CACHE_SCHEMA == 6 and data["schema"] == 6
     assert data["industry"] == "Specialty Industrial Machinery"
     assert [q["fiscal_year_end"] for q in data["quarters"]] == ["2026-06-30", "2026-03-31"]
     assert market_data.fundamentals("ABC", paths)["from_cache"] is True
@@ -1422,8 +1425,8 @@ def test_dislocation_metrics_and_hint():
     assert screener.lane_hint({**base, "fundamentals_intact": "True"}) == "dislocation"   # read from a CSV
     assert screener.lane_hint({**base, "fundamentals_intact": None}) == ""
     assert screener.lane_hint({**base, "passes_filters": False}) == ""
-    compounder = {**base, "roic_min": 0.25, "revenue_cagr": 0.11, "revenue_cagr_years": 10,
-                  "sustainable_growth": 0.14}
+    compounder = {**base, "roic_gw_min": 0.18, "roic_years_counted": 5, "revenue_cagr": 0.11,
+                  "revenue_cagr_years": 10, "fcf_cagr": 0.09, "fcf_cagr_years": 4}
     assert screener.lane_hint(compounder) == "compounder"                 # a dislocated compounder
     assert screener.lane_hints(compounder) == ["compounder", "dislocation"]
     old = {"passes_filters": True, "roic_min": 0.1}                       # a screen from before the columns

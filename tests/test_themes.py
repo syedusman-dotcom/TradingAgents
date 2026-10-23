@@ -100,15 +100,17 @@ def test_theme_report_lists_ideas_candidates_and_skips(tmp_path):
 
 @pytest.mark.unit
 def test_lane_hint_column():
-    good = {"roic_min": 0.25, "revenue_cagr": 0.11, "revenue_cagr_years": 10, "sustainable_growth": 0.14,
+    good = {"roic_gw_min": 0.16, "roic_years_counted": 4, "revenue_cagr": 0.11, "revenue_cagr_years": 10,
+            "fcf_cagr": 0.09, "fcf_cagr_years": 3, "sustainable_growth": 0.0,   # a buyback compounder
             "ttm_vs_5y_ebit": 1.1, "revenue_acceleration": 0.0, "passes_filters": True}
     assert screener.lane_hint(good) == "compounder"
-    assert screener.lane_hint({**good, "roic_years": 3}) == ""
-    assert screener.lane_hint({**good, "roic_years": 5}) == "compounder"
+    assert screener.lane_hint({**good, "roic_years_counted": 3}) == ""
+    assert screener.lane_hint({**good, "roic_gw_min": 0.14}) == ""
+    assert screener.lane_hint({**good, "roic_min": 0.5, "roic_gw_min": None}) == ""
     assert screener.lane_hint({**good, "revenue_cagr_years": 4}) == ""
-    assert screener.lane_hint({**good, "sustainable_growth": 0.09}) == ""
+    assert screener.lane_hint({**good, "fcf_cagr": 0.04}) == ""
+    assert screener.lane_hint({**good, "fcf_cagr_years": 2}) == ""
     assert screener.lane_hint({**good, "passes_filters": False}) == ""
-    assert screener.lane_hint({**good, "roic_min": None}) == ""
     hot = {"roic_min": 0.1, "ttm_vs_5y_ebit": 1.6, "revenue_acceleration": 0.12, "passes_filters": True}
     assert screener.lane_hint(hot) == "inflection"
     assert screener.lane_hint({**hot, "revenue_acceleration": 0.05}) == ""
@@ -137,6 +139,12 @@ def test_top_candidates_add_compounders(tmp_path):
     _write_screen(paths, _screen_rows())
     picks = screener.top_candidates(paths, {"OWN"}, 3, compounders=2)
     assert [p["ticker"] for p in picks] == ["AAA", "BBB", "CCC", "CMP2", "CMP1"]
+    rows = _screen_rows()
+    for r in rows:                     # the compounder return ranks them: CMP4 first, CMP2 last
+        r["compounder_return"] = {"CMP1": 0.13, "CMP2": 0.11, "CMP4": 0.16}.get(r["ticker"])
+    _write_screen(paths, rows, day="2026-10-20")
+    picks = screener.top_candidates(paths, {"OWN"}, 3, compounders=2)
+    assert [p["ticker"] for p in picks] == ["AAA", "BBB", "CCC", "CMP4", "CMP1"]
     assert [p["ticker"] for p in screener.top_candidates(paths, {"OWN"}, 3)] == ["AAA", "BBB", "CCC"]
     _write_screen(paths, [{k: v for k, v in r.items() if k != "lane_hint"} for r in _screen_rows()],
                   day="2026-10-21")                                     # a screen from before the column

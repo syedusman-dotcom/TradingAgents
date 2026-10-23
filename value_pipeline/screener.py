@@ -84,6 +84,11 @@ def evaluate(data: dict, normalize_years: int = 5, roic_cap: float = 1.0,
         "revenue_cagr": rec["revenue_cagr"],
         "revenue_cagr_years": rec["revenue_cagr_years"],
         "sustainable_growth": rec["sustainable_growth"],
+        "roic_gw_min": rec["roic_gw_min"],
+        "roic_years_counted": rec["roic_years_counted"],
+        "fcf_cagr": rec["fcf_cagr"],
+        "fcf_cagr_years": rec["fcf_cagr_years"],
+        "earned_growth": metrics.earned_growth(rec["revenue_cagr"], cur.get("revenue")),
         "ttm_vs_5y_ebit": inf["ttm_vs_5y_ebit"],
         "revenue_acceleration": inf["revenue_acceleration"],
         "drawdown_from_high": dis["drawdown_from_high"],
@@ -96,7 +101,18 @@ def evaluate(data: dict, normalize_years: int = 5, roic_cap: float = 1.0,
         "momentum_12_1": tr.get("momentum_12_1"),
     }
     row.update({f"f_{k}": v for k, v in fs["points"].items()})
+    row["compounder_return"] = compounder_return(row)
     return row
+
+
+def compounder_return(row: dict) -> float | None:
+    """The compounder lane's expected return: shareholder yield + earned growth + multiple
+    reversion counted only when it is negative; None when any part is missing."""
+    parts = [row.get(k) for k in ("er_yield", "earned_growth", "er_reversion")]
+    if any(not isinstance(v, (int, float)) or v != v for v in parts):
+        return None
+    y, g, r = parts
+    return y + g + min(r, 0.0)
 
 
 AVERAGE_MIN_YEARS = 3
@@ -128,6 +144,7 @@ def with_target(row: dict, years, price, market_cap, shares, target: float) -> N
     row.update(expected_return=er.get("expected_return"), er_yield=er.get("yield"),
                er_growth=er.get("growth"), er_reversion=er.get("reversion"),
                ev_ebit=er.get("ev_ebit_now"), er_target_multiple=er.get("ev_ebit_target"))
+    row["compounder_return"] = compounder_return(row)
 
 
 def apply_sector_targets(rows: list[dict], inputs: dict[str, tuple]) -> None:
@@ -199,9 +216,11 @@ def latest_screen(paths: Paths) -> Path | None:
 def top_candidates(paths: Paths, owned: set[str], n: int, compounders: int = 0,
                    dislocations: int = 0) -> list[dict]:
     """The best-ranked, not-owned, not-FREEFALL tickers from the latest screen, then up to
-    ``compounders`` compounder-hinted ones, then up to ``dislocations`` dislocation-hinted ones
-    (each best expected return first, not already listed). A dislocated compounder counts as a
-    dislocation too (its ``hints`` column lists both)."""
+    ``compounders`` compounder-hinted ones (best compounder return first: yield + earned growth +
+    reversion at most 0), then up to ``dislocations`` dislocation-hinted ones (best expected
+    return first), each not already listed. A dislocated compounder counts as a dislocation too
+    (its ``hints`` column lists both). A screen from before the compounder return ranks
+    compounders by expected return."""
     path = latest_screen(paths)
     if path is None:
         return []
@@ -213,7 +232,8 @@ def top_candidates(paths: Paths, owned: set[str], n: int, compounders: int = 0,
             continue
         has = _hint_series(df).map(lambda h, hint=hint: hint in h.split(";"))
         hinted = df[has & ~df["ticker"].isin(picks["ticker"])]
-        hinted = hinted.sort_values("expected_return", ascending=False, na_position="last")
+        key = "compounder_return" if hint == "compounder" and "compounder_return" in df else "expected_return"
+        hinted = hinted.sort_values(key, ascending=False, na_position="last")
         picks = pd.concat([picks, hinted.head(count)])
     return picks.to_dict("records")
 
@@ -228,8 +248,9 @@ def _hint_series(df: pd.DataFrame) -> pd.Series:
 
 
 # The lane hints: a pointer for the review, not a verdict (the Portfolio Manager decides the lane).
-COMPOUNDER_ROIC, COMPOUNDER_ROIC_YEARS = 0.20, 4
-COMPOUNDER_CAGR, COMPOUNDER_CAGR_YEARS, COMPOUNDER_GROWTH = 0.08, 5, 0.10
+COMPOUNDER_ROIC, COMPOUNDER_ROIC_YEARS = 0.15, 4           # ROIC including goodwill, worst counted year
+COMPOUNDER_CAGR, COMPOUNDER_CAGR_YEARS = 0.08, 5
+COMPOUNDER_FCF_CAGR, COMPOUNDER_FCF_YEARS = 0.05, 3
 INFLECTION_EBIT, INFLECTION_ACCELERATION = 1.5, 0.10
 DISLOCATION_DRAWDOWN, DISLOCATION_MONTH = -0.25, -0.20
 SCARE_MIN_NAMES = 3
@@ -253,12 +274,12 @@ def lane_hints(row: dict) -> list[str]:
     if row.get("passes_filters") not in (True, "True"):
         return []
     hints = []
-    years = row.get("roic_years")
-    roic_ok = _at_least(row, "roic_min", COMPOUNDER_ROIC) and (
-        years is None or years != years or years >= COMPOUNDER_ROIC_YEARS)
-    if (roic_ok and _at_least(row, "revenue_cagr", COMPOUNDER_CAGR)
+    if (_at_least(row, "roic_gw_min", COMPOUNDER_ROIC)
+            and _at_least(row, "roic_years_counted", COMPOUNDER_ROIC_YEARS)
+            and _at_least(row, "revenue_cagr", COMPOUNDER_CAGR)
             and _at_least(row, "revenue_cagr_years", COMPOUNDER_CAGR_YEARS)
-            and _at_least(row, "sustainable_growth", COMPOUNDER_GROWTH)):
+            and _at_least(row, "fcf_cagr", COMPOUNDER_FCF_CAGR)
+            and _at_least(row, "fcf_cagr_years", COMPOUNDER_FCF_YEARS)):
         hints.append("compounder")
     if _at_least(row, "ttm_vs_5y_ebit", INFLECTION_EBIT) and _at_least(
             row, "revenue_acceleration", INFLECTION_ACCELERATION):

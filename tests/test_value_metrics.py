@@ -285,6 +285,15 @@ def test_yahoo_rows_map_the_accounting_fields():
     frame = pd.DataFrame({pd.Timestamp("2025-12-31"): list(rows.values())}, index=list(rows))
     (year,) = yahoo_vm.statement_years(frame)
     assert (year["receivables"], year["depreciation"], year["sga"], year["acquisitions"]) == (120.0, 40.0, 150.0, -7.0)
+    assert year["goodwill"] is None
+
+    def with_rows(extra):
+        r = {**rows, **extra}
+        return pd.DataFrame({pd.Timestamp("2025-12-31"): list(r.values())}, index=list(r))
+
+    both = with_rows({"Goodwill And Other Intangible Assets": 900.0, "Goodwill": 600.0})
+    assert yahoo_vm.statement_years(both)[0]["goodwill"] == 900.0        # intangibles included first
+    assert yahoo_vm.statement_years(with_rows({"Goodwill": 600.0}))[0]["goodwill"] == 600.0
 
 
 @pytest.mark.unit
@@ -568,8 +577,10 @@ Q_ENDS = ["2026-06-30", "2026-03-31", "2025-12-31", "2025-09-30", "2025-06-30",
 
 
 RECORD_LABELS = (
-    "ROIC years above 20%", "ROIC years counted", "ROIC worst of last 5 years", "Revenue CAGR",
-    "Revenue CAGR years", "FCF CAGR 5y", "Reinvestment rate", "Sustainable growth",
+    "ROIC years above 20%", "ROIC years counted", "ROIC worst of counted years",
+    "ROIC incl. goodwill years above 15%", "ROIC incl. goodwill worst of counted years", "Revenue CAGR",
+    "Revenue CAGR years", "Earned growth", "FCF CAGR", "FCF CAGR years", "Reinvestment rate",
+    "Sustainable growth",
     "TTM revenue vs 5y average", "TTM EBIT vs 5y average", "Revenue acceleration",
     "EBIT margin change on a year earlier", "Incremental ROIC", "Run-rate value", "Run-rate 3-year growth",
     "Run-rate decay", "Implied 3-year growth",
@@ -588,15 +599,19 @@ def _quarters():
 def test_record_counts_roic_years_and_cagrs():
     years = [_year(fiscal_year_end=f"{2025 - i}-12-31", revenue=1000 * 1.1 ** (10 - i)) for i in range(11)]
     years[2]["ebit"] = 100                          # ROIC 100/700, below 20%
-    years[5]["free_cash_flow"] = 90                 # FCF doubled over five years
+    years[4]["free_cash_flow"] = 90                 # FCF doubled over the four intervals of years[:5]
+    years[0]["goodwill"] = 300                      # ROIC incl. goodwill 200/1000 = 20%
     rec = vm.record(years)
     assert rec["years_available"] == 11
     assert rec["roic_years_above_20"] == 4
     assert rec["roic_min_5y"] == pytest.approx(100 / 700)
+    assert rec["roic_years_counted"] == 5 and rec["roic_gw_years_above_15"] == 4
+    assert rec["roic_gw_min"] == pytest.approx(100 / 700)
     assert rec["revenue_cagr"] == pytest.approx(0.10) and rec["revenue_cagr_years"] == 10
     assert rec["revenue_cagr_10y"] == pytest.approx(0.10)
     assert rec["revenue_cagr_5y"] == pytest.approx(0.10)
-    assert rec["fcf_cagr_5y"] == pytest.approx(2 ** (1 / 5) - 1)
+    assert rec["fcf_cagr"] == pytest.approx(2 ** (1 / 4) - 1) and rec["fcf_cagr_years"] == 4
+    assert "fcf_cagr_5y" not in rec
     assert rec["reinvestment_rate"] == pytest.approx(1 - 240 / 480)  # payout 80 of owner earnings 160 a year
     assert rec["sustainable_growth"] == pytest.approx((4 * 200 / 700 + 100 / 700) / 5 * 0.5)
     er = vm.expected_return(years, price=20, market_cap=2000, shares=100)
@@ -608,12 +623,15 @@ def test_record_with_three_years_is_partial():
     rec = vm.record([_year(fiscal_year_end=f"{2025 - i}-12-31") for i in range(3)])
     assert rec["years_available"] == 3 and rec["roic_years_above_20"] == 3
     assert rec["revenue_cagr"] is None and rec["revenue_cagr_years"] is None   # a 2-year span is too short
-    assert rec["revenue_cagr_10y"] is None and rec["revenue_cagr_5y"] is None and rec["fcf_cagr_5y"] is None
+    assert rec["revenue_cagr_10y"] is None and rec["revenue_cagr_5y"] is None
+    assert rec["fcf_cagr"] is None and rec["fcf_cagr_years"] is None      # two intervals: too short
+    assert rec["roic_years_counted"] == 3
     five = vm.record([_year(fiscal_year_end=f"{2025 - i}-12-31", revenue=1000 * 1.1 ** (4 - i)) for i in range(5)])
     assert five["revenue_cagr_years"] == 4 and five["revenue_cagr"] == pytest.approx(0.10)
     assert five["revenue_cagr_5y"] is None
     empty = vm.record([])
     assert empty["years_available"] == 0 and empty["roic_min_5y"] is None
+    assert empty["roic_years_counted"] == 0 and empty["roic_gw_min"] is None
     assert empty["reinvestment_rate"] is None and empty["sustainable_growth"] is None
 
 
@@ -629,19 +647,53 @@ def test_record_extends_the_revenue_cagr_with_the_sec_history():
 
 
 @pytest.mark.unit
+def test_fcf_cagr_runs_between_the_positive_ends_of_five_years():
+    years = [_year(fiscal_year_end=f"{2025 - i}-12-31", free_cash_flow=f) for i, f in
+             enumerate([-10, 150, 120, 100, 75, 10])]
+    rec = vm.record(years)                     # newest positive FY2024 (150) on the oldest, FY2021 (75)
+    assert rec["fcf_cagr"] == pytest.approx(2 ** (1 / 3) - 1) and rec["fcf_cagr_years"] == 3
+    years[4]["free_cash_flow"] = -5            # FY2022 (100) is the oldest positive: two intervals
+    assert vm.record(years)["fcf_cagr"] is None and vm.record(years)["fcf_cagr_years"] is None
+
+
+@pytest.mark.unit
+def test_roic_including_goodwill_adds_it_to_capital():
+    assert vm.roic_incl_goodwill(_year(goodwill=300)) == pytest.approx(200 / 1000)
+    assert vm.roic_incl_goodwill(_year()) == pytest.approx(vm.roic(_year()))   # no goodwill row: 0
+    assert vm.roic_incl_goodwill(_year(net_ppe=None)) is None
+    assert "goodwill" in vm.YEAR_FIELDS
+
+
+@pytest.mark.unit
+def test_earned_growth_is_the_revenue_cagr_held_to_the_cohort_cap():
+    years = [_year(fiscal_year_end=f"{2025 - i}-12-31", revenue=1000 * 1.12 ** (10 - i)) for i in range(11)]
+    small = vm.company_metrics(years, 20, 2000, 100)
+    assert small["record"]["earned_growth"] == pytest.approx(0.10)        # under $1B the cap is 10%
+    large = vm.company_metrics(years, 20, 2000, 100, revenue_usd=30e9)
+    assert large["record"]["earned_growth"] == pytest.approx(0.05)        # over $25B: 5%
+    slow = [_year(fiscal_year_end=f"{2025 - i}-12-31", revenue=1000 * 1.04 ** (10 - i)) for i in range(11)]
+    assert vm.company_metrics(slow, 20, 2000, 100)["record"]["earned_growth"] == pytest.approx(0.04)
+    assert vm.company_metrics([_year(), _year()], 20, 2000, 100)["record"]["earned_growth"] is None
+    assert vm.earned_growth(0.12, None) == pytest.approx(vm.ER_MAX_GROWTH)    # unknown cohort
+    report = vm.render_report("X", "2026-10-23", large)
+    assert "- Earned growth 5.0%" in report
+
+
+@pytest.mark.unit
 def test_inflection_ttm_and_acceleration():
     years = [_year(fiscal_year_end=f"{2025 - i}-12-31", revenue=400, ebit=80) for i in range(5)]
     years[1]["net_ppe"] = 400                     # FY2024, the last one ended a year before the quarter
+    years[1]["revenue"] = 320                     # fiscal 2025 grew 25%
     inf = vm.inflection(years, _quarters())
     assert inf["quarters_available"] == 9
     assert inf["quarters_used"] == Q_ENDS[:4]
     assert inf["ttm_revenue"] == pytest.approx(518)
     assert inf["ttm_ebit"] == pytest.approx(129.5)
-    assert inf["ttm_vs_5y_revenue"] == pytest.approx(518 / 400)
+    assert inf["ttm_vs_5y_revenue"] == pytest.approx(518 / 384)
     assert inf["ttm_vs_5y_ebit"] == pytest.approx(129.5 / 80)
     assert inf["yoy_growth_latest"] == pytest.approx(0.30)
-    assert inf["yoy_growth_previous"] == pytest.approx(0.10)
-    assert inf["revenue_acceleration"] == pytest.approx(0.30 - 0.10)
+    assert inf["fiscal_year_growth"] == pytest.approx(0.25) and "yoy_growth_previous" not in inf
+    assert inf["revenue_acceleration"] == pytest.approx(0.30 - 0.25)
     assert inf["ebit_margin_change_4q"] == pytest.approx(0.05)
     # (TTM EBIT 129.5 - FY2024's 80) after tax / (invested capital 700 now - 600 at FY2024's end)
     assert inf["incremental_roic"] == pytest.approx((129.5 - 80) * (1 - vm.TAX_RATE) / 100)
@@ -657,9 +709,10 @@ def test_inflection_uses_last_four_available_quarters():
     short = vm.inflection(years, _quarters()[:3])
     assert short["ttm_revenue"] is None and short["revenue_acceleration"] is None
     assert short["incremental_roic"] is None and short["quarters_available"] == 3
-    six = vm.inflection(years, _quarters()[:6])
-    assert six["revenue_acceleration"] == pytest.approx(0.20)
-    assert vm.inflection(years, _quarters()[:5])["revenue_acceleration"] is None
+    assert vm.inflection(years, _quarters()[:6])["revenue_acceleration"] is None   # one fiscal year
+    two = [_year(revenue=400), _year(revenue=400)]
+    assert vm.inflection(two, _quarters()[:5])["revenue_acceleration"] == pytest.approx(0.30)
+    assert vm.inflection([_year(revenue=400), _year(revenue=0)], _quarters())["revenue_acceleration"] is None
     none = vm.inflection([], [])
     assert none["ttm_vs_5y_ebit"] is None and none["quarters_used"] == []
     # Incremental ROIC: FY2025 ended under a year before the latest quarter, so FY2024 is the base.
@@ -693,7 +746,7 @@ def test_quarter_owner_earnings_fall_back_to_cash_flow_less_capex():
     inf = vm.inflection([_year(fiscal_year_end="2025-12-31")], qs)
     assert inf["ttm_owner_earnings"] == pytest.approx(2 * (70 - 20 - 5) + 2 * (50 - 5))
     assert inf["ttm_fcf_derived_quarters"] == 2
-    m = vm.company_metrics([_year(fiscal_year_end="2025-12-31")], 20, 2000, 100, quarters=qs)
+    m = vm.company_metrics([_year(fiscal_year_end="2025-12-31", ebit=80)], 20, 2000, 100, quarters=qs)
     assert "operating cash flow less capex for 2 of the 4 quarters" in vm.render_report("ABC", "x", m)
     bare = [{**q, "free_cash_flow": None} for q in _quarters()]
     assert vm.inflection([], bare)["ttm_owner_earnings"] is None
@@ -750,7 +803,7 @@ def test_report_has_record_and_inflection_lines():
     m = vm.company_metrics(years, price=20, market_cap=2000, shares=100, quarters=_quarters())
     assert m["run_rate"]["g3"] == pytest.approx(518 / 425 - 1)
     assert "TTM a year earlier" in m["run_rate"]["g3_source"]
-    assert m["run_rate"]["decay_to"] == 0.05   # under $1B the cap is 10%; the worksheet's 5% is the ceiling
+    assert m["run_rate"]["decay_to"] == 0.03   # the worksheet's base growth, whatever the cohort
     assert m["record"]["roic_years_above_20"] == 5 and m["inflection"]["quarters_available"] == 9
     report = vm.render_report("ABC", "2026-10-23", m)
     section = report.split("## Record and inflection", 1)[1]
@@ -762,17 +815,42 @@ def test_report_has_record_and_inflection_lines():
     assert values["ROIC years above 20%"] == "5" and values["ROIC years counted"] == "5"
     assert (values["Revenue CAGR"], values["Revenue CAGR years"]) == ("0.0%", "4")
     assert values["TTM EBIT vs 5y average"] == "1.62"
-    assert values["Revenue acceleration"] == "+20%"
+    assert values["ROIC incl. goodwill years above 15%"] == "5"
+    assert values["ROIC incl. goodwill worst of counted years"] == "80.0%"     # 80 / (0 + 100)
+    assert (values["FCF CAGR"], values["FCF CAGR years"], values["Earned growth"]) == ("0.0%", "4", "0.0%")
+    assert values["Revenue acceleration"] == "+30%"
     assert values["Incremental ROIC"] == "7%"        # (129.5 - 80) x 0.79 / (700 - 100)
-    assert (values["Run-rate 3-year growth"], values["Run-rate decay"]) == ("22%", "5%")
+    assert (values["Run-rate 3-year growth"], values["Run-rate decay"]) == ("22%", "3%")
     assert values["Run-rate value"] == f"{m['run_rate']['base']:.2f}"
     assert values["Implied 3-year growth"] == f"{m['run_rate']['implied_g3']:.0%}"
-    assert "Record: ROIC ≥ 20% in 5/5 years" in section
-    assert "Inflection: TTM EBIT is 1.62× the 5-year average; revenue growth accelerated from 10% to 30% y/y" in section
+    assert "Record: ROIC ≥ 20% in 5/5 years, ROIC incl. goodwill ≥ 15% in 5/5 years" in section
+    assert ("Inflection: TTM EBIT is 1.62× the 5-year average; revenue growth accelerated from 0% in "
+            "fiscal 2025 to 30% y/y in the latest quarter") in section
+    assert "Run-rate: TTM earnings growing 22% a year for three years" in section
     bare = vm.render_report("ABC", "2026-10-23", vm.company_metrics([_year(), _year()], 20, 2000, 100))
     assert "- TTM EBIT vs 5y average n/a" in bare and "- Revenue acceleration n/a" in bare
     assert "- Revenue CAGR n/a" in bare and "- Revenue CAGR years n/a" in bare
-    assert "- Run-rate value " in bare and "- Incremental ROIC n/a" in bare
+    assert "- Run-rate value n/a" in bare and "- Incremental ROIC n/a" in bare
+    assert ("Run-rate: not shown — no inflection in the numbers (TTM EBIT n/a, acceleration n/a): "
+            "value on the worksheet base.") in bare
+
+
+@pytest.mark.unit
+def test_run_rate_is_not_shown_without_an_inflection():
+    years = [_year(fiscal_year_end=f"{2025 - i}-12-31") for i in range(5)]
+    years[1]["revenue"] = 800                       # fiscal 2025 grew 25%; the latest quarter 30%
+    m = vm.company_metrics(years, price=20, market_cap=2000, shares=100, quarters=_quarters())
+    assert m["run_rate"] is None
+    note = ("no inflection in the numbers (TTM EBIT 0.65× the 5-year average, acceleration +5 points): "
+            "value on the worksheet base")
+    assert m["run_rate_note"] == note
+    report = vm.render_report("ABC", "2026-10-23", m)
+    for label in ("Run-rate value", "Run-rate 3-year growth", "Run-rate decay", "Implied 3-year growth"):
+        assert f"- {label} n/a" in report
+    assert f"Run-rate: not shown — {note}." in report
+    assert vm.inflection_shows({"ttm_vs_5y_ebit": 1.3, "revenue_acceleration": None})
+    assert vm.inflection_shows({"ttm_vs_5y_ebit": None, "revenue_acceleration": 0.10})
+    assert not vm.inflection_shows({"ttm_vs_5y_ebit": 1.29, "revenue_acceleration": 0.09})
 
 
 @pytest.mark.unit
@@ -791,7 +869,8 @@ def test_run_rate_growth_uses_ttm_on_the_last_fiscal_year_without_eight_quarters
     few = vm.company_metrics(years, price=20, market_cap=2000, shares=100,
                              quarters=[_quarter("2026-06-30", 130, 30), _quarter("2025-06-30", 100, 20)])
     assert "latest quarter" in few["run_rate"]["g3_source"] and few["run_rate"]["g3"] == pytest.approx(0.30)
-    assert vm.company_metrics(years, 20, 2000, 100, rate=0.06)["run_rate"]["decay_to"] == 0.04
+    low_rate = vm.company_metrics(years, 20, 2000, 100, rate=0.045, quarters=_quarters()[:5])
+    assert low_rate["run_rate"]["decay_to"] == 0.025          # 2 points under the rate
 
 
 @pytest.mark.unit
@@ -833,7 +912,7 @@ def test_yahoo_vendor_reads_quarterly_statements(monkeypatch):
     monkeypatch.setattr(yahoo_vm, "current_discount_rate", lambda: {"rate": 0.09, "treasury_10y": None})
     report = yahoo_vm.get_value_metrics("ABC", "2026-10-23")
     assert "- TTM EBIT vs 5y average 1.62" in report
-    assert "- Revenue acceleration +20%" in report
+    assert "- Revenue acceleration +30%" in report                     # fiscal 2025 grew 0%
 
 
 @pytest.mark.unit

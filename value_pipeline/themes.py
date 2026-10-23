@@ -11,13 +11,19 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+from tradingagents.dataflows.value_metrics import (
+    RUN_RATE_SHOW_ACCEL,
+    RUN_RATE_SHOW_EBIT,
+    inflection_shows,
+)
 from value_pipeline.config import Paths
 
 log = logging.getLogger(__name__)
 
 # A theme idea joins the review when either number shows the inflection (looser than the
-# screen's inflection hint: the theme is the first half of the evidence).
-MIN_TTM_VS_5Y_EBIT, MIN_REVENUE_ACCELERATION = 1.3, 0.10
+# screen's inflection hint: the theme is the first half of the evidence). The same bar decides
+# whether the worksheet shows a run-rate value.
+MIN_TTM_VS_5Y_EBIT, MIN_REVENUE_ACCELERATION = RUN_RATE_SHOW_EBIT, RUN_RATE_SHOW_ACCEL
 
 PROMPT = """Today is {today}. Theme: {theme}.
 
@@ -78,15 +84,15 @@ def _pct(v: float | None) -> str:
 
 
 def _inflecting(row: dict) -> bool:
-    ebit, accel = _num(row, "ttm_vs_5y_ebit"), _num(row, "revenue_acceleration")
-    return (ebit is not None and ebit >= MIN_TTM_VS_5Y_EBIT) or (
-        accel is not None and accel >= MIN_REVENUE_ACCELERATION)
+    return inflection_shows({"ttm_vs_5y_ebit": _num(row, "ttm_vs_5y_ebit"),
+                             "revenue_acceleration": _num(row, "revenue_acceleration")})
 
 
 def _figures(row: dict) -> str:
     ebit, accel = _num(row, "ttm_vs_5y_ebit"), _num(row, "revenue_acceleration")
-    return (f"TTM EBIT {'–' if ebit is None else f'{ebit:.2f}x'} the 5-year average, revenue growth "
-            f"{'–' if accel is None else f'{accel * 100:+.0f} points'} over four quarters")
+    return (f"TTM EBIT {'–' if ebit is None else f'{ebit:.2f}x'} the 5-year average, latest-quarter "
+            f"revenue growth {'–' if accel is None else f'{accel * 100:+.0f} points'} on the last "
+            "fiscal year's")
 
 
 def candidates(paths: Paths, cfg: dict, ideas: list[ThemeIdea],

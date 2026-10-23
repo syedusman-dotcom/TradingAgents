@@ -81,11 +81,12 @@ def decision_checks(decision: PortfolioDecision, formula_value: float | None,
 
 # --- the lanes' bars ------------------------------------------------------------
 
-COMPOUNDER_ROIC_YEARS = 5         # ROIC above 20% in every one of these years (four when only four exist)
+COMPOUNDER_ROIC_INCL_GOODWILL = 0.15   # in every counted year (ROIC computable), at least four
 COMPOUNDER_MIN_ROIC_YEARS = 4
 COMPOUNDER_REVENUE_CAGR = 0.08
 COMPOUNDER_MIN_CAGR_YEARS = 5
-COMPOUNDER_SUSTAINABLE_GROWTH = 0.10
+COMPOUNDER_FCF_CAGR = 0.05
+COMPOUNDER_MIN_FCF_YEARS = 3
 COMPOUNDER_BUY_PREMIUM = 1.15     # price over the worksheet base
 COMPOUNDER_OVERWEIGHT_PREMIUM = 1.25
 INFLECTION_EBIT_MULTIPLE = 1.5    # TTM EBIT over its five-year average
@@ -135,12 +136,13 @@ def _upside_downside_problem(decision, today, bar, lane) -> str | None:
 def _compounder_problems(decision, formula_value, price, worksheet) -> list[str]:
     rec = worksheet_record(worksheet)
     problems = []
-    above, counted = rec["roic_years_above_20"], rec["roic_years_counted"]
-    if (above is None or counted is None or counted < COMPOUNDER_MIN_ROIC_YEARS
-            or above < min(counted, COMPOUNDER_ROIC_YEARS)):
+    above, counted, worst = rec["roic_gw_years_above_15"], rec["roic_years_counted"], rec["roic_gw_min"]
+    if (above is None or counted is None or counted < COMPOUNDER_MIN_ROIC_YEARS or above != counted
+            or (worst is not None and worst < COMPOUNDER_ROIC_INCL_GOODWILL - 1e-9)):
         shown = f"{above}/{counted}" if above is not None and counted else "no ROIC record"
-        problems.append("The compounder lane needs ROIC above 20% in every one of the last five years "
-                        f"(four when only four years are on record); the worksheet shows {shown}.")
+        problems.append(f"The compounder lane needs ROIC including goodwill ≥ "
+                        f"{COMPOUNDER_ROIC_INCL_GOODWILL:.0%} in every counted year (at least four); "
+                        f"the worksheet shows {shown}.")
     cagr, years = rec["revenue_cagr"], rec["revenue_cagr_years"]
     if cagr is None or years is None or years < COMPOUNDER_MIN_CAGR_YEARS:
         shown = f"{_pct(cagr)} over {years} years" if cagr is not None and years else "none"
@@ -149,17 +151,22 @@ def _compounder_problems(decision, formula_value, price, worksheet) -> list[str]
     elif cagr < COMPOUNDER_REVENUE_CAGR:
         problems.append(f"The compounder lane needs a revenue CAGR of at least {COMPOUNDER_REVENUE_CAGR:.0%}; "
                         f"the worksheet shows {_pct(cagr)} over {years} years.")
-    sustainable, implied = rec["sustainable_growth"], rec["implied_growth"]
-    if sustainable is None or sustainable < COMPOUNDER_SUSTAINABLE_GROWTH:
-        shown = _pct(sustainable) if sustainable is not None else "none"
-        problems.append("The compounder lane needs sustainable growth (ROIC × reinvestment rate) of at least "
-                        f"{COMPOUNDER_SUSTAINABLE_GROWTH:.0%}; the worksheet shows {shown}.")
-    elif implied is None:
-        problems.append("The compounder lane needs the reverse DCF's implied growth to compare with "
-                        "sustainable growth; the worksheet has none.")
-    elif implied > sustainable:
+    fcf, fcf_years = rec["fcf_cagr"], rec["fcf_cagr_years"]
+    if (fcf is None or fcf_years is None or fcf_years < COMPOUNDER_MIN_FCF_YEARS
+            or fcf < COMPOUNDER_FCF_CAGR - 1e-9):
+        shown = f"{_pct(fcf)} over {fcf_years} years" if fcf is not None and fcf_years else "none"
+        problems.append(f"The compounder lane needs free cash flow growing at least {COMPOUNDER_FCF_CAGR:.0%}/yr "
+                        f"over three or more years; the worksheet shows {shown}.")
+    sustainable, implied, earned = rec["sustainable_growth"], rec["implied_growth"], rec["earned_growth"]
+    ceiling = max(sustainable or 0.0, earned or 0.0)
+    if implied is None:
+        problems.append("The compounder lane needs the reverse DCF's implied growth to compare with the "
+                        "earned and sustainable growth; the worksheet has none.")
+    elif implied > ceiling + 1e-9:
         problems.append(f"The compounder lane needs the price's implied growth ({_pct(implied)}, reverse DCF) "
-                        f"at or below sustainable growth ({_pct(sustainable)}).")
+                        f"at or below the earned growth ({_pct(earned) if earned is not None else 'n/a'}) "
+                        f"or the sustainable growth ({_pct(sustainable) if sustainable is not None else 'n/a'}), "
+                        "whichever is higher.")
     caps = {"Buy": COMPOUNDER_BUY_PREMIUM, "Overweight": COMPOUNDER_OVERWEIGHT_PREMIUM}
     cap = caps.get(decision.rating.value)
     base = formula_value if formula_value is not None else worksheet_base(worksheet)
@@ -180,11 +187,14 @@ def _compounder_problems(decision, formula_value, price, worksheet) -> list[str]
     er = worksheet_expected_return(worksheet)
     floor = {"Buy": COMPOUNDER_BUY_RETURN, "Overweight": COMPOUNDER_OVERWEIGHT_RETURN}.get(decision.rating.value)
     if er is not None and floor is not None:
-        earned = er["yield"] + er["growth"] + min(er["reversion"], 0.0)
-        if earned < floor - 1e-9:
+        # The record's earned growth, not the ER line's (which is held to the sustainable growth,
+        # 0% for a company returning all its cash); the ER line's growth when the label is absent.
+        growth, word = (earned, "earned growth") if earned is not None else (er["growth"], "growth")
+        total = er["yield"] + growth + min(er["reversion"], 0.0)
+        if total < floor - 1e-9:
             problems.append(f"The compounder lane's {decision.rating.value} needs an expected return of at "
                             f"least {floor:.0%}/yr with no multiple expansion; the worksheet gives "
-                            f"{_pct(earned)} (yield {_pct(er['yield'])} + growth {_pct(er['growth'])} + "
+                            f"{_pct(total)} (yield {_pct(er['yield'])} + {word} {_pct(growth)} + "
                             f"reversion {_pct(min(er['reversion'], 0.0))}).")
     return problems
 
@@ -196,7 +206,8 @@ def _inflection_problems(decision, price, worksheet) -> list[str]:
         ("ttm_vs_5y_ebit", INFLECTION_EBIT_MULTIPLE, "TTM EBIT at least 1.5× its five-year average",
          lambda x: f"{x:.2f}×"),
         ("revenue_acceleration", INFLECTION_ACCELERATION,
-         "revenue growth accelerated by at least 10 points", lambda x: f"{x:+.0%}"),
+         "revenue growth in the latest quarter at least 10 points above the last fiscal year's",
+         lambda x: f"{x:+.0%}"),
         ("incremental_roic", INFLECTION_INCREMENTAL_ROIC, "incremental ROIC of at least 20%",
          lambda x: f"{x:.0%}"),
     ):
@@ -254,10 +265,14 @@ def record_excerpt(report: str) -> str:
 _RECORD_LABELS = {
     "roic_years_above_20": "ROIC years above 20%",
     "roic_years_counted": "ROIC years counted",
-    "roic_min_5y": "ROIC worst of last 5 years",
+    "roic_min_5y": "ROIC worst of counted years",
+    "roic_gw_years_above_15": "ROIC incl. goodwill years above 15%",
+    "roic_gw_min": "ROIC incl. goodwill worst of counted years",
     "revenue_cagr": "Revenue CAGR",
     "revenue_cagr_years": "Revenue CAGR years",
-    "fcf_cagr_5y": "FCF CAGR 5y",
+    "earned_growth": "Earned growth",
+    "fcf_cagr": "FCF CAGR",
+    "fcf_cagr_years": "FCF CAGR years",
     "reinvestment_rate": "Reinvestment rate",
     "sustainable_growth": "Sustainable growth",
 }
@@ -272,7 +287,8 @@ _INFLECTION_LABELS = {
     "run_rate_decay": "Run-rate decay",
     "implied_g3": "Implied 3-year growth",
 }
-_COUNTS = {"roic_years_above_20", "roic_years_counted", "revenue_cagr_years"}
+_COUNTS = {"roic_years_above_20", "roic_years_counted", "revenue_cagr_years", "roic_gw_years_above_15",
+           "fcf_cagr_years"}
 _IMPLIED = re.compile(r"Reverse DCF: today's price assumes\s*([+\-−]?\d+(?:\.\d+)?)%")
 
 
