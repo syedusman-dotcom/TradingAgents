@@ -1,5 +1,7 @@
 """Quarterly report (10-Q MD&A) and earnings release (8-K exhibit 99.1) from EDGAR, offline."""
 
+import json
+
 import pytest
 
 from tradingagents.dataflows.errors import NoMarketDataError
@@ -63,7 +65,12 @@ def edgar(monkeypatch, tmp_path):
                 return body
         raise AssertionError(f"unexpected fetch {url}")
 
-    monkeypatch.setattr(sec_filings, "_fetch", fetch)
+    def fetch_document(url):
+        assert not url.endswith("index.json"), "the index JSON goes through sec_edgar._fetch_json"
+        return fetch(url)
+
+    monkeypatch.setattr(sec_filings, "_fetch", fetch_document)
+    monkeypatch.setattr(sec_filings.sec_edgar, "_fetch_json", lambda url: json.loads(fetch(url)))
     return docs, fetched
 
 
@@ -259,3 +266,48 @@ def test_the_outlook_section_is_capped(edgar):
     assert "Guidance item 0:" in outlook and "Guidance item 19:" not in outlook
     assert outlook.rstrip().endswith("more characters not shown]")
     assert len(outlook) < sec_filings.OUTLOOK_CHARS + 200
+
+
+BANK_10Q = """
+Item 1. Financial Statements 3
+Item 2. Management's Discussion and Analysis of Financial Condition and Results of Operations 4
+Item 3. Quantitative and Qualitative Disclosures About Market Risk 90
+Management's discussion and analysis
+""" + "Net interest income rose. " * 40 + """
+PART II. OTHER INFORMATION
+Item 2. Unregistered Sales of Equity Securities and Use of Proceeds
+""" + "We repurchased shares under the buyback program. " * 10 + """
+Item 6. Exhibits
+"""
+
+
+@pytest.mark.unit
+def test_part_ii_item_2_is_never_taken_for_the_mdna(edgar):
+    assert sec_filings.mdna_span(sec_filings._plain_text(_html(BANK_10Q))) == ""
+    docs, _ = edgar
+    docs["000002134426000041/q2.htm"] = _html(BANK_10Q)
+    out = sec_filings.latest_10q_mdna("JPM", "2026-08-01")
+    assert "could not be located" in out and "buyback" not in out
+
+
+@pytest.mark.unit
+def test_an_empty_extraction_is_not_cached_and_the_key_carries_the_parser_version(edgar):
+    docs, _ = edgar
+    docs["000002134426000041/q2.htm"] = _html(BANK_10Q)
+    assert "could not be located" in sec_filings.latest_10q_mdna("KO", "2026-08-01")
+    assert not list(sec_filings._cache_dir().glob("10q_*"))
+    docs["000002134426000041/q2.htm"] = _html(MDNA_10Q)
+    assert "Net revenue rose 6%" in sec_filings.latest_10q_mdna("KO", "2026-08-01")
+    [cached] = sec_filings._cache_dir().glob("10q_*")
+    assert f"_v{sec_filings._PARSER_VERSION}" in cached.name
+
+
+@pytest.mark.unit
+def test_an_empty_exhibit_is_the_vendor_unavailable_not_a_crash(edgar):
+    from tradingagents.dataflows.errors import VendorUnavailableError
+
+    docs, _ = edgar
+    docs["000002134426000040/index.json"] = b'{"directory": {"item": [{"name": "ex99-1.htm"}]}}'
+    docs["000002134426000040/ex99-1.htm"] = b""
+    with pytest.raises(VendorUnavailableError):
+        sec_filings.latest_earnings_release("KO", "2026-07-25")

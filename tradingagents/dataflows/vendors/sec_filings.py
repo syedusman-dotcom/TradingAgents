@@ -14,7 +14,7 @@ from datetime import datetime
 from pathlib import Path
 
 import requests
-from lxml import html as lxml_html
+from lxml import etree as lxml_etree, html as lxml_html
 
 from tradingagents.dataflows.config import get_config
 from tradingagents.dataflows.errors import NoMarketDataError, VendorUnavailableError
@@ -100,9 +100,17 @@ def section_spans(text: str) -> dict[str, str]:
 _BLOCKS = ("p", "div", "br", "tr", "li", "h1", "h2", "h3", "h4", "h5", "h6", "table")
 
 
+def _parse(document: bytes):
+    """An HTML tree; an empty or unparseable document is EDGAR failing to serve it."""
+    try:
+        return lxml_html.fromstring(document)
+    except (lxml_etree.ParserError, ValueError) as exc:
+        raise VendorUnavailableError(f"SEC EDGAR returned an unreadable document ({exc})") from exc
+
+
 def _plain_text(document: bytes) -> str:
     """The document's text with one line per block element, so headings keep their own line."""
-    tree = lxml_html.fromstring(document)
+    tree = _parse(document)
     for node in tree.xpath("//script|//style"):
         node.drop_tree()
     for node in tree.iter(*_BLOCKS):
@@ -191,12 +199,19 @@ def _cut(body: str, limit: int) -> str:
     return body[:limit] + more
 
 
+# Part of every extracted-text cache key: raise it when extraction changes, so filings are re-read.
+_PARSER_VERSION = 2
+
+
 def _cached_text(name: str, build) -> str:
-    """Text extracted from a filing, cached forever: a filed document never changes."""
-    path = _cache_dir() / name
+    """Text extracted from a filing, cached forever (a filed document never changes) unless empty,
+    so a later parser can find what this one missed."""
+    path = _cache_dir() / f"{name}_v{_PARSER_VERSION}.txt"
     if path.exists():
         return path.read_text(encoding="utf-8")
     text = build()
+    if not text:
+        return text
     path.parent.mkdir(parents=True, exist_ok=True)
     replace_file(path, lambda temp: Path(temp).write_text(text, encoding="utf-8"))
     return text
@@ -205,6 +220,9 @@ def _cached_text(name: str, build) -> str:
 # A 10-Q's Item 2 (MD&A) heading on its own line. The table of contents lists it too, followed
 # closely by the next item's heading or a page number; Part II has an unrelated Item 2 later.
 _MDNA_START = re.compile(_ITEM + r"2\b[^\n]*$", re.I | re.M)
+# The MD&A heading names it (on its line or the next two); Part II's Item 2 is never it.
+_MDNA_TITLE = re.compile(r"management|discussion", re.I)
+_NOT_MDNA = re.compile(r"unregistered|use\s+of\s+proceeds", re.I)
 _MDNA_END = re.compile(_ITEM + r"[34]\b", re.I | re.M)
 _TOC_FOLLOWS = re.compile(_ITEM + r"\d|^\s*(page\s*)?\d{1,3}\s*$", re.I | re.M)
 _PAGE_NUMBER_END = re.compile(r"\s\d{1,3}\s*$")
@@ -224,6 +242,9 @@ def mdna_span(text: str) -> str:
     """Item 2 of a 10-Q, trimmed to Results of Operations through Liquidity and Capital Resources
     when both sub-headings are there, else the whole item; empty when no heading is found."""
     for m in _MDNA_START.finditer(text):
+        heading = "\n".join([m.group(0)] + text[m.end(): m.end() + 1000].split("\n")[1:3])
+        if _NOT_MDNA.search(m.group(0)) or not _MDNA_TITLE.search(heading):
+            continue
         if _PAGE_NUMBER_END.search(m.group(0)) or _TOC_FOLLOWS.search(text, m.end(), m.end() + 200):
             continue
         stop = _MDNA_END.search(text, m.end())
@@ -246,7 +267,7 @@ def latest_10q_mdna(ticker: str, as_of_date: str | None = None) -> str:
     if not filings:
         raise NoMarketDataError(ticker, ticker, f"no 10-Q filed by {as_of_date}")
     filing = filings[0]
-    body = _cached_text(f"10q_{cik}_{filing['accession']}.txt", lambda: mdna_span(
+    body = _cached_text(f"10q_{cik}_{filing['accession']}", lambda: mdna_span(
         _plain_text(_fetch(_filing_url(cik, filing, filing["document"])))))
     lines = [f"# Quarterly report (10-Q) for {ticker.upper()}, filed {filing['filed']}, "
              f"period ending {filing['period'] or 'unknown'}",
@@ -289,7 +310,7 @@ def _exhibit_by_type(cik: str, filing: dict, names: list[str]) -> str | None:
     index = next((n for n in names if re.search(r"-index\.html?$", n, re.I)), None)
     if index is None:
         return None
-    tree = lxml_html.fromstring(_fetch(_filing_url(cik, filing, index)))
+    tree = _parse(_fetch(_filing_url(cik, filing, index)))
     for row in tree.iter("tr"):
         cells = [cell.text_content().strip().upper() for cell in row.iter("td")]
         links = row.xpath(".//a/@href")
@@ -299,7 +320,7 @@ def _exhibit_by_type(cik: str, filing: dict, names: list[str]) -> str | None:
 
 
 def _release_text(cik: str, filing: dict) -> str:
-    index = json.loads(_fetch(_filing_url(cik, filing, "index.json")))
+    index = sec_edgar._fetch_json(_filing_url(cik, filing, "index.json"))
     names = [item.get("name", "") for item in (index.get("directory") or {}).get("item") or []]
     exhibit = (next((n for n in names if _EXHIBIT_99.search(n)), None)
                or _exhibit_by_type(cik, filing, names))
@@ -323,7 +344,7 @@ def latest_earnings_release(ticker: str, as_of_date: str | None = None) -> str:
     if not filings:
         raise NoMarketDataError(ticker, ticker, f"no earnings 8-K (Item 2.02) filed by {as_of_date}")
     filing = filings[0]
-    text = _cached_text(f"8k_{cik}_{filing['accession']}.txt", lambda: _release_text(cik, filing))
+    text = _cached_text(f"8k_{cik}_{filing['accession']}", lambda: _release_text(cik, filing))
     lines = [f"# Earnings release (8-K exhibit 99.1) for {ticker.upper()}, filed {filing['filed']}",
              "The company's own results announcement, as filed; cut to its first "
              f"{RELEASE_CHARS:,} characters; outlook and demand paragraphs past the cut follow, "

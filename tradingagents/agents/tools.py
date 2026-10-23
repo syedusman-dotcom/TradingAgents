@@ -195,8 +195,8 @@ def get_earnings_release(
 ) -> str:
     """
     Retrieve the latest earnings release (exhibit 99.1 of an 8-K reporting results, Item 2.02)
-    filed with the SEC by the analysis date, with every outlook, guidance, backlog, bookings
-    and demand paragraph kept whole. A verified source: quote it with its filing date.
+    filed with the SEC by the analysis date, cut to a manageable length, then the outlook and
+    demand paragraphs beyond the cut, capped. A verified source: quote it with its filing date.
     Returns:
         str: The press release, cut to a manageable length, then its outlook and demand lines
     """
