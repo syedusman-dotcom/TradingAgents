@@ -390,7 +390,60 @@ def formula_value(years: list[dict], price, shares, net_debt, rate: float = DISC
     out["high"] = max(v[-1] for v in values)
     out["base"] = mean(v[1] for v in values)
     out["margin_of_safety"] = (out["base"] - price) / out["base"] if out["base"] > 0 else None
+    out["epv"] = ((mean(ebits) * (1 - TAX_RATE) / rate - net_debt) / shares
+                  if len(ebits) >= 2 and mean(ebits) > 0 else None)
+    out["grid"] = {}
+    for key, r in (("r-1", rate - 0.01), ("r", rate), ("r+1", rate + 0.01)):
+        row = []
+        for g in GROWTH_SCENARIOS:
+            if r <= g:
+                row.append(None)
+                continue
+            m = perpetuity_multiple(g, r)
+            vals = []
+            if "fcf" in out["methods"]:
+                vals.append(mean(fcfs) / shares * m)
+            if "ebit" in out["methods"]:
+                vals.append((mean(ebits) * (1 - TAX_RATE) * m - net_debt) / shares)
+            row.append(mean(vals))
+        out["grid"][key] = row
     return out
+
+
+# Share of companies that sustained at least each ten-year sales growth rate, by starting
+# revenue. Approximate: read off the charts in Credit Suisse's "Base Rate Book"
+# (Mauboussin, 2016), not taken from a table. (label, upper revenue bound, {growth: share}).
+BASE_RATE_COHORTS = (
+    ("<$1B", 1e9, {0.0: 0.80, 0.03: 0.60, 0.05: 0.48, 0.07: 0.38, 0.10: 0.27, 0.15: 0.15}),
+    ("$1–5B", 5e9, {0.0: 0.85, 0.03: 0.62, 0.05: 0.47, 0.07: 0.35, 0.10: 0.22, 0.15: 0.10}),
+    ("$5–25B", 25e9, {0.0: 0.88, 0.03: 0.62, 0.05: 0.45, 0.07: 0.30, 0.10: 0.17, 0.15: 0.06}),
+    (">$25B", None, {0.0: 0.90, 0.03: 0.60, 0.05: 0.40, 0.07: 0.24, 0.10: 0.11, 0.15: 0.03}),
+)
+BASE_RATE_CAP_SHARE = 0.25
+
+
+def growth_base_rates(revenue: float | None) -> dict | None:
+    """The cohort's historical odds of sustaining each growth rate for ten years, and the
+    highest rate at least a quarter of that cohort reached (``cap``)."""
+    revenue = num(revenue)
+    if revenue is None or revenue <= 0:
+        return None
+    for label, upper, shares in BASE_RATE_COHORTS:
+        if upper is None or revenue < upper:
+            cap = max((g for g, s in shares.items() if s >= BASE_RATE_CAP_SHARE), default=0.0)
+            return {"cohort": label, "share_achieving": dict(shares), "cap": cap}
+    return None
+
+
+def base_rate_note(implied_growth: float | None, revenue: float | None) -> str | None:
+    """How common the growth the price implies has been among similar-sized companies."""
+    implied_growth = num(implied_growth)
+    br = growth_base_rates(revenue)
+    if implied_growth is None or br is None:
+        return None
+    level = max((g for g in br["share_achieving"] if g <= implied_growth), default=0.0)
+    return (f"Implied growth {implied_growth:.1%}/yr: base rate — about {br['share_achieving'][level]:.0%} of "
+            f"companies with revenue {br['cohort']} sustained {level:.0%} or more for 10 years.")
 
 
 # --- the analyst's verified report ----------------------------------------------------
@@ -622,7 +675,7 @@ def render_report(symbol: str, as_of: str, m: dict, currency: str | None = None)
     ]
     v = m["valuation"]
     if v:
-        lines += [f"## Formula valuation (per share; {v['years_used']}-year averages)", ""]
+        lines += [f"## Valuation worksheet (per share; {v['years_used']}-year averages)", ""]
         growth = " / ".join(f"{g:.0%}" for g in GROWTH_SCENARIOS)
         r = v["discount_rate"]
         ten_year = m.get("treasury_10y")
@@ -642,6 +695,19 @@ def render_report(symbol: str, as_of: str, m: dict, currency: str | None = None)
         if v.get("implied_growth") is not None:
             lines.append(f"- Reverse DCF: today's price assumes {_pct(v['implied_growth'])} perpetual FCF growth at a "
                          f"{r:.1%} discount rate")
+        if v.get("epv") is not None:
+            lines.append(f"- Earnings-power value (zero growth, after-tax EBIT / rate, less net debt): {v['epv']:,.2f}")
+        grid = v.get("grid")
+        if grid:
+            lines += ["", "Sensitivity (value per share by discount rate and perpetual growth):", "",
+                      "| Rate | " + " | ".join(f"{g:.0%}" for g in GROWTH_SCENARIOS) + " |",
+                      "|---|" + "---|" * len(GROWTH_SCENARIOS)]
+            for key, rr in (("r-1", r - 0.01), ("r", r), ("r+1", r + 0.01)):
+                cells = " | ".join("n/a" if x is None else f"{x:,.2f}" for x in grid[key])
+                lines.append(f"| {key.replace('-', '−')} ({rr:.1%}) | {cells} |")
+        note = base_rate_note(v.get("implied_growth"), (m.get("per_year") or [{}])[0].get("revenue"))
+        if note:
+            lines += ["", note]
         lines += ["", "Start from this range. Judge which growth rate the business can sustain and whether the "
                   "averages need adjusting (one-off cash flows, a cyclical peak or trough), and state each change "
                   "and its effect on the value."]

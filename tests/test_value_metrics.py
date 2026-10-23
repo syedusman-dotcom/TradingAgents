@@ -58,7 +58,7 @@ def test_company_metrics_and_report():
     assert m["fscore"]["points"]["no_dilution"] is True
     report = vm.render_report("ABC", "2026-10-11", m, currency="USD")
     for section in ("## By fiscal year", "## Price today", "## Piotroski F-Score", "Altman Z-Score",
-                    "## Formula valuation", "Reverse DCF", "do not recompute"):
+                    "## Valuation worksheet", "Reverse DCF", "do not recompute"):
         assert section in report, section
 
 
@@ -335,3 +335,41 @@ def test_capital_allocation_net_debt_change_is_none_when_a_balance_value_is_miss
     assert ca["totals"]["net_debt_change"] == 0
     ca = vm.capital_allocation([_year(), _year(total_debt=None)])
     assert ca["per_year"][0]["net_debt_change"] is None
+
+
+def test_epv_is_after_tax_normalized_ebit_capitalized_at_the_rate_less_net_debt():
+    years = [_year(), _year(ebit=180)]
+    v = vm.formula_value(years, price=20.0, shares=100, net_debt=400, rate=0.10)
+    assert v["epv"] == pytest.approx((190 * (1 - vm.TAX_RATE) / 0.10 - 400) / 100)
+    assert vm.formula_value([_year(ebit=-5), _year(ebit=-5)], 20.0, 100, 0, 0.10)["epv"] is None
+
+
+def test_sensitivity_grid_moves_with_rate_and_growth():
+    v = vm.formula_value([_year(), _year()], price=20.0, shares=100, net_debt=400, rate=0.10)
+    assert set(v["grid"]) == {"r-1", "r", "r+1"} and len(v["grid"]["r"]) == 3
+    assert v["grid"]["r-1"][1] > v["grid"]["r"][1] > v["grid"]["r+1"][1]
+    assert v["grid"]["r"][1] == pytest.approx(v["base"])
+    assert v["grid"]["r"][2] > v["grid"]["r"][0]
+
+
+def test_growth_base_rates_pick_the_cohort_and_cap():
+    br = vm.growth_base_rates(8e9)
+    assert br["cohort"] == "$5–25B" and 0 < br["share_achieving"][0.10] < br["share_achieving"][0.05]
+    assert br["cap"] in br["share_achieving"] and vm.growth_base_rates(None) is None
+    assert vm.growth_base_rates(0) is None
+    assert vm.growth_base_rates(5e8)["cohort"] == "<$1B" and vm.growth_base_rates(1e11)["cohort"] == ">$25B"
+
+
+def test_base_rate_note_names_the_level_the_implied_growth_reaches():
+    note = vm.base_rate_note(0.079, 8e9)
+    assert note == ("Implied growth 7.9%/yr: base rate — about 30% of companies with revenue $5–25B "
+                    "sustained 7% or more for 10 years.")
+    assert "0% or more" in vm.base_rate_note(-0.02, 8e9)
+    assert vm.base_rate_note(None, 8e9) is None and vm.base_rate_note(0.05, None) is None
+
+
+def test_worksheet_renders_epv_grid_and_base_rate_note():
+    m = vm.company_metrics([_year(), _year()], price=20, market_cap=2000, shares=100)
+    text = vm.render_report("X", "2026-10-23", m)
+    assert "## Valuation worksheet" in text and "Earnings-power value" in text and "base rate" in text
+    assert "| r" in text
