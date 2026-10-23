@@ -254,3 +254,36 @@ def test_cli_daily_exit_code(tmp_path, monkeypatch):
         cli.main(["--data-dir", str(paths.root), "daily", "--no-notify", "--max", "2"])
     assert exc.value.code == 1
     cli.main(["--data-dir", str(paths.root), "daily", "--no-notify", "--dry-run"])
+
+
+def test_daily_freefall_fires_only_on_entering_it(tmp_path, monkeypatch):
+    paths = _data(tmp_path, monkeypatch, {"HRB": 51.0, "DNLM.L": 790.0})
+    monkeypatch.setattr(metrics, "trend", lambda closes: {"trend": "FREEFALL"})
+    found, _, _ = daily.run(paths, RUN_CFG, dry_run=True, notify=False, today=TODAY)
+    assert [(t.ticker, t.kind) for t in found] == [("HRB", "FREEFALL"), ("DNLM.L", "FREEFALL")]
+    folder = paths.reports / "2026-10-01"
+    rows = json.loads((folder / "results.json").read_text())
+    for r in rows:
+        r["trend"] = "FREEFALL"
+    (folder / "results.json").write_text(json.dumps(rows))
+    found, _, _ = daily.run(paths, RUN_CFG, dry_run=True, notify=False, today=TODAY)
+    assert found == []
+
+
+def test_daily_links_no_report_for_an_errored_ticker(tmp_path, monkeypatch):
+    paths = _data(tmp_path, monkeypatch, {"HRB": 56.0, "DNLM.L": 740.0})
+
+    def fake_run(p, cfg, *, yes, dry_run, only):
+        folder = paths.reports / "2026-10-23"
+        folder.mkdir()
+        (folder / "results.json").write_text(json.dumps([
+            {"ticker": "DNLM.L", "rating": "REVIEW", "error": "timed out"},
+            {"ticker": "HRB", "rating": "Buy", "error": None}]))
+        return folder / "ACTIONS.md"
+
+    monkeypatch.setattr(review, "run", fake_run)
+    _, out, code = daily.run(paths, RUN_CFG, notify=False, today=TODAY)
+    text = out.read_text()
+    assert code == 0
+    assert "(2026-10-23/HRB/complete_report.html)" in text
+    assert "DNLM.L/complete_report.html" not in text

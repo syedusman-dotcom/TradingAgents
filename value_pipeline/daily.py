@@ -6,6 +6,7 @@ names that fired and writes the report. Nothing here trades.
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -148,6 +149,16 @@ def _prices_and_trends(tickers: list[str]) -> tuple[dict, dict]:
     return prices, trends
 
 
+def _errored(folder: Path) -> dict[str, str]:
+    """Tickers whose run failed in that review (no report to link), with the error."""
+    try:
+        rows = json.loads((folder / "results.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        log.warning("cannot read %s/results.json: %s", folder, exc)
+        return {}
+    return {r["ticker"]: f"no report ({r['error']})" for r in rows if r.get("error")}
+
+
 def _reviews(paths: Paths, cfg: dict, selected: list[str],
              dry_run: bool) -> tuple[list[str], int, int]:
     """Run the agents once on every selected ticker; the report lines, reviews run, exit code."""
@@ -166,7 +177,9 @@ def _reviews(paths: Paths, cfg: dict, selected: list[str],
         return [f"review failed: {exc}"], 0, 1
     folder = actions.parent.relative_to(paths.reports).as_posix()
     lines = [f"- [ACTIONS]({folder}/{actions.name})"]
-    lines += [f"- [{t}]({folder}/{t}/complete_report.html)" for t in selected]
+    failed = _errored(actions.parent)
+    lines += [f"- {t}: {failed[t]}" if t in failed else f"- [{t}]({folder}/{t}/complete_report.html)"
+              for t in selected]
     return lines, len(selected), 0
 
 

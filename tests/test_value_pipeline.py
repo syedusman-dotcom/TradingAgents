@@ -1186,3 +1186,11 @@ def test_a_failing_earnings_lookup_gives_none(tmp_path, monkeypatch):
     monkeypatch.setattr(review, "next_earnings_date", boom)
     out = review.run(paths, DEFAULTS, yes=True, dry_run=True, today="2026-10-23", only=["HRB"])
     assert json.loads((out.parent / "results.json").read_text())[0]["earnings_date"] is None
+
+
+@pytest.mark.unit
+def test_results_json_stores_the_trend_at_review_time(tmp_path, monkeypatch):
+    from tests.test_decision_math import _good_decision
+
+    row, d = _review_one(tmp_path, monkeypatch, _good_decision(), 50.0)
+    assert row["trend"] == "UPTREND" == d.trend

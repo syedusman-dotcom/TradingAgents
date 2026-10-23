@@ -412,9 +412,10 @@ def _run(paths: Paths, cfg: dict, *, yes: bool, dry_run: bool, today: str | None
         ranked = sorted((r for r in screen.values() if not pd.isna(r.get("mf_position"))), key=lambda r: r["mf_position"])
         knives = [r["ticker"] for r in ranked[:50] if r.get("trend") == "FREEFALL" and r["ticker"] not in owned][:10]
 
+    trends = {d.ticker: d.trend for d in decisions}
     rows = [
         {"ticker": r.ticker, "name": r.name, "rating": r.rating, "error": r.error, "report": r.report,
-         "earnings_date": r.earnings_date,
+         "earnings_date": r.earnings_date, "trend": trends.get(r.ticker),
          "tokens_in": r.tokens_in, "tokens_out": r.tokens_out, "nominal_cost_usd": round(r.nominal_cost_usd, 4),
          "intrinsic_value": parse.intrinsic_value(r.decision), "margin_of_safety": parse.margin_of_safety(r.decision),
          "thesis": parse.thesis_summary(r.decision), "price": prices.get(r.ticker),
