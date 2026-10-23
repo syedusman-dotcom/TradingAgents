@@ -1104,3 +1104,19 @@ def test_a_ticker_outside_the_screen_gets_its_row_built_for_the_review(tmp_path,
     assert d.expected_return == pytest.approx(want["expected_return"]) and d.sector == "Industrials"
     assert d.fscore is not None and d.formula_value == row["formula_value"]
     assert d.currency == "USD" and d.fx_to_usd == 1.0
+
+
+@pytest.mark.unit
+def test_a_screen_row_from_before_the_expected_return_column_is_rebuilt(tmp_path, monkeypatch):
+    from value_pipeline import market_data, review
+
+    old = {"ticker": "HRB", "sector": "Consumer Discretionary", "value_base": 80.33, "trend": "UPTREND"}
+    record = {"ticker": "HRB", "years": _offscreen_years(), "market_cap": 2000.0, "price": 20.0,
+              "shares": 100, "closes": [], "sector": "Consumer Discretionary"}
+    monkeypatch.setattr(market_data, "fundamentals", lambda t, p, days=7: dict(record))
+    monkeypatch.setattr(market_data, "cached_sector", lambda t, p: None)
+    row = review.screen_row_for("HRB", Paths(tmp_path), DEFAULTS, {"HRB": old})
+    assert row["expected_return"] is not None and row["trend"] == "UPTREND"
+    assert row["sector"] == "Consumer Discretionary"
+    current = {**old, "expected_return": 0.118}
+    assert review.screen_row_for("HRB", Paths(tmp_path), DEFAULTS, {"HRB": current}) is current

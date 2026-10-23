@@ -761,3 +761,44 @@ def test_fundamentals_analyst_quotes_the_expected_return_and_the_grid():
 
     source = " ".join(inspect.getsource(fundamentals_analyst).replace('"', " ").split())
     assert "Quote the worksheet's expected-return line and the sensitivity grid." in source
+
+
+@pytest.mark.unit
+def test_fundamentals_report_carries_the_tools_worksheet_when_the_analyst_omits_it(monkeypatch):
+    from langchain_core.messages import AIMessage, ToolMessage
+
+    from tradingagents.agents.analysts import fundamentals_analyst
+    from tradingagents.agents.decision_math import (
+        worksheet_base,
+        worksheet_excerpt,
+        worksheet_price,
+    )
+
+    tool_text = ("# Verified value metrics\n## Price today\nP/E 11x\n## Valuation worksheet (per share)\n\n"
+                 "- Price today 886.00\n- **Range 700.57 to 2,369.83, base (3% growth) 1,379.57; margin of "
+                 "safety at base 35.8%**\n\nPer-share values in GBp (pence), the quote unit; statements in GBP.")
+    messages = [AIMessage(content="", tool_calls=[{"name": "get_value_metrics", "args": {}, "id": "1"}]),
+                ToolMessage(content=tool_text, name="get_value_metrics", tool_call_id="1")]
+    prose = "## 3. Is it cheap? Yes\nBase value 1,379.57p."
+    monkeypatch.setattr(fundamentals_analyst, "take_turn",
+                        lambda prompt, llm, tools, msgs: (AIMessage(content=prose), prose))
+    state = {"trade_date": "2026-10-23", "company_of_interest": "DNLM.L", "messages": messages}
+    monkeypatch.setattr(fundamentals_analyst, "get_instrument_context_from_state", lambda s: "")
+    report = fundamentals_analyst.create_fundamentals_analyst(MagicMock())(state)["fundamentals_report"]
+    excerpt = worksheet_excerpt(report)
+    assert report.startswith(prose)
+    assert worksheet_price(excerpt) == 886.0 and worksheet_base(excerpt) == pytest.approx(1379.57)
+    assert "Per-share values in GBp (pence)" in excerpt
+
+    calls = []
+    monkeypatch.setattr(fundamentals_analyst, "route_to_vendor",
+                        lambda *a: calls.append(a) or tool_text)       # tools run inside the provider
+    fetched = fundamentals_analyst.create_fundamentals_analyst(MagicMock())(
+        {**state, "messages": []})["fundamentals_report"]
+    assert calls == [("get_value_metrics", "DNLM.L", "2026-10-23")]
+    assert worksheet_price(worksheet_excerpt(fetched)) == 886.0
+
+    own = prose + "\n## Valuation worksheet\n- Price today 1.00"
+    monkeypatch.setattr(fundamentals_analyst, "take_turn",
+                        lambda prompt, llm, tools, msgs: (AIMessage(content=own), own))
+    assert fundamentals_analyst.create_fundamentals_analyst(MagicMock())(state)["fundamentals_report"] == own

@@ -277,6 +277,18 @@ def offscreen_row(ticker: str, paths: Paths, cfg: dict, screen: dict[str, dict])
     return row
 
 
+def screen_row_for(ticker: str, paths: Paths, cfg: dict, screen: dict[str, dict]) -> dict | None:
+    """The screen's row for ``ticker``; built when the screen lacks it, and completed when the
+    screen predates the expected-return column (its own values win where it has them)."""
+    row = screen.get(ticker)
+    if row is not None and "expected_return" in row:
+        return row
+    built = offscreen_row(ticker, paths, cfg, screen)
+    if row is None or built is None:
+        return row or built
+    return {**built, **{k: v for k, v in row.items() if v is not None and not pd.isna(v)}}
+
+
 def run(paths: Paths, cfg: dict, *, yes: bool = False, dry_run: bool = False,
         today: str | None = None, confirm=input, only: list[str] | None = None) -> Path:
     try:
@@ -327,7 +339,7 @@ def _run(paths: Paths, cfg: dict, *, yes: bool, dry_run: bool, today: str | None
     screen = _screen_rows(paths)
     prices = {t: market_data.latest_price(t) for t in sorted(set(tickers) | owned)}
     fx = {t: _quote_fx(t) for t in sorted(set(tickers) | owned)}
-    screen_row = {t: screen.get(t) or offscreen_row(t, paths, cfg, screen) for t in tickers}
+    screen_row = {t: screen_row_for(t, paths, cfg, screen) for t in tickers}
 
     results: list[RunResult] = []
     usage = None
