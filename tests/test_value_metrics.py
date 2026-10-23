@@ -314,11 +314,48 @@ def test_capital_allocation_tolerates_empty_input():
 
 
 @pytest.mark.unit
-def test_yearly_average_closes_groups_by_calendar_year():
-    hist = pd.DataFrame({"Close": [10, 20, 30]},
-                        index=pd.to_datetime(["2024-03-01", "2024-09-01", "2025-02-01"]))
-    assert yahoo_vm.yearly_average_closes(hist) == {"2024": 15.0, "2025": 30.0}
-    assert yahoo_vm.yearly_average_closes(None) == {}
+def test_fiscal_average_closes_average_the_twelve_months_to_each_year_end():
+    hist = pd.DataFrame({"Close": [10, 20, 30, 40, 50]},
+                        index=pd.to_datetime(["2024-06-30", "2024-07-01", "2025-01-15", "2025-06-30",
+                                              "2025-07-01"]))
+    fyes = ["2025-06-30", "2024-06-30", "2020-06-30"]
+    assert yahoo_vm.fiscal_average_closes(hist, fyes) == {"2025-06-30": 30.0, "2024-06-30": 10.0}
+    assert yahoo_vm.fiscal_average_closes(None, fyes) == {}
+
+
+@pytest.mark.unit
+def test_average_prices_match_the_fiscal_year_end_first_then_the_calendar_year():
+    years = [_year(fiscal_year_end="2025-06-30", shares=98), _year(fiscal_year_end="2024-06-30")]
+    by_fye = vm.capital_allocation(years, avg_prices={"2025-06-30": 16.0, "2025": 99.0})
+    assert by_fye["per_year"][0]["avg_price"] == 16.0
+    by_year = vm.capital_allocation(years, avg_prices={"2025": 17.0})
+    assert by_year["per_year"][0]["avg_price"] == 17.0
+    dated = _dated_years(5)
+    keyed = {y["fiscal_year_end"]: p for y, p in zip(dated[:3], (20, 30, 40), strict=True)}
+    er_fye = vm.expected_return(dated, 20.0, 2000, 100, avg_prices=keyed)
+    er_year = vm.expected_return(dated, 20.0, 2000, 100, avg_prices={"2025": 20, "2024": 30, "2023": 40})
+    assert er_fye["ev_ebit_target"] == pytest.approx(er_year["ev_ebit_target"]) != 12.0
+
+
+@pytest.mark.unit
+def test_capital_allocation_says_the_buyback_price_is_net_of_issuance():
+    m = vm.company_metrics([_year(shares=98), _year()], price=20, market_cap=1960, shares=98)
+    text = vm.render_report("X", "2026-10-23", m)
+    assert "| Buyback price (net of issuance) |" in text and "net of shares issued" in text
+
+
+@pytest.mark.unit
+def test_vendor_averages_unadjusted_closes_by_fiscal_year_in_the_quote_unit(monkeypatch):
+    hist = pd.DataFrame({"Close": [800.0, 900.0]}, index=pd.to_datetime(["2024-12-31", "2025-03-31"]))
+    fake = _gbp_ticker(history=hist)
+    monkeypatch.setattr(yahoo_vm.yf, "Ticker", lambda *a: fake())
+    monkeypatch.setattr(yahoo_vm, "is_historical", lambda d: False)
+    monkeypatch.setattr(yahoo_vm, "current_discount_rate", lambda: {"rate": 0.09, "treasury_10y": None})
+    monkeypatch.setattr(yahoo_vm, "usd_rate", lambda c: None)
+    report = yahoo_vm.get_value_metrics("DNLM.L", "2026-10-23")
+    assert fake.history_kwargs["auto_adjust"] is False
+    row = next(line for line in report.splitlines() if line.startswith("| 2025-06-30 | 100 |"))
+    assert row.rstrip().endswith("| 850.00 |")      # mean of the year to June 2025, in pence
 
 
 @pytest.mark.unit
@@ -411,7 +448,7 @@ def _dated_years(n, **kw):
 @pytest.mark.unit
 def test_ev_ebit_target_is_the_median_of_priced_years_needs_three_and_can_be_overridden():
     years = _dated_years(5)
-    prices = {"2025": 20, "2024": 30, "2023": 40}            # keys as yearly_average_closes emits
+    prices = {"2025": 20, "2024": 30, "2023": 40}            # calendar-year keys: the fallback lookup
     er = vm.expected_return(years, price=20.0, market_cap=2000, shares=100, avg_prices=prices)
     by_hand = sorted((p * 100 + 500 - 100) / 200 for p in prices.values())[1]
     assert er["ev_ebit_target"] == pytest.approx(by_hand) and by_hand != 12.0

@@ -89,11 +89,21 @@ def statement_years(*frames: pd.DataFrame) -> list[dict]:
     return years
 
 
-def yearly_average_closes(history: pd.DataFrame) -> dict[str, float]:
-    """Mean closing price per calendar year, keyed "YYYY"; {} when there is no usable history."""
+def fiscal_average_closes(history: pd.DataFrame, fiscal_year_ends: list[str]) -> dict[str, float]:
+    """Mean closing price over each fiscal year, (year end - 12 months, year end], keyed by the
+    year end's ISO date; a year with no closes is left out, and {} when there is no usable history."""
     try:
         close = history["Close"].dropna()
-        return {str(k): float(v) for k, v in close.groupby(close.index.year).mean().items()}
+        index = close.index.tz_localize(None) if close.index.tz is not None else close.index
+        close = pd.Series(close.to_numpy(), index=index)
+        out = {}
+        for fye in fiscal_year_ends:
+            end = pd.Timestamp(fye) + pd.Timedelta(days=1)          # through the whole year-end day
+            start = pd.Timestamp(fye) - pd.DateOffset(months=12) + pd.Timedelta(days=1)
+            window = close[(close.index >= start) & (close.index < end)]
+            if len(window):
+                out[str(fye)] = float(window.mean())
+        return out
     except Exception:
         return {}
 
@@ -171,8 +181,10 @@ def get_value_metrics(
     avg_prices = {}  # fail-open: the report renders without average prices
     if price is not None:  # None means the quote currency differs; its averages would mix currencies
         try:
-            history = yf_retry(lambda: t.history(period="10y", auto_adjust=True))
-            avg_prices = {k: v / factor for k, v in yearly_average_closes(history).items()}
+            # Unadjusted closes: the prices actually paid, as the buyback comparison needs.
+            history = yf_retry(lambda: t.history(period="10y", auto_adjust=False))
+            fyes = [y["fiscal_year_end"] for y in years]
+            avg_prices = {k: v / factor for k, v in fiscal_average_closes(history, fyes).items()}
         except Exception:
             avg_prices = {}
     revenue_usd = None  # the growth base rates are in dollars; revenue arrives in the reporting currency

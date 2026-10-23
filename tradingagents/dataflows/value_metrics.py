@@ -483,7 +483,7 @@ def capital_allocation(years: list[dict], avg_prices: dict[str, float] | None = 
             "shares_retired": shares_retired,
             "buyback_price": div(buybacks, shares_retired)
             if buybacks and shares_retired and buybacks > 0 and shares_retired > 0 else None,
-            "avg_price": avg_prices.get(str(fye)[:4]) if fye else None,
+            "avg_price": _avg_price(avg_prices, fye),
         })
 
     def total(key):
@@ -511,6 +511,14 @@ ER_MAX_GROWTH, ER_BULL_BONUS, ER_BULL_MAX = 0.10, 0.03, 0.13
 ER_MAX_REVERSION = 0.05
 
 
+def _avg_price(avg_prices: dict | None, fye) -> float | None:
+    """The year's average price: keyed by its fiscal year end, else by its calendar year."""
+    if not avg_prices or not fye:
+        return None
+    price = avg_prices.get(str(fye))
+    return price if price is not None else avg_prices.get(str(fye)[:4])
+
+
 def _clamp(x: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, x))
 
@@ -519,7 +527,7 @@ def _ev_ebit_target(years: list[dict], avg_prices: dict | None, shares) -> float
     """Median of the company's own EV/EBIT at each year's average price (needs 3+ years)."""
     multiples = []
     for y in years:
-        px = num((avg_prices or {}).get(str(y.get("fiscal_year_end") or "")[:4]))
+        px = num(_avg_price(avg_prices, y.get("fiscal_year_end")))
         ebit, n = num(y.get("ebit")), num(y.get("shares")) or num(shares)
         if px is None or n is None or ebit is None or ebit <= 0:
             continue
@@ -694,7 +702,7 @@ def render_report(symbol: str, as_of: str, m: dict, currency: str | None = None)
             "## Capital allocation",
             "",
             "| FY end | FCF | Dividends | Buybacks | Acquisitions | Net debt chg | Shares retired "
-            "| Buyback price | Avg price |",
+            "| Buyback price (net of issuance) | Avg price |",
             "|---|---|---|---|---|---|---|---|---|",
         ]
         for r in ca["per_year"]:
@@ -705,7 +713,8 @@ def render_report(symbol: str, as_of: str, m: dict, currency: str | None = None)
             )
         at = ""
         if t["avg_buyback_price"] is not None and ca["price"] is not None:
-            at = f" at an average of {t['avg_buyback_price']:.2f} per share vs {ca['price']:.2f} today"
+            at = (f" at an average of {t['avg_buyback_price']:.2f} per share net of shares issued "
+                  f"vs {ca['price']:.2f} today")
         lines += [
             "",
             f"Over {len(ca['per_year'])} years: generated {_money(t['generated'])}, returned "
