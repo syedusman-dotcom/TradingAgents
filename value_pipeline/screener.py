@@ -39,6 +39,8 @@ def evaluate(data: dict, normalize_years: int = 5, roic_cap: float = 1.0,
     norm = metrics.normalized(years, normalize_years)
     acc = metrics.accounting_checks(years)
     er = metrics.expected_return(years, data.get("price"), mcap, shares) or {}
+    rec = metrics.record(years)
+    inf = metrics.inflection(years, data.get("quarters") or [])   # absent from a pre-quarterly cache
     row = {
         "ticker": data["ticker"],
         "fiscal_year_end": cur["fiscal_year_end"],
@@ -75,6 +77,10 @@ def evaluate(data: dict, normalize_years: int = 5, roic_cap: float = 1.0,
         "er_reversion": er.get("reversion"),
         "ev_ebit": er.get("ev_ebit_now"),
         "er_target_multiple": er.get("ev_ebit_target"),
+        "revenue_cagr_10y": rec["revenue_cagr_10y"],
+        "sustainable_growth": rec["sustainable_growth"],
+        "ttm_vs_5y_ebit": inf["ttm_vs_5y_ebit"],
+        "revenue_acceleration": inf["revenue_acceleration"],
         "trend": tr.get("trend"),
         "vs_sma200": tr.get("vs_sma200"),
         "momentum_12_1": tr.get("momentum_12_1"),

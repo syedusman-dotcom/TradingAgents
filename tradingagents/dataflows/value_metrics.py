@@ -535,6 +535,23 @@ def _ev_ebit_target(years: list[dict], avg_prices: dict | None, shares) -> float
     return median(multiples) if len(multiples) >= 3 else ER_DEFAULT_TARGET
 
 
+def _payout(y: dict) -> float:
+    return abs(num(y.get("dividends_paid")) or 0.0) + abs(num(y.get("buybacks")) or 0.0)
+
+
+def reinvestment_and_sustainable_growth(years: list[dict]) -> tuple[float | None, float | None]:
+    """The share of the last three years' owner earnings kept (not paid out as dividends or
+    buybacks), clamped to 0-100%, and that share times the five-year mean ROIC (each capped at
+    100%): growth the business can fund itself. (None, None) when owner earnings are not positive."""
+    priced = [(y, o) for y, o in ((y, owner_earnings(y)) for y in years[:3]) if o is not None]
+    oe = [o for _, o in priced]
+    if not oe or sum(oe) <= 0:
+        return None, None
+    reinvestment = _clamp(1 - sum(_payout(y) for y, _ in priced) / sum(oe), 0.0, 1.0)
+    roics = [min(r, 1.0) for r in (roic(y) for y in years[:5]) if r is not None]
+    return reinvestment, (mean(roics) if roics else 0.0) * reinvestment
+
+
 def expected_return(years: list[dict], price, market_cap, shares, avg_prices: dict | None = None,
                     horizon: int = ER_HORIZON, target_multiple: float | None = None,
                     revenue_usd: float | None = None) -> dict | None:
@@ -546,18 +563,10 @@ def expected_return(years: list[dict], price, market_cap, shares, avg_prices: di
     ebit = num(years[0].get("ebit"))
     ev = enterprise_value(market_cap, years[0].get("total_debt"), years[0].get("cash"))
     recent = years[:3]
-    priced = [(y, owner_earnings(y)) for y in recent]
-    priced = [(y, o) for y, o in priced if o is not None]
-    oe = [o for _, o in priced]
-    if not oe or sum(oe) <= 0 or ebit is None or ebit <= 0 or ev is None or ev <= 0:
+    reinvestment, sustainable = reinvestment_and_sustainable_growth(years)
+    if reinvestment is None or ebit is None or ebit <= 0 or ev is None or ev <= 0:
         return None
-    def payout(y: dict) -> float:
-        return abs(num(y.get("dividends_paid")) or 0.0) + abs(num(y.get("buybacks")) or 0.0)
-
-    shareholder_yield = mean(payout(y) / market_cap for y in recent)   # no issuance field: counted as 0
-    reinvestment = _clamp(1 - sum(payout(y) for y, _ in priced) / sum(oe), 0.0, 1.0)
-    roics = [min(r, 1.0) for r in (roic(y) for y in years[:5]) if r is not None]
-    sustainable = (mean(roics) if roics else 0.0) * reinvestment
+    shareholder_yield = mean(_payout(y) / market_cap for y in recent)   # no issuance field: counted as 0
     br = growth_base_rates(revenue_usd if revenue_usd is not None else years[0].get("revenue"))
     cap = br["cap"] if br else ER_MAX_GROWTH
     growth = max(0.0, min(sustainable, cap, ER_MAX_GROWTH))
@@ -579,10 +588,187 @@ def expected_return(years: list[dict], price, market_cap, shares, avg_prices: di
     }
 
 
+# --- record, inflection and run-rate value ---------------------------------------------
+
+ROIC_RECORD_BAR = 0.20
+RECORD_YEARS = 5
+RUN_RATE_YEARS = 3
+RUN_RATE_MAX_G3 = 0.40
+RUN_RATE_DEFAULT_DECAY = 0.05   # where no base-rate cohort applies
+# The base-rate cap is a ten-year growth rate and can reach 10%, at or above a 9% discount rate,
+# where a perpetuity has no value: the decay rate stays at least this far below the rate.
+RUN_RATE_MIN_SPREAD = 0.02
+
+
+def _cagr(years: list[dict], field: str, n: int) -> float | None:
+    """Compound annual growth of ``field`` over the last ``n`` years: needs ``n`` fiscal years and
+    spans up to ``n`` intervals (n - 1 when exactly n years are reported); None unless both ends
+    are positive."""
+    if len(years) < n or n < 2:
+        return None
+    span = min(n, len(years) - 1)
+    new, old = num(years[0].get(field)), num(years[span].get(field))
+    if new is None or old is None or new <= 0 or old <= 0:
+        return None
+    return (new / old) ** (1 / span) - 1
+
+
+def record(years: list[dict]) -> dict:
+    """The track record a compounder rests on: how often ROIC cleared 20% in the last five years,
+    its worst year, revenue and FCF growth, and the growth the business funds itself."""
+    roics = [r for r in (roic(y) for y in years[:RECORD_YEARS]) if r is not None]
+    reinvestment, sustainable = reinvestment_and_sustainable_growth(years)
+    return {
+        "roic_min_5y": min(roics) if roics else None,
+        "roic_years_above_20": sum(1 for r in roics if r >= ROIC_RECORD_BAR),
+        "revenue_cagr_10y": _cagr(years, "revenue", 10),
+        "revenue_cagr_5y": _cagr(years, "revenue", 5),
+        "fcf_cagr_5y": _cagr(years, "free_cash_flow", 5),
+        "reinvestment_rate": reinvestment,
+        "sustainable_growth": sustainable,
+        "years_available": len(years),
+    }
+
+
+def _sum4(quarters: list[dict], field: str, fn=None) -> float | None:
+    """The sum of ``field`` (or ``fn(quarter)``) over exactly four quarters; None if any is missing."""
+    if len(quarters) != 4:
+        return None
+    vals = [fn(q) if fn else num(q.get(field)) for q in quarters]
+    return None if any(v is None for v in vals) else sum(vals)
+
+
+def _growth(new, old) -> float | None:
+    new, old = num(new), num(old)
+    if new is None or old is None or old <= 0:
+        return None
+    return new / old - 1
+
+
+def _invested_capital(period: dict) -> float | None:
+    """Greenblatt's capital, as ``roic`` counts it: working capital ex cash (floored at 0) + net PPE."""
+    ca, cl, ppe = (num(period.get(k)) for k in ("current_assets", "current_liabilities", "net_ppe"))
+    if ca is None or cl is None or ppe is None:
+        return None
+    return max(0.0, ca - (num(period.get("cash")) or 0.0) - cl) + ppe
+
+
+def inflection(years: list[dict], quarters: list[dict]) -> dict:
+    """Whether earnings are breaking out of the annual record, from the quarterly statements
+    (newest first). A quarter counts when it reports revenue and EBIT; Yahoo can list a latest
+    quarter with only the balance sheet, which is skipped. TTM is the latest four such quarters."""
+    avail = [q for q in (quarters or []) if num(q.get("revenue")) is not None and num(q.get("ebit")) is not None]
+    now, year_ago = avail[:4], avail[4:8]
+    ttm_revenue, ttm_ebit = _sum4(now, "revenue"), _sum4(now, "ebit")
+
+    def vs_5y(ttm, field):
+        vals = [v for v in (num(y.get(field)) for y in years[:NORMALIZE_YEARS]) if v is not None]
+        if ttm is None or not vals or mean(vals) <= 0:
+            return None
+        return ttm / mean(vals)
+
+    def q(i, field):
+        return num(avail[i].get(field)) if i < len(avail) else None
+
+    def margin(i):
+        return div(q(i, "ebit"), q(i, "revenue"))
+
+    growth_now, growth_before = _growth(q(0, "revenue"), q(4, "revenue")), _growth(q(4, "revenue"), q(8, "revenue"))
+    margin_now, margin_before = margin(0), margin(4)
+    ttm_ebit_before = _sum4(year_ago, "ebit")
+    incremental = None
+    if ttm_ebit is not None and ttm_ebit_before is not None and len(avail) >= 5:
+        ic_now, ic_before = _invested_capital(avail[0]), _invested_capital(avail[4])
+        if ic_now is not None and ic_before is not None and ic_now - ic_before > 0:
+            incremental = (ttm_ebit - ttm_ebit_before) * (1 - TAX_RATE) / (ic_now - ic_before)
+    return {
+        "ttm_revenue": ttm_revenue,
+        "ttm_ebit": ttm_ebit,
+        "ttm_owner_earnings": _sum4(now, "", owner_earnings),
+        "ttm_vs_5y_revenue": vs_5y(ttm_revenue, "revenue"),
+        "ttm_vs_5y_ebit": vs_5y(ttm_ebit, "ebit"),
+        "ttm_revenue_growth": _growth(ttm_revenue, _sum4(year_ago, "revenue")),
+        "revenue_growth_latest_q": growth_now,
+        "revenue_growth_year_ago_q": growth_before,
+        "revenue_acceleration": None if growth_now is None or growth_before is None else growth_now - growth_before,
+        "ebit_margin_change_4q": None if margin_now is None or margin_before is None else margin_now - margin_before,
+        "incremental_roic": incremental,
+        "quarters_available": len(avail),
+        "quarters_used": [x.get("fiscal_year_end") for x in now] if len(now) == 4 else [],
+    }
+
+
+def _two_stage(earnings: float, g3: float, rate: float, decay_to: float) -> float:
+    """Value today of ``earnings`` growing at ``g3`` for three years, then a growing perpetuity
+    at ``decay_to``: sum of E(1+g)^t/(1+r)^t for t = 1..3, plus E(1+g)^3 x (1+d)/(r-d) / (1+r)^3."""
+    explicit = sum(earnings * (1 + g3) ** t / (1 + rate) ** t for t in range(1, RUN_RATE_YEARS + 1))
+    terminal = earnings * (1 + g3) ** RUN_RATE_YEARS * perpetuity_multiple(decay_to, rate)
+    return explicit + terminal / (1 + rate) ** RUN_RATE_YEARS
+
+
+def run_rate_value(ttm_owner_earnings, ttm_ebit, net_debt, shares, price, g3: float,
+                   rate: float, decay_to: float) -> dict | None:
+    """Per-share value of the current run rate growing at ``g3`` for three years, then at
+    ``decay_to`` for ever; the worksheet's two methods (owner earnings to equity; after-tax EBIT
+    less net debt). ``implied_g3`` is the three-year growth today's price assumes on the
+    owner-earnings method with the decay fixed (None when no rate in -50%..100% gets there)."""
+    oe, ebit, shares, price = num(ttm_owner_earnings), num(ttm_ebit), num(shares), num(price)
+    net_debt, g3, rate, decay_to = num(net_debt) or 0.0, num(g3), num(rate), num(decay_to)
+    if not shares or shares <= 0 or g3 is None or rate is None or decay_to is None or rate <= decay_to:
+        return None
+    methods = {}
+    if oe is not None and oe > 0:
+        methods["fcf"] = _two_stage(oe, g3, rate, decay_to) / shares
+    if ebit is not None and ebit > 0:
+        methods["ebit"] = (_two_stage(ebit * (1 - TAX_RATE), g3, rate, decay_to) - net_debt) / shares
+    if not methods:
+        return None
+    implied = None
+    if "fcf" in methods and price and price > 0:
+        def value(g):
+            return _two_stage(oe, g, rate, decay_to) / shares
+
+        lo, hi = -0.5, 1.0
+        if value(lo) <= price <= value(hi):
+            for _ in range(100):
+                mid = (lo + hi) / 2
+                lo, hi = (mid, hi) if value(mid) < price else (lo, mid)
+            implied = (lo + hi) / 2
+    vals = list(methods.values())
+    return {"base": mean(vals), "low": min(vals), "high": max(vals), "methods": methods,
+            "implied_g3": implied, "g3": g3, "decay_to": decay_to, "discount_rate": rate}
+
+
+def _run_rate_inputs(years: list[dict], inf: dict) -> dict:
+    """The run-rate valuation's inputs: TTM figures from the quarters when four are reported,
+    else the latest fiscal year's; g3 = TTM revenue growth on the TTM a year earlier, else the
+    latest quarter's growth on the same quarter a year earlier, else the latest fiscal year's,
+    clamped to 0-40%."""
+    cur = years[0] if years else {}
+    ttm = inf.get("ttm_ebit") is not None
+    growth, source = inf.get("ttm_revenue_growth"), "TTM revenue growth on the TTM a year earlier"
+    if growth is None:
+        growth, source = inf.get("revenue_growth_latest_q"), "the latest quarter's revenue growth on a year earlier"
+    if growth is None:
+        prev = years[1] if len(years) > 1 else {}
+        growth, source = _growth(cur.get("revenue"), prev.get("revenue")), "the latest fiscal year's revenue growth"
+    if growth is None:
+        growth, source = 0.0, "0% (no revenue growth available)"
+    return {
+        "owner_earnings": inf.get("ttm_owner_earnings") if ttm else owner_earnings(cur),
+        "ebit": inf["ttm_ebit"] if ttm else num(cur.get("ebit")),
+        "basis": "TTM" if ttm else "latest fiscal year",
+        "g3": _clamp(growth, 0.0, RUN_RATE_MAX_G3),
+        "g3_source": source,
+    }
+
+
 def company_metrics(years: list[dict], price, market_cap, shares,
                     rate: float = DISCOUNT_RATE, treasury_10y: float | None = None,
-                    avg_prices: dict | None = None, revenue_usd: float | None = None) -> dict:
-    """Everything the fundamentals analyst needs, computed once from the statements."""
+                    avg_prices: dict | None = None, revenue_usd: float | None = None,
+                    quarters: list[dict] | None = None) -> dict:
+    """Everything the fundamentals analyst needs, computed once from the statements
+    (``quarters``: the quarterly statements, newest first, for the TTM and inflection figures)."""
     cur = years[0]
     net_debt = (num(cur.get("total_debt")) or 0.0) - (num(cur.get("cash")) or 0.0)
     ev = enterprise_value(market_cap, cur.get("total_debt"), cur.get("cash"))
@@ -608,7 +794,19 @@ def company_metrics(years: list[dict], price, market_cap, shares,
             "debt_to_equity": debt_to_equity(y),
             "interest_coverage": interest_coverage(y),
         })
+    inf = inflection(years, quarters or [])
+    rr_in = _run_rate_inputs(years, inf)
+    br = growth_base_rates(revenue_usd if revenue_usd is not None else cur.get("revenue"))
+    decay_to = min(br["cap"] if br else RUN_RATE_DEFAULT_DECAY, round(rate - RUN_RATE_MIN_SPREAD, 4))
+    # No price means the quote and statement currencies differ: no per-share value, as the worksheet.
+    run_rate = run_rate_value(rr_in["owner_earnings"], rr_in["ebit"], net_debt, shares, price,
+                              rr_in["g3"], rate, decay_to) if num(price) else None
+    if run_rate:
+        run_rate.update(basis=rr_in["basis"], g3_source=rr_in["g3_source"])
     return {
+        "record": record(years),
+        "inflection": inf,
+        "run_rate": run_rate,
         "price": num(price),
         "market_cap": num(market_cap),
         "enterprise_value": ev,
@@ -802,4 +1000,77 @@ def render_report(symbol: str, as_of: str, m: dict, currency: str | None = None)
                   "and its effect on the value."]
     else:
         lines.append("Formula valuation: not computable (no price, or averaged FCF and EBIT are not positive).")
+    lines += _record_section(m)
     return "\n".join(lines)
+
+
+def _fmt(x, spec: str, suffix: str = "") -> str:
+    return "n/a" if x is None else f"{x:{spec}}{suffix}"
+
+
+def _record_section(m: dict) -> list[str]:
+    """One number per labelled line (the decision checks parse them), then two plain-English lines."""
+    rec, inf, rr = m.get("record") or {}, m.get("inflection") or {}, m.get("run_rate")
+    n_years = rec.get("years_available") or 0
+    k = min(RECORD_YEARS, n_years)
+    roic_line = (f"- ROIC ≥ 20% in {rec.get('roic_years_above_20', 0)}/{k} years" if k
+                 else "- ROIC ≥ 20% in n/a")
+    if rec.get("revenue_cagr_10y") is not None:
+        cagr_line, cagr_words = f"- Revenue CAGR 10y {rec['revenue_cagr_10y']:.1%}", \
+            f"revenue {rec['revenue_cagr_10y']:.1%}/yr over 10 years"
+    elif rec.get("revenue_cagr_5y") is not None:
+        cagr_line, cagr_words = (f"- Revenue CAGR 5y {rec['revenue_cagr_5y']:.1%} (ten years not available)",
+                                 f"revenue {rec['revenue_cagr_5y']:.1%}/yr over 5 years")
+    else:
+        cagr_line, cagr_words = "- Revenue CAGR 10y n/a", None
+    if rr:
+        run_line = (f"- Run-rate value (3y at {rr['g3']:.0%}, then {rr['decay_to']:.0%}) {rr['base']:,.2f}; "
+                    f"implied 3-year growth {_fmt(rr['implied_g3'], '.0%')}")
+    else:
+        run_line = "- Run-rate value n/a; implied 3-year growth n/a"
+    used = inf.get("quarters_used") or []
+    ttm_note = (f"TTM = the four quarters ending {used[-1]} to {used[0]}" if used
+                else f"TTM n/a ({inf.get('quarters_available', 0)} quarters with revenue and EBIT)")
+    lines = [
+        "",
+        "## Record and inflection",
+        "",
+        f"From the annual statements ({n_years} fiscal year{'' if n_years == 1 else 's'}) and the quarterly "
+        f"ones; {ttm_note}.",
+        "",
+        roic_line,
+        f"- ROIC worst of last 5 years {_pct(rec.get('roic_min_5y'))}",
+        cagr_line,
+        f"- FCF CAGR 5y {_pct(rec.get('fcf_cagr_5y'))}",
+        f"- Reinvestment rate {_fmt(rec.get('reinvestment_rate'), '.0%')}",
+        f"- Sustainable growth {_pct(rec.get('sustainable_growth'))}",
+        f"- TTM revenue vs 5y average {_fmt(inf.get('ttm_vs_5y_revenue'), '.2f', '×')}",
+        f"- TTM EBIT vs 5y average {_fmt(inf.get('ttm_vs_5y_ebit'), '.2f', '×')}",
+        f"- Revenue acceleration {_fmt(inf.get('revenue_acceleration'), '+.0%', ' points')}",
+        f"- EBIT margin change over 4 quarters {_fmt(inf.get('ebit_margin_change_4q'), '+.1%', ' points')}",
+        f"- Incremental ROIC {_fmt(inf.get('incremental_roic'), '.0%')}",
+        run_line,
+    ]
+    if rr:
+        lines.append(f"  ({rr['basis']} earnings; three-year growth = {rr['g3_source']}, held to 0-"
+                     f"{RUN_RATE_MAX_G3:.0%}; then the revenue cohort's base-rate cap, at most "
+                     f"{RUN_RATE_MIN_SPREAD:.0%} below the {rr['discount_rate']:.1%} discount rate)")
+    words = [roic_line[2:]] if k else []
+    if cagr_words:
+        words.append(cagr_words)
+    if rec.get("reinvestment_rate") is not None:
+        words.append(f"reinvesting {rec['reinvestment_rate']:.0%} at those returns → sustainable growth "
+                     f"{rec['sustainable_growth']:.0%}")
+    lines += ["", "Record: " + (", ".join(words) if words else "not enough annual data") + "."]
+    parts = []
+    if inf.get("ttm_vs_5y_ebit") is not None:
+        parts.append(f"TTM EBIT is {inf['ttm_vs_5y_ebit']:.2f}× the 5-year average")
+    before, now = inf.get("revenue_growth_year_ago_q"), inf.get("revenue_growth_latest_q")
+    if before is not None and now is not None:
+        verb = "accelerated" if now > before else "slowed" if now < before else "held"
+        parts.append(f"revenue growth {verb} from {before:.0%} to {now:.0%} y/y over four quarters")
+    if inf.get("incremental_roic") is not None:
+        parts.append(f"incremental ROIC {inf['incremental_roic']:.0%}")
+    lines.append("Inflection: " + ("; ".join(parts) if parts else
+                                   f"not enough quarterly data ({inf.get('quarters_available', 0)} quarters)") + ".")
+    return lines

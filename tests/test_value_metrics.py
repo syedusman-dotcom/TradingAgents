@@ -547,3 +547,188 @@ def test_to_quote_unit_scales_every_per_share_value_and_leaves_ratios():
     assert sca["price"] == 800.0
     assert scaled["expected_return"] == m["expected_return"]
     assert m["price"] == 8.0  # the input is not changed
+
+
+# --- record, inflection and run-rate value ----------------------------------------------
+
+def _quarter(end, revenue, ebit, **kw):
+    base = {"fiscal_year_end": end, "revenue": revenue, "ebit": ebit, "current_assets": 600,
+            "current_liabilities": 300, "cash": 100, "net_ppe": 500, "free_cash_flow": 50,
+            "stock_based_comp": 5, "total_debt": 500, "shares": 100}
+    return {**base, **kw}
+
+
+# Newest first: q0 grows 30% on q4, q4 grew 10% on q8 -> acceleration +20 points.
+Q_REVENUE = [143, 130, 125, 120, 110, 108, 105, 102, 100]
+Q_ENDS = ["2026-06-30", "2026-03-31", "2025-12-31", "2025-09-30", "2025-06-30",
+          "2025-03-31", "2024-12-31", "2024-09-30", "2024-06-30"]
+
+
+def _quarters():
+    out = []
+    for i, (end, rev) in enumerate(zip(Q_ENDS, Q_REVENUE, strict=True)):
+        margin = 0.25 if i < 4 else 0.20
+        out.append(_quarter(end, rev, rev * margin, net_ppe=500 if i < 4 else 400))
+    return out
+
+
+@pytest.mark.unit
+def test_record_counts_roic_years_and_cagrs():
+    years = [_year(fiscal_year_end=f"{2025 - i}-12-31", revenue=1000 * 1.1 ** (10 - i)) for i in range(11)]
+    years[2]["ebit"] = 100                          # ROIC 100/700, below 20%
+    years[5]["free_cash_flow"] = 90                 # FCF doubled over five years
+    rec = vm.record(years)
+    assert rec["years_available"] == 11
+    assert rec["roic_years_above_20"] == 4
+    assert rec["roic_min_5y"] == pytest.approx(100 / 700)
+    assert rec["revenue_cagr_10y"] == pytest.approx(0.10)
+    assert rec["revenue_cagr_5y"] == pytest.approx(0.10)
+    assert rec["fcf_cagr_5y"] == pytest.approx(2 ** (1 / 5) - 1)
+    assert rec["reinvestment_rate"] == pytest.approx(1 - 240 / 480)  # payout 80 of owner earnings 160 a year
+    assert rec["sustainable_growth"] == pytest.approx((4 * 200 / 700 + 100 / 700) / 5 * 0.5)
+    er = vm.expected_return(years, price=20, market_cap=2000, shares=100)
+    assert er["sustainable_growth"] == pytest.approx(rec["sustainable_growth"])
+
+
+@pytest.mark.unit
+def test_record_with_three_years_is_partial():
+    rec = vm.record([_year(), _year(), _year()])
+    assert rec["years_available"] == 3 and rec["roic_years_above_20"] == 3
+    assert rec["revenue_cagr_10y"] is None and rec["revenue_cagr_5y"] is None and rec["fcf_cagr_5y"] is None
+    empty = vm.record([])
+    assert empty["years_available"] == 0 and empty["roic_min_5y"] is None
+    assert empty["reinvestment_rate"] is None and empty["sustainable_growth"] is None
+
+
+@pytest.mark.unit
+def test_inflection_ttm_and_acceleration():
+    years = [_year(revenue=400, ebit=80) for _ in range(5)]
+    inf = vm.inflection(years, _quarters())
+    assert inf["quarters_available"] == 9
+    assert inf["quarters_used"] == Q_ENDS[:4]
+    assert inf["ttm_revenue"] == pytest.approx(518)
+    assert inf["ttm_ebit"] == pytest.approx(129.5)
+    assert inf["ttm_vs_5y_revenue"] == pytest.approx(518 / 400)
+    assert inf["ttm_vs_5y_ebit"] == pytest.approx(129.5 / 80)
+    assert inf["revenue_acceleration"] == pytest.approx(0.30 - 0.10)
+    assert inf["ebit_margin_change_4q"] == pytest.approx(0.05)
+    # (TTM EBIT 129.5 - 85 a year ago) after tax / (invested capital 700 - 600)
+    assert inf["incremental_roic"] == pytest.approx((129.5 - 85) * (1 - vm.TAX_RATE) / 100)
+    assert inf["ttm_revenue_growth"] == pytest.approx(518 / 425 - 1)
+
+
+@pytest.mark.unit
+def test_inflection_uses_last_four_available_quarters():
+    years = [_year(revenue=400, ebit=80)]
+    quarters = [_quarter("2026-09-30", None, None), *_quarters()]
+    inf = vm.inflection(years, quarters)
+    assert inf["quarters_used"] == Q_ENDS[:4] and inf["ttm_revenue"] == pytest.approx(518)
+    short = vm.inflection(years, _quarters()[:3])
+    assert short["ttm_revenue"] is None and short["revenue_acceleration"] is None
+    assert short["incremental_roic"] is None and short["quarters_available"] == 3
+    eight = vm.inflection(years, _quarters()[:8])
+    assert eight["revenue_acceleration"] is None and eight["incremental_roic"] is not None
+    none = vm.inflection([], [])
+    assert none["ttm_vs_5y_ebit"] is None and none["quarters_used"] == []
+    flat = vm.inflection(years, [{**q, "net_ppe": 500} for q in _quarters()])  # no new capital
+    assert flat["incremental_roic"] is None
+
+
+@pytest.mark.unit
+def test_run_rate_value_two_stage_and_implied_g3():
+    r, d = 0.09, 0.05
+
+    def two_stage(e, g):
+        explicit = sum(e * (1 + g) ** t / (1 + r) ** t for t in (1, 2, 3))
+        return explicit + e * (1 + g) ** 3 * ((1 + d) / (r - d)) / (1 + r) ** 3
+
+    fcf_ps = two_stage(100, 0.20) / 10
+    ebit_ps = (two_stage(200 * (1 - vm.TAX_RATE), 0.20) - 300) / 10
+    price = two_stage(100, 0.10) / 10                   # the price a 10% three-year run assumes
+    v = vm.run_rate_value(100, 200, 300, 10, price, g3=0.20, rate=r, decay_to=d)
+    assert v["methods"]["fcf"] == pytest.approx(fcf_ps)
+    assert v["methods"]["ebit"] == pytest.approx(ebit_ps)
+    assert v["base"] == pytest.approx((fcf_ps + ebit_ps) / 2)
+    assert (v["low"], v["high"]) == (pytest.approx(min(fcf_ps, ebit_ps)), pytest.approx(max(fcf_ps, ebit_ps)))
+    assert v["implied_g3"] == pytest.approx(0.10, abs=1e-4)
+    assert vm.run_rate_value(100, 200, 300, 10, 1e12, 0.2, r, d)["implied_g3"] is None
+    assert vm.run_rate_value(100, 200, 300, 10, None, 0.2, r, d)["implied_g3"] is None
+    assert vm.run_rate_value(-5, -1, 0, 10, 20, 0.2, r, d) is None
+    assert vm.run_rate_value(100, 200, 0, 0, 20, 0.2, r, d) is None
+    assert vm.run_rate_value(None, None, None, None, None, 0.2, r, d) is None
+
+
+@pytest.mark.unit
+def test_report_has_record_and_inflection_lines():
+    years = [_year(fiscal_year_end=f"{2025 - i}-12-31", revenue=400, ebit=80, current_assets=300,
+                   net_ppe=100) for i in range(5)]
+    m = vm.company_metrics(years, price=20, market_cap=2000, shares=100, quarters=_quarters())
+    assert m["run_rate"]["g3"] == pytest.approx(518 / 425 - 1)
+    assert m["run_rate"]["decay_to"] == 0.07   # under $1B the cap is 10%, held 2 points below the 9% rate
+    assert m["record"]["roic_years_above_20"] == 5 and m["inflection"]["quarters_available"] == 9
+    report = vm.render_report("ABC", "2026-10-23", m)
+    section = report.split("## Record and inflection", 1)[1]
+    assert "- ROIC ≥ 20% in 5/5 years" in section
+    assert "- Revenue CAGR 5y 0.0%" in section
+    assert "- Reinvestment rate " in section and "- Sustainable growth " in section
+    assert "- TTM EBIT vs 5y average 1.62×" in section
+    assert "- Revenue acceleration +20% points" in section
+    assert "- Incremental ROIC 35%" in section
+    assert "- Run-rate value (3y at 22%, then 7%) " in section and "; implied 3-year growth " in section
+    assert "Record: ROIC ≥ 20% in 5/5 years" in section
+    assert "Inflection: TTM EBIT is 1.62× the 5-year average; revenue growth accelerated from 10% to 30%" in section
+    bare = vm.render_report("ABC", "2026-10-23", vm.company_metrics([_year(), _year()], 20, 2000, 100))
+    assert "- TTM EBIT vs 5y average n/a" in bare and "- Revenue acceleration n/a" in bare
+    assert "- Revenue CAGR 10y n/a" in bare
+
+
+@pytest.mark.unit
+def test_yahoo_vendor_reads_quarterly_statements(monkeypatch):
+    annual = [pd.Timestamp(f"{2025 - i}-12-31") for i in range(4)]
+
+    def frame(cols, rows):
+        return pd.DataFrame({c: [r[i] for r in rows.values()] for i, c in enumerate(cols)}, index=list(rows))
+
+    qcols = [pd.Timestamp(e) for e in Q_ENDS]
+    qs = _quarters()
+
+    class FakeTicker:
+        def __init__(self, symbol):
+            self.info = {"currency": "USD", "financialCurrency": "USD", "currentPrice": 20.0,
+                         "marketCap": 2000e6, "sharesOutstanding": 100e6}
+            self.income_stmt = frame(annual, {"Total Revenue": [400e6] * 4, "EBIT": [80e6] * 4,
+                                              "Net Income": [60e6] * 4})
+            self.balance_sheet = frame(annual, {"Total Assets": [2000e6] * 4, "Current Assets": [300e6] * 4,
+                                                "Current Liabilities": [300e6] * 4, "Net PPE": [100e6] * 4})
+            self.cashflow = frame(annual, {"Free Cash Flow": [70e6] * 4, "Operating Cash Flow": [90e6] * 4})
+            self.quarterly_income_stmt = frame(qcols, {"Total Revenue": [q["revenue"] * 1e6 for q in qs],
+                                                       "EBIT": [q["ebit"] * 1e6 for q in qs],
+                                                       "Net Income": [q["ebit"] * 7e5 for q in qs]})
+            self.quarterly_balance_sheet = frame(qcols, {k: [q[f] * 1e6 for q in qs] for k, f in (
+                ("Current Assets", "current_assets"), ("Current Liabilities", "current_liabilities"),
+                ("Cash And Cash Equivalents", "cash"), ("Net PPE", "net_ppe"))})
+            self.quarterly_cashflow = frame(qcols, {"Free Cash Flow": [50e6] * 9,
+                                                    "Stock Based Compensation": [5e6] * 9})
+
+        def history(self, **kw):
+            return pd.DataFrame()
+
+    years = yahoo_vm.statement_years(FakeTicker("X").quarterly_income_stmt, FakeTicker("X").quarterly_balance_sheet,
+                                     FakeTicker("X").quarterly_cashflow)
+    assert [y["fiscal_year_end"] for y in years] == Q_ENDS and years[0]["net_ppe"] == 500e6
+    monkeypatch.setattr(yahoo_vm.yf, "Ticker", FakeTicker)
+    monkeypatch.setattr(yahoo_vm, "is_historical", lambda d: False)
+    monkeypatch.setattr(yahoo_vm, "current_discount_rate", lambda: {"rate": 0.09, "treasury_10y": None})
+    report = yahoo_vm.get_value_metrics("ABC", "2026-10-23")
+    assert "- TTM EBIT vs 5y average 1.62×" in report
+    assert "- Revenue acceleration +20% points" in report
+
+
+@pytest.mark.unit
+def test_pence_scaling_covers_the_run_rate_value():
+    m = {"price": 1.0, "run_rate": {"base": 2.0, "low": 1.5, "high": 2.5, "methods": {"fcf": 1.5, "ebit": 2.5},
+                                    "implied_g3": 0.1, "g3": 0.2, "decay_to": 0.05}}
+    scaled = yahoo_vm._to_quote_unit(m, 100.0)["run_rate"]
+    assert (scaled["base"], scaled["low"], scaled["high"]) == (200.0, 150.0, 250.0)
+    assert scaled["methods"] == {"fcf": 150.0, "ebit": 250.0}
+    assert (scaled["implied_g3"], scaled["g3"]) == (0.1, 0.2)

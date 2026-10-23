@@ -23,9 +23,11 @@ from tradingagents.dataflows.value_metrics import (  # noqa: F401 - re-exported 
     expected_return,
     fcf_yield,
     formula_value,
+    inflection,
     interest_coverage,
     num,
     piotroski,
+    record,
     roic,
     share_count,
 )

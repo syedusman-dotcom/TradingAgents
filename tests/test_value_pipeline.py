@@ -1205,3 +1205,57 @@ def test_results_json_trend_is_the_live_one_over_the_screens(tmp_path, monkeypat
     monkeypatch.setattr(metrics, "trend", lambda closes: {"trend": "FREEFALL"})
     row, d = _review_one(tmp_path, monkeypatch, _good_decision(), 50.0)
     assert row["trend"] == "FREEFALL" == d.trend
+
+
+@pytest.mark.unit
+def test_screen_rows_carry_lane_columns():
+    year = {"fiscal_year_end": "2025-12-31", "revenue": 400, "ebit": 80, "net_income": 60,
+            "total_assets": 2000, "operating_cash_flow": 90, "current_assets": 300, "cash": 100,
+            "current_liabilities": 300, "net_ppe": 100, "shares": 100, "total_debt": 0}
+    quarters = [{"fiscal_year_end": f"2026-0{9 - i}-30", "revenue": 120 - i, "ebit": 30} for i in range(8)]
+    data = {"ticker": "LNE", "years": [year] * 5, "market_cap": 2000, "price": 20, "closes": []}
+    row = screener.evaluate({**data, "quarters": quarters})
+    lane = ("revenue_cagr_10y", "sustainable_growth", "ttm_vs_5y_ebit", "revenue_acceleration")
+    assert set(lane) <= set(row)
+    assert row["ttm_vs_5y_ebit"] == pytest.approx(30 * 4 / 80)
+    assert row["revenue_cagr_10y"] is None
+    old_cache = screener.evaluate(data)                   # a record cached before quarters were fetched
+    assert all(old_cache[k] is None for k in ("revenue_cagr_10y", "ttm_vs_5y_ebit", "revenue_acceleration"))
+
+
+@pytest.mark.unit
+def test_fundamentals_cache_quarterly_statements(tmp_path, monkeypatch):
+    import pandas as pd
+
+    from value_pipeline import market_data
+
+    def frame(cols, rows):
+        return pd.DataFrame({c: [r[i] for r in rows.values()] for i, c in enumerate(cols)}, index=list(rows))
+
+    annual = [pd.Timestamp("2025-12-31"), pd.Timestamp("2024-12-31")]
+    quarters = [pd.Timestamp(d) for d in ("2026-06-30", "2026-03-31")]
+    rows = {"Total Revenue": [400, 380], "EBIT": [80, 70], "Net Income": [60, 50], "Total Assets": [2000, 1900],
+            "Current Assets": [300, 290], "Current Liabilities": [300, 280], "Net PPE": [100, 90]}
+
+    class FakeTicker:
+        info = {"marketCap": 2000, "currentPrice": 20, "currency": "USD", "sector": "Industrials"}
+        income_stmt = frame(annual, rows)
+        balance_sheet = cashflow = None
+        quarterly_income_stmt = frame(quarters, rows)
+        quarterly_balance_sheet = quarterly_cashflow = None
+
+    monkeypatch.setattr(market_data.yf, "Ticker", lambda t: FakeTicker())
+    monkeypatch.setattr(market_data, "closes", lambda t: [20.0])
+    paths = Paths(tmp_path)
+    data = market_data.fundamentals("ABC", paths)
+    assert market_data.CACHE_SCHEMA == 4 and data["schema"] == 4
+    assert [q["fiscal_year_end"] for q in data["quarters"]] == ["2026-06-30", "2026-03-31"]
+    assert market_data.fundamentals("ABC", paths)["from_cache"] is True
+
+    class NoQuarters(FakeTicker):
+        @property
+        def quarterly_income_stmt(self):
+            raise RuntimeError("Yahoo down")
+
+    monkeypatch.setattr(market_data.yf, "Ticker", lambda t: NoQuarters())
+    assert market_data.fundamentals("XYZ", paths)["quarters"] == []

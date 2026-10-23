@@ -66,7 +66,8 @@ _MINOR_NAMES = {"GBp": "pence", "GBX": "pence", "ZAc": "cents", "ILA": "agorot"}
 
 
 def statement_years(*frames: pd.DataFrame) -> list[dict]:
-    """Merge Yahoo's annual statements into per-year dicts, newest first."""
+    """Merge Yahoo's statements into per-period dicts, newest first: annual frames give fiscal
+    years, quarterly frames (same row labels) give quarters, keyed by the period end."""
     columns = sorted({c for f in frames if f is not None for c in f.columns}, reverse=True)
     years = []
     for col in columns:
@@ -87,6 +88,18 @@ def statement_years(*frames: pd.DataFrame) -> list[dict]:
         if sum(v is not None for k, v in year.items() if k != "fiscal_year_end") >= 6:
             years.append(year)
     return years
+
+
+QUARTERLY_FRAMES = ("quarterly_income_stmt", "quarterly_balance_sheet", "quarterly_cashflow")
+
+
+def quarterly_statements(t) -> list[dict]:
+    """The quarterly statements as ``statement_years`` dicts (one per quarter end, newest first);
+    [] when Yahoo has none or the request fails: the report renders without the TTM figures."""
+    try:
+        return statement_years(*(yf_retry(lambda attr=attr: getattr(t, attr)) for attr in QUARTERLY_FRAMES))
+    except Exception:
+        return []
 
 
 def fiscal_average_closes(history: pd.DataFrame, fiscal_year_ends: list[str]) -> dict[str, float]:
@@ -126,6 +139,11 @@ def _to_quote_unit(metrics: dict, factor: float) -> dict:
             if key in v:
                 v[key] = scale(v[key])
         v["grid"] = {k: [scale(x) for x in row] for k, row in (v.get("grid") or {}).items()}
+    rr = m.get("run_rate")
+    if rr:
+        rr["methods"] = {k: scale(x) for k, x in rr["methods"].items()}
+        for key in ("base", "low", "high"):
+            rr[key] = scale(rr.get(key))
     ca = m.get("capital_allocation")
     if ca:
         for r in ca["per_year"]:
@@ -153,6 +171,7 @@ def get_value_metrics(
     years = statement_years(*frames)
     if not years:
         raise_for_empty(ticker, canonical, "annual statements")
+    quarters = quarterly_statements(t)
 
     quote, reported = info.get("currency"), info.get("financialCurrency")
     price = info.get("currentPrice") or info.get("regularMarketPrice")
@@ -193,7 +212,7 @@ def get_value_metrics(
         revenue_usd = years[0]["revenue"] * fx
     metrics = company_metrics(years, price, info.get("marketCap") if price else None, shares,
                               rate=rate["rate"], treasury_10y=rate["treasury_10y"], avg_prices=avg_prices,
-                              revenue_usd=revenue_usd)
+                              revenue_usd=revenue_usd, quarters=quarters)
     if minor:
         metrics = _to_quote_unit(metrics, factor)
     return render_report(canonical, as_of_date or "today", metrics, currency=reported or quote) + note

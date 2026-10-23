@@ -17,7 +17,10 @@ import requests
 import yfinance as yf
 
 from tradingagents.dataflows.vendors.yahoo.common import MINOR_UNITS, usd_rate
-from tradingagents.dataflows.vendors.yahoo.value_metrics import statement_years
+from tradingagents.dataflows.vendors.yahoo.value_metrics import (
+    quarterly_statements,
+    statement_years,
+)
 from value_pipeline.config import Paths
 
 log = logging.getLogger(__name__)
@@ -31,7 +34,7 @@ HEADERS = {"User-Agent": "value-pipeline/0.1 (personal research tool)"}
 
 
 # Bump when the cached fields change, so older cache files are fetched again.
-CACHE_SCHEMA = 3
+CACHE_SCHEMA = 4
 
 
 class DataUnavailable(Exception):
@@ -73,7 +76,7 @@ def closes(ticker: str, days: int = 420) -> list[float]:
 
 
 def fundamentals(ticker: str, paths: Paths, cache_days: int = 7) -> dict:
-    """Annual statements, market data and ~400 days of closes for one ticker, cached."""
+    """Annual and quarterly statements, market data and ~400 days of closes for one ticker, cached."""
     cache = paths.cache / f"{ticker}.json"
     if cache.exists():
         data = json.loads(cache.read_text(encoding="utf-8"))
@@ -89,6 +92,7 @@ def fundamentals(ticker: str, paths: Paths, cache_days: int = 7) -> dict:
         raise DataUnavailable(f"Yahoo request failed: {exc}") from exc
     if not years:
         raise DataUnavailable("no annual statements")
+    quarters = quarterly_statements(t)      # fail-open: the lane columns stay blank without them
     data = {
         "schema": CACHE_SCHEMA,
         "fetched_at": datetime.now().isoformat(timespec="seconds"),
@@ -100,6 +104,7 @@ def fundamentals(ticker: str, paths: Paths, cache_days: int = 7) -> dict:
         "currency": info.get("currency"),
         "sector": info.get("sector"),
         "years": years,
+        "quarters": quarters,
         "closes": series,
     }
     paths.cache.mkdir(parents=True, exist_ok=True)
