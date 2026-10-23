@@ -293,3 +293,22 @@ def test_a_committee_weight_of_exactly_one_is_read_as_one_percent():
 
     md = "\n".join(render_committee(_weighted(1.0), [], None))
     assert "| 1 | T1 | BUY | 1% | – | r |" in md
+
+
+@pytest.mark.unit
+def test_committee_payload_carries_lanes():
+    from value_pipeline import portfolio as pfmod
+    from value_pipeline.committee import build_payload, committee_prompt
+
+    decisions = [Decision(ticker="INF", rating="Buy", price=10.0, lane="inflection"),
+                 Decision(ticker="HRB", rating="Hold", price=50.0, held_shares=1)]
+    results = [{"ticker": "INF", "lane_evidence": ["backlog +40%"]}, {"ticker": "HRB"}]
+    pf = pfmod.Portfolio(cash=100.0)
+    _, summary = plan(decisions, 100.0, SIZING)
+    stocks = {s["ticker"]: s for s in build_payload(decisions, results, pf, summary, SIZING)["stocks"]}
+    assert stocks["INF"]["lane"] == "inflection" and stocks["INF"]["lane_evidence"] == ["backlog +40%"]
+    assert stocks["HRB"]["lane"] == "value" and stocks["HRB"]["lane_evidence"] == []
+    prompt = committee_prompt(SIZING)
+    assert "inflection at 20%" in prompt and "cut inflection positions first" in prompt
+    caps = committee_prompt({**SIZING, "lane_caps": {"compounder": 0.25, "inflection": 0.15}})
+    assert "compounder positions are capped at 25% and inflection at 15%" in caps

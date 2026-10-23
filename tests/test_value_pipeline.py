@@ -639,6 +639,41 @@ class _FlakyGraph:
 
 
 @pytest.mark.unit
+def test_run_agents_passes_the_pipeline_note(tmp_path):
+    from value_pipeline import review
+
+    notes = []
+
+    class Graph:
+        def propagate(self, ticker, day, portfolio=None, context_note=""):
+            notes.append(context_note)
+            return {"final_trade_decision": "**Rating**: Hold"}, "Hold"
+
+        def save_reports(self, state, ticker, save_path, html):
+            pass
+
+    review.run_agents(Graph(), "ADBE", "2026-10-23", None, tmp_path, note="lane hint dislocation")
+    review.run_agents(Graph(), "ADBE", "2026-10-23", None, tmp_path)
+    assert notes == ["lane hint dislocation", ""]
+
+
+@pytest.mark.unit
+def test_pipeline_note_from_the_screen_row():
+    from value_pipeline import review
+
+    row = {"lane_hint": "dislocation", "hints": "compounder;dislocation", "move_3m": -0.432,
+           "drawdown_from_high": -0.451, "ttm_vs_5y_ebit": 1.314, "revenue_acceleration": 0.123}
+    assert review.pipeline_note(row) == (
+        "lane hint compounder, dislocation; 3-month move -43%; drawdown from the 52-week high -45%; "
+        "TTM EBIT 1.31× the 5-year average; revenue acceleration +12 points.")
+    theme = {"lane_hint": "inflection", "theme": "AI infrastructure", "move_3m": float("nan"),
+             "revenue_acceleration": None}
+    assert review.pipeline_note(theme) == "lane hint inflection (theme: AI infrastructure)."
+    assert review.pipeline_note({"lane_hint": "", "hints": float("nan")}) == ""
+    assert review.pipeline_note(None) == ""
+
+
+@pytest.mark.unit
 def test_run_agents_usage_counts_a_failed_first_attempt(tmp_path):
     from value_pipeline import review
 
@@ -1019,6 +1054,31 @@ def test_fake_decision_carries_the_checklist_sections():
 
 
 @pytest.mark.unit
+def test_the_dry_run_cycles_a_compounder_and_an_inflection_decision():
+    from value_pipeline import parse, review
+
+    lanes = [parse.lane(review.fake_run(f"T{i}", i, False, 50.0).decision) for i in range(4)]
+    assert lanes == ["value", "compounder", "value", "inflection"]
+    inflection = review.fake_run("T3", 3, False, 50.0).decision
+    assert any(e.startswith("verified:") for e in parse.lane_evidence(inflection))
+    assert parse.kill_criteria(inflection)[0].startswith("Fake: backlog")
+
+
+@pytest.mark.unit
+def test_one_demand_vocabulary_for_the_check_and_the_ordering():
+    from tradingagents.agents.decision_math import DEMAND_WORDS
+    from value_pipeline import render
+
+    for words in ("Book-to-bill below 1.0", "RPO falls 10%", "remaining performance obligations shrink",
+                  "lead times shorten", "customer capex cut", "orders fall"):
+        assert DEMAND_WORDS.search(words), words
+    assert not DEMAND_WORDS.search("Gross margin below 30%")
+    assert render.demand_first(["ROIC below 12%", "RPO falls 10%"], "inflection") == [
+        "RPO falls 10%", "ROIC below 12%"]
+    assert render.DEMAND_WORDS is DEMAND_WORDS
+
+
+@pytest.mark.unit
 def test_a_pence_quote_is_sized_in_dollars():
     d = Decision("DNLM.L", "Buy", price=886.0, currency="GBp", fx_to_usd=0.0133)
     actions, summary = plan([d], cash=10_000.0, sizing=SIZING)
@@ -1146,7 +1206,7 @@ def test_results_and_position_carry_the_earnings_date_or_none(tmp_path, monkeypa
 
     pf = pfmod.load(paths)
     assert pf.position("HRB").next_earnings_date is None
-    act = SimpleNamespace(ticker="HRB", rating="Hold", consecutive_underweight=0,
+    act = SimpleNamespace(ticker="HRB", rating="Hold", consecutive_underweight=0, lane="value",
                           decision=SimpleNamespace(intrinsic_value=None, kill_criteria=[], entry_price=None))
     review._record_ratings(paths, pf, [act], "2026-10-23", {"HRB": "2026-11-05"})
     assert pfmod.load(paths).position("HRB").next_earnings_date == "2026-11-05"
@@ -1205,3 +1265,440 @@ def test_results_json_trend_is_the_live_one_over_the_screens(tmp_path, monkeypat
     monkeypatch.setattr(metrics, "trend", lambda closes: {"trend": "FREEFALL"})
     row, d = _review_one(tmp_path, monkeypatch, _good_decision(), 50.0)
     assert row["trend"] == "FREEFALL" == d.trend
+
+
+@pytest.mark.unit
+def test_screen_rows_carry_lane_columns():
+    year = {"fiscal_year_end": "2025-12-31", "revenue": 400, "ebit": 80, "net_income": 60,
+            "total_assets": 2000, "operating_cash_flow": 90, "current_assets": 300, "cash": 100,
+            "current_liabilities": 300, "net_ppe": 100, "shares": 100, "total_debt": 0}
+    ends = ["2026-09-30", "2026-06-30", "2026-03-31", "2025-12-31", "2025-09-30", "2025-06-30",
+            "2025-03-31", "2024-12-31"]
+    quarters = [{"fiscal_year_end": end, "revenue": 120 - i, "ebit": 30} for i, end in enumerate(ends)]
+    data = {"ticker": "LNE", "years": [year] * 5, "market_cap": 2000, "price": 20, "closes": []}
+    row = screener.evaluate({**data, "quarters": quarters})
+    lane = ("revenue_cagr_10y", "revenue_cagr", "revenue_cagr_years", "sustainable_growth",
+            "ttm_vs_5y_ebit", "revenue_acceleration")
+    assert set(lane) <= set(row)
+    assert row["ttm_vs_5y_ebit"] == pytest.approx(30 * 4 / 80)
+    assert row["revenue_cagr_10y"] is None
+    assert row["revenue_acceleration"] == pytest.approx(120 / 116 - 1)    # fiscal 2025 grew 0%
+    assert row["roic_years_counted"] == 5 and row["roic_gw_min"] == pytest.approx(0.80)
+    assert row["fcf_cagr"] is None and row["earned_growth"] is None       # no FCF reported
+    assert row["compounder_return"] is None
+    old_cache = screener.evaluate(data)                   # a record cached before quarters were fetched
+    assert all(old_cache[k] is None for k in ("revenue_cagr_10y", "ttm_vs_5y_ebit", "revenue_acceleration"))
+
+
+@pytest.mark.unit
+def test_fundamentals_cache_quarterly_statements(tmp_path, monkeypatch):
+    import pandas as pd
+
+    from value_pipeline import market_data
+
+    def frame(cols, rows):
+        return pd.DataFrame({c: [r[i] for r in rows.values()] for i, c in enumerate(cols)}, index=list(rows))
+
+    annual = [pd.Timestamp("2025-12-31"), pd.Timestamp("2024-12-31")]
+    quarters = [pd.Timestamp(d) for d in ("2026-06-30", "2026-03-31")]
+    rows = {"Total Revenue": [400, 380], "EBIT": [80, 70], "Net Income": [60, 50], "Total Assets": [2000, 1900],
+            "Current Assets": [300, 290], "Current Liabilities": [300, 280], "Net PPE": [100, 90]}
+
+    class FakeTicker:
+        info = {"marketCap": 2000, "currentPrice": 20, "currency": "USD", "sector": "Industrials",
+                "industry": "Specialty Industrial Machinery"}
+        income_stmt = frame(annual, rows)
+        balance_sheet = cashflow = None
+        quarterly_income_stmt = frame(quarters, rows)
+        quarterly_balance_sheet = quarterly_cashflow = None
+
+    monkeypatch.setattr(market_data.yf, "Ticker", lambda t: FakeTicker())
+    monkeypatch.setattr(market_data, "closes", lambda t: [20.0])
+    paths = Paths(tmp_path)
+    data = market_data.fundamentals("ABC", paths)
+    assert market_data.CACHE_SCHEMA == 6 and data["schema"] == 6
+    assert data["industry"] == "Specialty Industrial Machinery"
+    assert [q["fiscal_year_end"] for q in data["quarters"]] == ["2026-06-30", "2026-03-31"]
+    assert market_data.fundamentals("ABC", paths)["from_cache"] is True
+
+    class NoQuarters(FakeTicker):
+        @property
+        def quarterly_income_stmt(self):
+            raise RuntimeError("Yahoo down")
+
+    monkeypatch.setattr(market_data.yf, "Ticker", lambda t: NoQuarters())
+    assert market_data.fundamentals("XYZ", paths)["quarters"] == []
+    assert "quarters" not in json.loads((paths.cache / "XYZ.json").read_text())   # a failed fetch: not cached
+    assert not market_data.fundamentals("XYZ", paths).get("from_cache")           # so the next run retries
+    monkeypatch.setattr(market_data.yf, "Ticker", lambda t: FakeTicker())
+    assert len(market_data.fundamentals("XYZ", paths)["quarters"]) == 2
+    assert market_data.fundamentals("XYZ", paths)["from_cache"] is True
+
+
+@pytest.mark.unit
+def test_results_json_and_the_decision_carry_the_lane(tmp_path, monkeypatch):
+    from tests.test_decision_math import _compounder, _good_decision
+
+    row, d = _review_one(tmp_path, monkeypatch, _compounder(), 50.0)
+    assert row["lane"] == "compounder" and d.lane == "compounder"
+    assert row["lane_evidence"][0] == "ROIC ≥ 20% 5/5 years" and len(row["lane_evidence"]) == 5
+    row, d = _review_one(tmp_path / "old", monkeypatch, _good_decision(), 50.0)
+    assert row["lane"] == "value" and row["lane_evidence"] == [] and d.lane == "value"
+    assert Decision("X", "Hold", 10.0).lane == "value"
+
+
+@pytest.mark.unit
+def test_lane_buy_is_sized_at_half_and_capped_by_the_lane_cap():
+    sizing = {**SIZING, "max_sector_weight": 1.0}
+    # No holdings in the lane: a Buy gets half the 10% target.
+    actions, _ = plan([Decision("INF", "Buy", price=10.0, lane="inflection")], cash=10_000.0, sizing=SIZING)
+    assert actions[0].amount == pytest.approx(500.0) and actions[0].lane == "inflection"
+    actions, _ = plan([Decision("INF", "Overweight", price=10.0, lane="inflection")], cash=10_000.0, sizing=SIZING)
+    assert actions[0].amount == pytest.approx(250.0)
+    # Two inflection holdings at 18% of the portfolio: the new buy is cut to fit the 20% cap.
+    held = [Decision("A", "Hold", price=100.0, held_shares=9, lane="inflection"),
+            Decision("B", "Hold", price=100.0, held_shares=9, lane="inflection")]
+    new = Decision("C", "Buy", price=10.0, lane="inflection")
+    actions, _ = plan([*held, new], cash=8_200.0, sizing=sizing)
+    c = {a.ticker: a for a in actions}["C"]
+    assert c.amount == pytest.approx(200.0) and "inflection lane at its 20% cap" in c.reason
+    # Unreviewed holdings count too, as the 4th element; at the cap the buy is skipped.
+    actions, _ = plan([new], cash=8_000.0, sizing=sizing, others=[("X", 2_000.0, None, "inflection")])
+    assert actions[0].action == "SKIP" and "inflection lane at its 20% cap" in actions[0].reason
+    # Value positions are not counted against the lane.
+    actions, _ = plan([new], cash=8_000.0, sizing=sizing, others=[("X", 2_000.0, None)])
+    assert actions[0].amount == pytest.approx(500.0)
+
+
+@pytest.mark.unit
+def test_unresolved_lane_claim_sizes_as_hold():
+    new = Decision("INF", "Buy", price=10.0, lane="inflection", lane_unresolved=True)
+    held = Decision("OWN", "Overweight", price=10.0, held_shares=1, lane="compounder", lane_unresolved=True)
+    value = Decision("VAL", "Buy", price=10.0, lane_unresolved=True)
+    actions, _ = plan([new, held, value], cash=10_000.0, sizing=SIZING)
+    by = {a.ticker: a for a in actions}
+    assert by["INF"].action == "SKIP" and by["INF"].amount is None and by["INF"].rating == "Buy"
+    assert by["INF"].reason == "lane claim unresolved: sized as Hold"
+    assert by["OWN"].action == "KEEP" and by["OWN"].reason == "lane claim unresolved: sized as Hold"
+    assert by["VAL"].action == "BUY"
+
+
+@pytest.mark.unit
+def test_position_and_results_carry_the_lane(tmp_path):
+    from value_pipeline import operations as ops, review
+
+    paths = Paths(tmp_path)
+    ops.init_portfolio(paths, 1000.0, on="2026-10-01")
+    folder = paths.reports / "2026-10-11"
+    folder.mkdir(parents=True)
+    (folder / "results.json").write_text(json.dumps([
+        {"ticker": "INF", "rating": "Buy", "error": None, "thesis": "t", "lane": "inflection",
+         "lane_evidence": ["backlog +40%"]}]))
+    held, _ = ops.record_buy(paths, "INF", 1, 10.0, on="2026-10-12")
+    assert held.lane == "inflection" and pfmod.load(paths).position("INF").lane == "inflection"
+    # a review stores the lane on a holding
+    d = Decision(ticker="INF", rating="Hold", price=10.0, held_shares=1, lane="compounder")
+    review._record_ratings(paths, pfmod.load(paths), plan([d], cash=990.0, sizing=SIZING)[0], "2026-11-07")
+    assert pfmod.load(paths).position("INF").lane == "compounder"
+    # old files load as value
+    paths.portfolio.write_text('{"cash": 5.0, "positions": [{"ticker": "OLD", "shares": 1, '
+                               '"avg_price": 2.0, "first_bought": "2026-01-01"}]}')
+    assert pfmod.load(paths).position("OLD").lane == "value"
+    # the rendered tables show the lane
+    inf = Decision("NEW", "Buy", price=10.0, lane="inflection")
+    own = Decision("OWN", "Hold", price=10.0, held_shares=1, lane="compounder")
+    skip = Decision("SK", "Buy", price=10.0, lane="compounder", lane_unresolved=True)
+    actions, summary = plan([inf, own, skip], cash=1000.0, sizing=SIZING)
+    md = render.actions_markdown("2026-11-07", actions, summary, reports={}, comparison=None, cost=0.0,
+                                 failures=[], dry_run=False)
+    assert "| Ticker | Rating | Lane | Amount |" in md
+    assert "| NEW | Buy | inflection |" in md and "| OWN | Hold (compounder) |" in md
+    assert "lane claim unresolved: sized as Hold — lane compounder" in md
+
+
+@pytest.mark.unit
+def test_watch_lists_demand_criteria_first(tmp_path, monkeypatch):
+    from value_pipeline import watch
+
+    paths = Paths(tmp_path)
+    pf = pfmod.Portfolio(cash=0.0)
+    pfmod.apply_deposit(pf, 1000.0, on="2026-10-01")
+    pfmod.apply_buy(pf, "INF", 1, 40.0, on="2026-10-02", lane="inflection",
+                    kill_criteria=["Net debt above 3x EBITDA", "Book-to-bill below 1 for two quarters",
+                                   "Backlog falls year on year"])
+    pfmod.apply_buy(pf, "HRB", 1, 40.0, on="2026-10-02", kill_criteria=["Dividend cut", "Demand drops"])
+    pfmod.save(paths, pf)
+    monkeypatch.setattr(watch.market_data, "latest_price", lambda t: 40.0)
+    monkeypatch.setattr(watch.market_data, "closes", lambda t: [])
+    _, out = watch.run(paths, DEFAULTS, notify=False)
+    text = out.read_text()
+    assert ("- INF: 1. Book-to-bill below 1 for two quarters; 2. Backlog falls year on year; "
+            "3. Net debt above 3x EBITDA") in text                     # book-to-bill is demand (M1)
+    assert "- HRB: 1. Dividend cut; 2. Demand drops" in text
+
+
+# --- dislocation scan ---------------------------------------------------------------
+
+def _dislocated_closes(high=100.0, price=70.0, n=420):
+    """A flat series at ``high`` that falls to ``price`` over the last month."""
+    return [high] * (n - 22) + [high - (high - price) * (i + 1) / 22 for i in range(22)]
+
+
+@pytest.mark.unit
+def test_dislocation_metrics_and_hint():
+    closes = _dislocated_closes()
+    d = metrics.dislocation(closes, 110.0, 22.0, 100.0, 20.0, [])
+    assert d["drawdown_from_high"] == pytest.approx(70 / 100 - 1)
+    assert d["move_1m"] == pytest.approx(70 / closes[-22] - 1)
+    assert d["move_3m"] == pytest.approx(70 / 100 - 1)
+    assert d["fundamentals_intact"] is True
+    assert metrics.dislocation(closes, 99.0, 22.0, 100.0, 20.0, [])["fundamentals_intact"] is False
+    assert metrics.dislocation(closes, 110.0, 19.0, 100.0, 20.0, [])["fundamentals_intact"] is False
+    assert metrics.dislocation(closes, 110.0, 22.0, 100.0, 20.0, ["accruals"])["fundamentals_intact"] is False
+    assert metrics.dislocation(closes, None, 22.0, 100.0, 20.0, [])["fundamentals_intact"] is None
+    short = metrics.dislocation([10.0] * 30, 1.0, 1.0, 1.0, 1.0, [])
+    assert short["drawdown_from_high"] is None and short["move_3m"] is None
+    assert short["move_1m"] == pytest.approx(0.0)
+    assert metrics.dislocation([], None, None, None, None, [])["move_1m"] is None
+
+    # The screen row carries the columns; the industry comes from the fundamentals record.
+    year = {"fiscal_year_end": "2025-12-31", "revenue": 100, "ebit": 20, "net_income": 15,
+            "total_assets": 500, "current_assets": 100, "current_liabilities": 50}
+    ends = ["2026-09-30", "2026-06-30", "2026-03-31", "2025-12-31"]
+    quarters = [{"fiscal_year_end": e, "revenue": 27.5, "ebit": 5.5} for e in ends]
+    row = screener.evaluate({"ticker": "DIS", "years": [year] * 5, "market_cap": 2000, "price": 70,
+                             "closes": closes, "quarters": quarters, "industry": "Software"})
+    assert row["industry"] == "Software" and row["accounting_flags"] == ""
+    assert row["drawdown_from_high"] == pytest.approx(-0.30)
+    assert row["move_3m"] == pytest.approx(-0.30) and row["move_1m"] == pytest.approx(70 / closes[-22] - 1)
+    assert row["fundamentals_intact"] is True                 # TTM 110 / 22 vs averages 100 / 20
+    two_years = screener.evaluate({"ticker": "DIS", "years": [year] * 2, "market_cap": 2000, "price": 70,
+                                   "closes": closes, "quarters": quarters})
+    assert two_years["fundamentals_intact"] is None           # under three years: no five-year average
+
+    base = {"passes_filters": True, "fundamentals_intact": True, "drawdown_from_high": -0.30,
+            "move_1m": -0.05, "roic_min": 0.1}
+    assert screener.lane_hint(base) == "dislocation" and screener.lane_hints(base) == ["dislocation"]
+    assert screener.lane_hint({**base, "drawdown_from_high": -0.10, "move_1m": -0.21}) == "dislocation"
+    assert screener.lane_hint({**base, "drawdown_from_high": -0.10}) == ""
+    assert screener.lane_hint({**base, "fundamentals_intact": False}) == ""
+    assert screener.lane_hint({**base, "fundamentals_intact": "True"}) == "dislocation"   # read from a CSV
+    assert screener.lane_hint({**base, "fundamentals_intact": None}) == ""
+    assert screener.lane_hint({**base, "passes_filters": False}) == ""
+    compounder = {**base, "roic_gw_min": 0.18, "roic_years_counted": 5, "revenue_cagr": 0.11,
+                  "revenue_cagr_years": 10, "fcf_cagr": 0.09, "fcf_cagr_years": 4}
+    assert screener.lane_hint(compounder) == "compounder"                 # a dislocated compounder
+    assert screener.lane_hints(compounder) == ["compounder", "dislocation"]
+    old = {"passes_filters": True, "roic_min": 0.1}                       # a screen from before the columns
+    assert screener.lane_hint(old) == "" and screener.lane_hints(old) == []
+
+
+@pytest.mark.unit
+def test_sector_scare_tags_three_names_in_one_industry():
+    def r(t, industry, hints="dislocation"):
+        return {"ticker": t, "industry": industry, "hints": hints, "lane_hint": hints.split(";")[0]}
+
+    rows = [r("SAA", "Software"), r("SBB", "Software"), r("SCC", "Software", "compounder;dislocation"),
+            r("SDD", "Software", "compounder"), r("BKA", "Banks"), r("BKB", "Banks"), r("NOI", None),
+            r("NOJ", None), r("NOK", None)]
+    scares = screener.tag_sector_scares(rows)
+    assert scares == {"Software": ["SAA", "SBB", "SCC"]}
+    tags = {x["ticker"]: x["sector_scare"] for x in rows}
+    assert tags["SAA"] == tags["SBB"] == tags["SCC"] == "Software"
+    assert tags["SDD"] == "" and tags["BKA"] == "" and tags["NOI"] == ""
+
+
+def _dislocation_screen(paths, day="2026-10-20", **extra):
+    import pandas as pd
+
+    def r(t, mf, er, hints="", trend="UPTREND", industry="Software", **kw):
+        return {"ticker": t, "name": f"{t} Corp", "mf_position": mf, "expected_return": er,
+                "lane_hint": hints.split(";")[0], "hints": hints, "trend": trend, "sector": "Technology",
+                "industry": industry, "value_base": 100.0, "fscore": 7, "drawdown_from_high": -0.32,
+                "move_1m": -0.12, "sector_scare": "", **kw}
+    rows = [r("AAA", 1, 0.10), r("BBB", 2, 0.09), r("CMP", 9, 0.15, "compounder"),
+            r("DS1", 20, 0.14, "dislocation", sector_scare="Software"),
+            r("DS2", None, 0.18, "dislocation", sector_scare="Software"),
+            r("DS3", 22, 0.12, "compounder;dislocation", sector_scare="Software"),
+            r("DS4", 23, 0.11, "dislocation"), r("DSF", 24, 0.30, "dislocation", trend="FREEFALL"),
+            r("OWN", 25, 0.40, "dislocation")]
+    paths.screens.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(rows).to_csv(paths.screens / f"screen_{day}.csv", index=False)
+    return rows
+
+
+@pytest.mark.unit
+def test_review_adds_dislocation_candidates(tmp_path, monkeypatch):
+    import copy
+
+    import pandas as pd
+
+    from value_pipeline import market_data, operations as ops, review, themes
+
+    paths = Paths(tmp_path)
+    _dislocation_screen(paths)
+    picks = screener.top_candidates(paths, {"OWN"}, 2, compounders=1, dislocations=3)
+    assert [p["ticker"] for p in picks] == ["AAA", "BBB", "CMP", "DS2", "DS1", "DS3"]
+    assert [p["ticker"] for p in screener.top_candidates(paths, {"OWN"}, 2, dislocations=2)] == [
+        "AAA", "BBB", "DS2", "DS1"]
+    old = pd.read_csv(paths.screens / "screen_2026-10-20.csv").drop(columns=["hints", "lane_hint"])
+    old.to_csv(paths.screens / "screen_2026-10-21.csv", index=False)     # a screen from before the columns
+    assert [p["ticker"] for p in screener.top_candidates(paths, {"OWN"}, 2, dislocations=3)] == ["AAA", "BBB"]
+    (paths.screens / "screen_2026-10-21.csv").unlink()
+
+    monkeypatch.setattr(market_data, "quote_fx", lambda t: ("USD", 1.0))
+    ops.init_portfolio(paths, 1000.0, on="2026-10-01")
+    ops.record_buy(paths, "OWN", 1, 10.0, on="2026-10-02")
+    monkeypatch.setattr(market_data, "latest_price", lambda t: 50.0)
+    monkeypatch.setattr(market_data, "closes", lambda t, days=420: [])
+    monkeypatch.setattr(market_data, "closes_between", lambda *a, **k: pd.Series(dtype=float))
+    monkeypatch.setattr(market_data, "cached_sector", lambda t, p: "Technology")
+    monkeypatch.setattr(review, "next_earnings_date", lambda t: None)
+    monkeypatch.setattr(review, "fake_run", lambda t, i, held, price: review.RunResult(t, "Hold", ""))
+    scans = []
+    monkeypatch.setattr(themes, "scan", lambda llm, names, today: scans.append(names) or [])
+    cfg = copy.deepcopy(DEFAULTS)
+    assert cfg["lanes"]["dislocation_candidates"] == 3
+    cfg["review"].update(candidates=2, committee=False)
+    cfg["lanes"]["compounder_candidates"] = 1
+
+    out = review.run(paths, cfg, yes=True, dry_run=True, today="2026-10-23", discover=True)
+    rows = json.loads((out.parent / "results.json").read_text())
+    assert [r["ticker"] for r in rows] == ["OWN", "AAA", "BBB", "CMP", "DS2", "DS1", "DS3"]
+    hints = {r["ticker"]: r["lane_hint"] for r in rows}
+    assert hints["DS2"] == "dislocation" and hints["DS3"] == "compounder"
+    md = out.read_text()
+    assert "(hint: dislocation)" in md
+    assert scans == []                                                  # no themes named: no scan
+    report = (paths.reports / "themes_2026-10-23-dry-run.md").read_text()
+    assert "## Sector scares" in report
+    assert "Software" in report and "DS1" in report and "DS2" in report and "-32%" in report
+    assert "DS4" not in report
+    assert "themes_2026-10-23-dry-run.md" in md
+
+    plain = review.run(paths, cfg, yes=True, dry_run=True, today="2026-10-24")   # a plain review
+    assert "DS2" in [r["ticker"] for r in json.loads((plain.parent / "results.json").read_text())]
+
+
+@pytest.mark.unit
+def test_themes_report_lists_sector_scares_after_the_themes(tmp_path):
+    from value_pipeline import themes
+
+    paths = Paths(tmp_path)
+    scares = {"Software": [{"ticker": "DS1", "drawdown_from_high": -0.32},
+                           {"ticker": "DS2", "drawdown_from_high": None}]}
+    lines = themes.scare_lines(scares)
+    assert lines[0] == "## Sector scares"
+    text = "\n".join(lines)
+    assert "**Software**" in text and "DS1 (-32%)" in text and "DS2 (–)" in text
+    assert themes.scare_lines({}) == []
+    out = themes.write_report(paths, "2026-10-23", [], [], [], extra=lines)
+    body = out.read_text()
+    assert "## Sector scares" in body and "## Candidates added" not in body   # scares only, no scan
+
+
+@pytest.mark.unit
+def test_watch_new_ideas_lists_only_new_hints(tmp_path, monkeypatch):
+    from value_pipeline import watch
+
+    paths = Paths(tmp_path)
+    pf = pfmod.Portfolio(cash=0.0)
+    pfmod.apply_deposit(pf, 1000.0, on="2026-10-01")
+    pfmod.apply_buy(pf, "OWN", 1, 40.0, on="2026-10-02")
+    pfmod.save(paths, pf)
+    monkeypatch.setattr(watch.market_data, "latest_price", lambda t: 40.0)
+    monkeypatch.setattr(watch.market_data, "closes", lambda t: [])
+    _dislocation_screen(paths)
+
+    _, out = watch.run(paths, DEFAULTS, notify=False, today="2026-10-17")
+    text = out.read_text()
+    assert "## New ideas" in text and "(first watch)" in text
+    assert "- DS1 (DS1 Corp): dislocation — drawdown -32% / 1m -12% — expected return 14%/yr" in text
+    assert "- CMP (CMP Corp): compounder" in text and "AAA (" not in text
+    assert "OWN (" not in text                                          # held: not a new idea
+    side = json.loads((paths.reports / "watch_2026-10-17.json").read_text())
+    assert side["hinted"]["DS1"] == "dislocation" and "AAA" not in side["hinted"]
+
+    import pandas as pd
+
+    df = pd.read_csv(paths.screens / "screen_2026-10-20.csv")
+    df.loc[df["ticker"] == "AAA", ["lane_hint", "hints"]] = "inflection"
+    df.to_csv(paths.screens / "screen_2026-10-24.csv", index=False)
+    _, out = watch.run(paths, DEFAULTS, notify=False, today="2026-10-24")
+    text = out.read_text()
+    section = text.split("## New ideas")[1].split("\n## ")[0]
+    assert "(first watch)" not in section
+    assert "- AAA (AAA Corp): inflection" in section and "DS1" not in section and "CMP" not in section
+
+    _, out = watch.run(paths, DEFAULTS, notify=False, today="2026-10-31")
+    assert "No new ideas" in out.read_text().split("## New ideas")[1]
+
+
+@pytest.mark.unit
+def test_first_watch_on_a_screen_without_hints_says_so(tmp_path, monkeypatch):
+    from value_pipeline import watch
+
+    paths = Paths(tmp_path)
+    pf = pfmod.Portfolio(cash=0.0)
+    pfmod.apply_deposit(pf, 1000.0, on="2026-10-01")
+    pfmod.save(paths, pf)
+    monkeypatch.setattr(watch.market_data, "latest_price", lambda t: 40.0)
+    monkeypatch.setattr(watch.market_data, "closes", lambda t: [])
+    paths.screens.mkdir(parents=True, exist_ok=True)
+    (paths.screens / "screen_2026-10-20.csv").write_text("ticker,name\nAAA,AAA Corp\n")   # pre-lane screen
+    _, out = watch.run(paths, DEFAULTS, notify=False, today="2026-10-24")
+    section = out.read_text().split("## New ideas")[1]
+    assert "(first watch)" not in section and "No new ideas since" not in section
+    assert "No name in the latest screen carries a lane hint" in section
+
+
+@pytest.mark.unit
+def test_dislocation_at_the_high_gives_no_hint():
+    d = metrics.dislocation([100.0] * 300, 110.0, 22.0, 100.0, 20.0, [])
+    assert d["drawdown_from_high"] == pytest.approx(0.0) and d["move_1m"] == pytest.approx(0.0)
+    assert d["move_3m"] == pytest.approx(0.0) and d["fundamentals_intact"] is True
+    assert screener.lane_hints({**d, "passes_filters": True}) == []
+
+
+@pytest.mark.unit
+def test_watch_survives_an_empty_screen_and_odd_sidecars(tmp_path, monkeypatch):
+    from value_pipeline import watch
+
+    paths = Paths(tmp_path)
+    pf = pfmod.Portfolio(cash=0.0)
+    pfmod.apply_deposit(pf, 1000.0, on="2026-10-01")
+    pfmod.save(paths, pf)
+    monkeypatch.setattr(watch.market_data, "latest_price", lambda t: 40.0)
+    monkeypatch.setattr(watch.market_data, "closes", lambda t: [])
+    paths.screens.mkdir(parents=True, exist_ok=True)
+    (paths.screens / "screen_2026-10-20.csv").write_text("\n")        # a zero-row screen
+    _, out = watch.run(paths, DEFAULTS, notify=False, today="2026-10-24")
+    assert "No screen yet" in out.read_text().split("## New ideas")[1]
+    assert not (paths.reports / "watch_2026-10-24.json").exists()
+
+    _dislocation_screen(paths, day="2026-10-21")
+    (paths.reports / "watch_2026-10-17.json").write_text("[]")          # not an object
+    (paths.reports / "watch_2026-10-10.json").write_text("{nope")       # unreadable
+    _, out = watch.run(paths, DEFAULTS, notify=False, today="2026-10-24")
+    assert "(first watch)" in out.read_text() and "DS1" in out.read_text()
+
+
+@pytest.mark.unit
+def test_an_offscreen_row_carries_its_filters_and_lane_hints(tmp_path, monkeypatch):
+    from value_pipeline import market_data, review
+
+    row = {"ticker": "ADBE", "market_cap": 1e11, "fscore": 7, "altman_z": 7.5, "free_cash_flow": 9e9,
+           "interest_coverage": 30.0, "earnings_yield_avg": 0.08, "roic_ranked": 1.0, "roic_min": 0.5,
+           "fundamentals_intact": True, "drawdown_from_high": -0.25, "move_1m": -0.02, "move_3m": 0.2,
+           "market_cap_usd": 1e11, "shares": 4e8}
+    monkeypatch.setattr(market_data, "fundamentals", lambda t, paths, days: {"years": [], "price": 270.0})
+    monkeypatch.setattr(review.screener, "evaluate", lambda data, *a: dict(row))
+    monkeypatch.setattr(review.screener, "with_target", lambda *a: None)
+    monkeypatch.setattr(market_data, "cached_sector", lambda t, paths: "Technology")
+    built = review.offscreen_row("ADBE", Paths(tmp_path), DEFAULTS, {})
+    assert built["passes_filters"] is True and built["fail_reasons"] == ""
+    assert built["hints"] == "dislocation" and built["lane_hint"] == "dislocation"
+    assert review.pipeline_note(built).startswith("lane hint dislocation; 3-month move +20%")
+    monkeypatch.setattr(review.screener, "evaluate", lambda data, *a: {**row, "altman_z": 1.0})
+    weak = review.offscreen_row("ADBE", Paths(tmp_path), DEFAULTS, {})
+    assert weak["passes_filters"] is False and weak["fail_reasons"] == "Altman Z" and weak["lane_hint"] == ""

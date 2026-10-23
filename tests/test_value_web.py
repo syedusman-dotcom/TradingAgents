@@ -500,3 +500,25 @@ def test_run_page_offers_the_daily_job(tmp_path):
     client, app, paths = _client(tmp_path)
     assert 'value="daily"' in client.get("/run").text
     assert "daily" in app.state.job_funcs
+
+
+@pytest.mark.unit
+def test_screen_page_filters_dislocations_and_shows_sector_scares(tmp_path):
+    import pandas as pd
+
+    client, app, paths = _client(tmp_path)
+    rows = [{"ticker": "DS1", "sector": "Technology", "mf_position": 1, "lane_hint": "compounder",
+             "hints": "compounder;dislocation", "sector_scare": "Software", "passes_filters": True},
+            {"ticker": "OLD", "sector": "Technology", "mf_position": 2, "lane_hint": "",
+             "passes_filters": True}]
+    paths.screens.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(rows).to_csv(paths.screens / "screen_2026-10-20.csv", index=False)
+    text = client.get("/screen").text
+    assert '<option value="dislocation">dislocation</option>' in text
+    assert "<th>Scare</th>" in text and "<td>Software</td>" in text
+    assert 'data-hints="compounder;dislocation"' in text and 'data-hints=""' in text
+    assert "dataset.hints" in text.split("<script>")[1]                 # the filter reads every hint
+    old = pd.DataFrame([rows[1]]).drop(columns=["lane_hint"])
+    old.to_csv(paths.screens / "screen_2026-10-21.csv", index=False)    # from before the columns
+    r = client.get("/screen")
+    assert r.status_code == 200 and 'data-hints=""' in r.text and "<td>Software</td>" not in r.text

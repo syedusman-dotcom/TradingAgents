@@ -54,7 +54,11 @@ DEFAULTS: dict = {
         "overweight_size_factor": 0.5,
         "min_trade_amount": 25,
         "max_sector_weight": 0.30,
+        "lane_caps": {"compounder": 0.30, "inflection": 0.20},
+        "lane_size_factor": {"compounder": 0.5, "inflection": 0.5},
     },
+    "lanes": {"themes": [], "tickers": [], "inflection_candidates": 3, "compounder_candidates": 2,
+              "dislocation_candidates": 3},
 }
 
 

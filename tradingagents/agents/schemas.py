@@ -345,6 +345,35 @@ class PortfolioDecision(BaseModel):
             "How the thesis survives the pre-mortem's failure path, or why the risk is accepted."
         ),
     )
+    lane: Literal["value", "compounder", "inflection"] = Field(
+        default="value",
+        description=(
+            "The investment lane the evidence supports; value first. 'value': the margin-of-safety "
+            "bars. For the compounder and inflection lanes the Cheap test is replaced by the lane's "
+            "own price bars (Cheap may be FAIL; its note states the lane's price test). "
+            "'compounder': good business and good management pass, ROIC including goodwill at least 15% in every counted year (at "
+            "least four), revenue CAGR at least 8% (ten years, or five flagged), free cash flow "
+            "growing at least 5%/yr over at least 3 years, the reverse-DCF implied growth no higher "
+            "than the earned growth (revenue CAGR capped at the cohort base rate) or the sustainable "
+            "growth, whichever is higher, expected return = yield + earned growth + reversion (at "
+            "most 0) of at least 12%/yr, and for a Buy a price no more than 1.15x the worksheet "
+            "base (1.25x for Overweight). 'inflection': TTM EBIT at least 1.5x its five-year average, "
+            "revenue growth in the latest quarter at least 10 points above the last fiscal year's, "
+            "incremental ROIC at least 20%, demand evidence the news report marks verified, a bear "
+            "case of at least 30% probability and a kill criterion on a demand indicator (orders, "
+            "backlog, customer capex)."
+        ),
+    )
+    lane_evidence: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Empty for the value lane; the other lanes quote their numbers. "
+            "The numbers the lane rests on, quoted from the worksheet's Record and inflection lines, "
+            "e.g. 'ROIC incl. goodwill ≥ 15% 5/5 years', 'earned growth 10.0%', 'price 1.08× base'. An "
+            "inflection claim includes at least one item starting 'verified:' naming the demand "
+            "source (a filing, a dated company statement, a customer's dated guidance)."
+        ),
+    )
 
     @field_validator("price_target", "entry_price", mode="before")
     @classmethod
@@ -380,6 +409,9 @@ def render_pm_decision(decision: PortfolioDecision, price: float | None = None) 
             parts.append(f"{label} — not provided")
         else:
             parts.append(f"{label} — {'PASS' if verdict.passed else 'FAIL'}: {verdict.note}")
+    # The value lane's bars are the checklist and scenarios above: its line carries no evidence.
+    evidence = "; ".join(decision.lane_evidence) if decision.lane != "value" else ""
+    parts.extend(["", f"**Lane**: {decision.lane}" + (f" — {evidence}" if evidence else "")])
     flags = [f"- {flag}" for flag in decision.red_flags]
     parts.extend(["", "**Red Flags**:" + ("\n" + "\n".join(flags) if flags else " none")])
     kills = [f"{i}. {k}" for i, k in enumerate(decision.kill_criteria, 1)]

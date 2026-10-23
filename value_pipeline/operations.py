@@ -63,7 +63,8 @@ def record_buy(paths: Paths, ticker: str, shares: float, price: float, fees: flo
                            thesis=(found or {}).get("thesis", ""),
                            intrinsic_value=(found or {}).get("intrinsic_value"),
                            kill_criteria=(found or {}).get("kill_criteria"),
-                           entry_price=(found or {}).get("entry_price"))
+                           entry_price=(found or {}).get("entry_price"),
+                           lane=(found or {}).get("lane") or "value")
     before = pfmod.save(paths, pf)
     pfmod.append_trade(paths, {"date": on, "ticker": ticker, "action": "BUY", "shares": shares,
                                "price": price, "fees": fees, "note": note})

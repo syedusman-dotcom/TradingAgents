@@ -87,7 +87,7 @@ def _bare_graph(tmp_path):
     graph.propagator = Propagator()
     graph.selected_analysts = ["market"]
     graph.settle_pending = lambda t: None
-    graph.resolve_instrument_context = lambda t, a="stock", d=None: ""
+    graph.resolve_instrument_context = lambda t, a="stock", d=None, note="": f"Context.{note}"
     graph._memory_as_of = lambda d: None
     return graph
 
@@ -98,6 +98,18 @@ def test_create_run_state_renders_the_portfolio_once(tmp_path):
     state = graph.create_run_state("AAPL", "2026-08-14", portfolio=PortfolioContext.model_validate(HOLDING))
     assert "120" in state["portfolio_context"]
     assert graph.create_run_state("AAPL", "2026-08-14")["portfolio_context"] == ""
+
+
+@pytest.mark.unit
+def test_the_pipeline_note_reaches_the_run_state(tmp_path):
+    graph = _bare_graph(tmp_path)
+    assert graph.create_run_state("AAPL", "2026-08-14", context_note="lane hint compounder")[
+        "instrument_context"] == "Context.lane hint compounder"
+    seen = {}
+    graph._checkpointer_ctx = None
+    graph._run_graph = lambda *a, **kw: seen.update(kw) or ({}, "Hold")
+    graph.propagate("AAPL", "2026-08-14", context_note="lane hint dislocation")
+    assert seen["context_note"] == "lane hint dislocation"
 
 
 @pytest.mark.unit

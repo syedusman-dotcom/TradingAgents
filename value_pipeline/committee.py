@@ -22,8 +22,19 @@ PROMPT = (
     "Nothing is traded automatically; this is advice for a human. "
     "Prices are in each stock's quote currency (its \"currency\" field); held weights and cash are in "
     "US dollars. A null field is unknown. Never estimate an expected return, downside or sector yourself; "
-    "say it is unknown and rank that stock on what is known."
+    "say it is unknown and rank that stock on what is known. "
+    "Lanes: value is the core; compounder positions are capped at {compounder_cap:.0%} and inflection "
+    "at {inflection_cap:.0%} of the portfolio, each bought at half size; cut inflection positions "
+    "first when demand evidence fades."
 )
+
+
+def committee_prompt(sizing: dict) -> str:
+    """``PROMPT`` with the lane caps from ``sizing["lane_caps"]`` (the defaults when absent)."""
+    from value_pipeline.config import DEFAULTS
+
+    caps = {**DEFAULTS["sizing"]["lane_caps"], **(sizing.get("lane_caps") or {})}
+    return PROMPT.format(compounder_cap=caps["compounder"], inflection_cap=caps["inflection"])
 
 _BUYS = {"BUY", "ADD"}
 
@@ -86,6 +97,7 @@ def build_payload(decisions: list[Decision], results: list[dict], portfolio, sum
             "checklist": row.get("checklist"), "scenarios": row.get("scenarios"),
             "red_flags": row.get("red_flags") or [], "kill_criteria": list(d.kill_criteria),
             "thesis": row.get("thesis"),
+            "lane": d.lane, "lane_evidence": row.get("lane_evidence") or [],
         })
     others = [{"ticker": p.ticker, "shares": p.shares, "avg_price": p.avg_price}
               for p in portfolio.positions if p.ticker not in reviewed]
@@ -102,7 +114,8 @@ def run_committee(llm, payload: dict) -> Committee | None:
         invoke_structured,
     )
 
-    prompt = f"{PROMPT}\n\n{json.dumps(payload, indent=2)}\n\n{NO_EXTERNAL_TOOLS}"
+    rules = committee_prompt(payload.get("sizing") or {})
+    prompt = f"{rules}\n\n{json.dumps(payload, indent=2)}\n\n{NO_EXTERNAL_TOOLS}"
     structured = bind_structured(llm, Committee, "Investment Committee")
     return invoke_structured(structured, prompt, "Investment Committee")
 

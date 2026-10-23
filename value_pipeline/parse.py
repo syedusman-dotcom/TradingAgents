@@ -130,3 +130,24 @@ def value_bridge(decision: str) -> list[dict]:
         if amount is not None:
             out.append({"reason": m.group(3).strip(), "amount": -amount if m.group(1) != "+" else amount})
     return out
+
+
+# --- the investment lane (absent from older decisions, which read as the value lane) --------
+
+LANES = ("value", "compounder", "inflection")
+
+
+def _lane_parts(decision: str) -> tuple[str, str]:
+    text = section(decision, "Lane").split("\n")[0].strip()
+    m = re.match(rf"({'|'.join(LANES)})\b(?:\s+lane\b)?\s*(?:[—–:-]\s*)?(.*)$", text, re.I)
+    return (m.group(1).lower(), m.group(2).strip()) if m else ("value", "")
+
+
+def lane(decision: str) -> str:
+    """The decision's lane: value, compounder or inflection; "value" when absent or unrecognised."""
+    return _lane_parts(decision)[0]
+
+
+def lane_evidence(decision: str) -> list[str]:
+    """The numbers the lane rests on, the ``; ``-separated items after the lane's name."""
+    return [item.strip() for item in _lane_parts(decision)[1].split(";") if item.strip()]

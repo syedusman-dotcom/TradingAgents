@@ -116,7 +116,7 @@ class TradingAgentsGraph:
         self._resuming = False
 
     def resolve_instrument_context(self, ticker: str, asset_type: str = "stock",
-                                   trade_date: str | None = None) -> str:
+                                   trade_date: str | None = None, note: str = "") -> str:
         """Resolve ticker identity once and return the full instrument context.
 
         Deterministic yfinance lookup (cached, fail-open) injected into a
@@ -132,7 +132,7 @@ class TradingAgentsGraph:
                 earnings = next_earnings_date(ticker)
             except Exception:  # noqa: BLE001 - a missing date must never break a run
                 earnings = None
-        return build_instrument_context(ticker, asset_type, identity, trade_date, earnings)
+        return build_instrument_context(ticker, asset_type, identity, trade_date, earnings, note=note)
 
     def _memory_as_of(self, trade_date) -> str | None:
         """Point-in-time cutoff for past-context lessons (#1251).
@@ -173,8 +173,12 @@ class TradingAgentsGraph:
             f"settings={digest}",
         ])
 
-    def propagate(self, company_name, trade_date, asset_type: str = "stock", portfolio=None):
+    def propagate(self, company_name, trade_date, asset_type: str = "stock", portfolio=None,
+                  context_note: str = ""):
         """Run the trading agents graph for a company on a specific date.
+
+        ``context_note`` is appended to the instrument context every agent reads (the value
+        pipeline passes its screen figures for the ticker).
 
         ``asset_type`` selects between the stock pipeline (default) and the
         crypto pipeline (``"crypto"``) shipped in #567 — the CLI auto-detects
@@ -195,7 +199,7 @@ class TradingAgentsGraph:
                 self.checkpoint_scope(company_name, trade_date, asset_type, portfolio) as thread_id_value:
             return self._run_graph(
                 company_name, trade_date, asset_type=asset_type,
-                checkpoint_thread_id=thread_id_value, portfolio=portfolio,
+                checkpoint_thread_id=thread_id_value, portfolio=portfolio, context_note=context_note,
             )
 
     def begin_checkpoint(self, company_name, trade_date, asset_type: str = "stock", portfolio=None) -> str | None:
@@ -302,7 +306,8 @@ class TradingAgentsGraph:
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         return Path(self.config["results_dir"]) / "reports" / f"{safe_ticker_component(ticker)}_{stamp}"
 
-    def create_run_state(self, company_name, trade_date, asset_type: str = "stock", portfolio=None):
+    def create_run_state(self, company_name, trade_date, asset_type: str = "stock", portfolio=None,
+                         context_note: str = ""):
         """Build a run's initial state; propagate() and the CLI both start here.
 
         Injects the resolved instrument identity for every agent (#814). The
@@ -313,7 +318,8 @@ class TradingAgentsGraph:
             company_name,
             trade_date,
             asset_type=asset_type,
-            instrument_context=self.resolve_instrument_context(company_name, asset_type, trade_date),
+            instrument_context=self.resolve_instrument_context(company_name, asset_type, trade_date,
+                                                               note=context_note),
             portfolio_context=portfolio.render(company_name) if portfolio is not None else "",
         )
 
@@ -390,10 +396,11 @@ class TradingAgentsGraph:
                 set_context(company_name, trade_date, self.config.get("tool_vendors"))
 
     def _run_graph(self, company_name, trade_date, asset_type: str = "stock",
-                   checkpoint_thread_id: str | None = None, portfolio=None):
+                   checkpoint_thread_id: str | None = None, portfolio=None, context_note: str = ""):
         """Execute the graph and write the resulting state to disk and memory log."""
         self.tell_models(company_name, trade_date)
-        init_agent_state = self.create_run_state(company_name, trade_date, asset_type, portfolio)
+        init_agent_state = self.create_run_state(company_name, trade_date, asset_type, portfolio,
+                                                 context_note=context_note)
         args = self.propagator.get_graph_args()
 
         # Inject the checkpoint thread_id (from checkpoint_scope) so the same

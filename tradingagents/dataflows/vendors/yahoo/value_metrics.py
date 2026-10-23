@@ -21,6 +21,7 @@ from tradingagents.dataflows.value_metrics import (
     render_report,
     share_count,
 )
+from tradingagents.dataflows.vendors import sec_edgar, sec_filings
 from tradingagents.dataflows.vendors.yahoo.common import (
     MINOR_UNITS,
     raise_for_empty,
@@ -57,6 +58,7 @@ ROWS: dict[str, tuple[str, ...]] = {
                      "Depreciation Amortization Depletion"),
     "sga": ("Selling General And Administration",),
     "acquisitions": ("Purchase Of Business",),
+    "goodwill": ("Goodwill And Other Intangible Assets", "Goodwill"),
 }
 assert set(ROWS) == set(YEAR_FIELDS)
 
@@ -66,7 +68,8 @@ _MINOR_NAMES = {"GBp": "pence", "GBX": "pence", "ZAc": "cents", "ILA": "agorot"}
 
 
 def statement_years(*frames: pd.DataFrame) -> list[dict]:
-    """Merge Yahoo's annual statements into per-year dicts, newest first."""
+    """Merge Yahoo's statements into per-period dicts, newest first: annual frames give fiscal
+    years, quarterly frames (same row labels) give quarters, keyed by the period end."""
     columns = sorted({c for f in frames if f is not None for c in f.columns}, reverse=True)
     years = []
     for col in columns:
@@ -87,6 +90,44 @@ def statement_years(*frames: pd.DataFrame) -> list[dict]:
         if sum(v is not None for k, v in year.items() if k != "fiscal_year_end") >= 6:
             years.append(year)
     return years
+
+
+QUARTERLY_FRAMES = ("quarterly_income_stmt", "quarterly_balance_sheet", "quarterly_cashflow")
+
+
+def fetch_quarters(t) -> tuple[list[dict], bool]:
+    """The quarterly statements as ``statement_years`` dicts (one per quarter end, newest first),
+    and whether every frame was fetched. Each frame is asked for on its own, so one failure keeps
+    the others; Yahoo answering it has none is not a failure."""
+    frames, complete = [], True
+    for attr in QUARTERLY_FRAMES:
+        try:
+            frames.append(yf_retry(lambda attr=attr: getattr(t, attr)))
+        except Exception:
+            frames.append(None)
+            complete = False
+    try:
+        return statement_years(*frames), complete
+    except Exception:
+        return [], False
+
+
+def quarterly_statements(t) -> list[dict]:
+    """The quarters ``fetch_quarters`` could get; [] without any: the report renders without TTM."""
+    return fetch_quarters(t)[0]
+
+
+def sec_revenue_history(symbol: str, reported: str | None) -> dict[str, float] | None:
+    """Fiscal year -> revenue from SEC EDGAR (about 20 years, cached by that vendor) for a US filer
+    reporting in dollars; None otherwise or when EDGAR fails: the CAGR then spans Yahoo's years."""
+    if reported not in (None, "USD"):
+        return None   # EDGAR's figures are dollars; another reporting currency would mix units
+    try:
+        if sec_edgar.cik_for(symbol) is None:
+            return None
+        return sec_filings.annual_revenue(symbol) or None
+    except Exception:
+        return None
 
 
 def fiscal_average_closes(history: pd.DataFrame, fiscal_year_ends: list[str]) -> dict[str, float]:
@@ -126,6 +167,11 @@ def _to_quote_unit(metrics: dict, factor: float) -> dict:
             if key in v:
                 v[key] = scale(v[key])
         v["grid"] = {k: [scale(x) for x in row] for k, row in (v.get("grid") or {}).items()}
+    rr = m.get("run_rate")
+    if rr:
+        rr["methods"] = {k: scale(x) for k, x in rr["methods"].items()}
+        for key in ("base", "low", "high"):
+            rr[key] = scale(rr.get(key))
     ca = m.get("capital_allocation")
     if ca:
         for r in ca["per_year"]:
@@ -153,6 +199,7 @@ def get_value_metrics(
     years = statement_years(*frames)
     if not years:
         raise_for_empty(ticker, canonical, "annual statements")
+    quarters = quarterly_statements(t)
 
     quote, reported = info.get("currency"), info.get("financialCurrency")
     price = info.get("currentPrice") or info.get("regularMarketPrice")
@@ -193,7 +240,8 @@ def get_value_metrics(
         revenue_usd = years[0]["revenue"] * fx
     metrics = company_metrics(years, price, info.get("marketCap") if price else None, shares,
                               rate=rate["rate"], treasury_10y=rate["treasury_10y"], avg_prices=avg_prices,
-                              revenue_usd=revenue_usd)
+                              revenue_usd=revenue_usd, quarters=quarters,
+                              revenue_history=sec_revenue_history(canonical, reported))
     if minor:
         metrics = _to_quote_unit(metrics, factor)
     return render_report(canonical, as_of_date or "today", metrics, currency=reported or quote) + note

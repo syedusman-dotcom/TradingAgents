@@ -78,3 +78,31 @@ class TestTool:
             {"symbol": "COF", "curr_date": "2026-05-20"}
         )
         assert "Verified market data snapshot for COF" in out
+
+
+def _year_of_prices() -> pd.DataFrame:
+    """A year and a half of closes: a high of 490 on 2026-06-12, 474.10 on 2026-07-23, 269.00 now."""
+    dates = pd.bdate_range("2025-04-01", "2026-10-23")
+    closes = [300.0] * len(dates)
+    for i, d in enumerate(dates):
+        if d == pd.Timestamp("2026-06-12"):
+            closes[i] = 490.0
+        elif d == pd.Timestamp("2026-07-23"):
+            closes[i] = 474.10
+        elif d > pd.Timestamp("2026-07-23"):
+            closes[i] = 269.00
+    return pd.DataFrame({"Date": dates, "Open": closes, "High": closes, "Low": closes, "Close": closes,
+                         "Volume": [1000] * len(dates)})
+
+
+@pytest.mark.unit
+def test_snapshot_gives_the_three_month_move_and_the_52_week_high(monkeypatch):
+    monkeypatch.setattr(validator, "load_ohlcv", lambda s, d, fill_gaps=True: _year_of_prices())
+    snap = validator.build_verified_market_snapshot("ADBE", "2026-10-23", look_back_days=5)
+    assert "- 3-month move: −43.3% (close 474.10 on 2026-07-23)" in snap      # 269 / 474.10 - 1
+    assert "- From 52-week high: −45.1% (high 490.00 on 2026-06-12)" in snap   # 269 / 490 - 1
+    short = _sample_ohlcv()                                                   # seven weeks of prices
+    monkeypatch.setattr(validator, "load_ohlcv", lambda s, d, fill_gaps=True: short)
+    snap = validator.build_verified_market_snapshot("COF", "2026-05-20")
+    assert "- 3-month move: n/a (under three months of prices)" in snap
+    assert "- From 52-week high: n/a (under a year of prices)" in snap

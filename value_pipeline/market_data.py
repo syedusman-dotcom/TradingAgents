@@ -17,7 +17,10 @@ import requests
 import yfinance as yf
 
 from tradingagents.dataflows.vendors.yahoo.common import MINOR_UNITS, usd_rate
-from tradingagents.dataflows.vendors.yahoo.value_metrics import statement_years
+from tradingagents.dataflows.vendors.yahoo.value_metrics import (
+    fetch_quarters,
+    statement_years,
+)
 from value_pipeline.config import Paths
 
 log = logging.getLogger(__name__)
@@ -31,7 +34,7 @@ HEADERS = {"User-Agent": "value-pipeline/0.1 (personal research tool)"}
 
 
 # Bump when the cached fields change, so older cache files are fetched again.
-CACHE_SCHEMA = 3
+CACHE_SCHEMA = 6
 
 
 class DataUnavailable(Exception):
@@ -73,12 +76,13 @@ def closes(ticker: str, days: int = 420) -> list[float]:
 
 
 def fundamentals(ticker: str, paths: Paths, cache_days: int = 7) -> dict:
-    """Annual statements, market data and ~400 days of closes for one ticker, cached."""
+    """Annual and quarterly statements, market data and ~400 days of closes for one ticker, cached."""
     cache = paths.cache / f"{ticker}.json"
     if cache.exists():
         data = json.loads(cache.read_text(encoding="utf-8"))
         fresh = datetime.fromisoformat(data["fetched_at"]) > datetime.now() - timedelta(days=cache_days)
-        if fresh and data.get("schema") == CACHE_SCHEMA:
+        # A record cached after a failed quarterly fetch has no "quarters": fetched again.
+        if fresh and data.get("schema") == CACHE_SCHEMA and "quarters" in data:
             return {**data, "from_cache": True}
     t = yf.Ticker(ticker)
     try:
@@ -89,6 +93,7 @@ def fundamentals(ticker: str, paths: Paths, cache_days: int = 7) -> dict:
         raise DataUnavailable(f"Yahoo request failed: {exc}") from exc
     if not years:
         raise DataUnavailable("no annual statements")
+    quarters, complete = fetch_quarters(t)   # fail-open: the lane columns stay blank without them
     data = {
         "schema": CACHE_SCHEMA,
         "fetched_at": datetime.now().isoformat(timespec="seconds"),
@@ -99,11 +104,14 @@ def fundamentals(ticker: str, paths: Paths, cache_days: int = 7) -> dict:
         "shares": info.get("sharesOutstanding"),
         "currency": info.get("currency"),
         "sector": info.get("sector"),
+        "industry": info.get("industry"),
         "years": years,
+        "quarters": quarters,
         "closes": series,
     }
     paths.cache.mkdir(parents=True, exist_ok=True)
-    cache.write_text(json.dumps(data), encoding="utf-8")
+    stored = data if complete else {k: v for k, v in data.items() if k != "quarters"}
+    cache.write_text(json.dumps(stored), encoding="utf-8")
     return data
 
 
