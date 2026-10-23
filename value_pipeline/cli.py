@@ -12,6 +12,7 @@ from rich.markdown import Markdown
 from rich.table import Table
 
 from value_pipeline import (
+    daily,
     operations as ops,
     portfolio as pfmod,
     review,
@@ -127,6 +128,14 @@ def cmd_watch(args, paths: Paths, cfg) -> None:
     console.print(f"\nSaved {out}")
 
 
+def cmd_daily(args, paths: Paths, cfg) -> int:
+    _, out, code = daily.run(paths, cfg, dry_run=args.dry_run, notify=not args.no_notify,
+                             max_reviews=args.max)
+    console.print(Markdown(out.read_text(encoding="utf-8")))
+    console.print(f"\nSaved {out}")
+    return code
+
+
 def cmd_web(args, paths: Paths, cfg) -> None:
     import threading
     import webbrowser
@@ -184,6 +193,12 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--no-notify", action="store_true", help="don't show a macOS notification")
     s.set_defaults(func=cmd_watch)
 
+    s = sub.add_parser("daily", help="weekday check: re-run the agents on names whose triggers fired")
+    s.add_argument("--dry-run", action="store_true", help="list the triggers, re-run nothing")
+    s.add_argument("--no-notify", action="store_true", help="don't show a macOS notification")
+    s.add_argument("--max", type=int, help="most reviews to run today (default daily.max_reviews)")
+    s.set_defaults(func=cmd_daily)
+
     s = sub.add_parser("superinvestors", help="refresh which tracked value investors hold what (13F filings)")
     s.add_argument("--force", action="store_true", help="refresh even if the data is under a week old")
     s.set_defaults(func=cmd_superinvestors)
@@ -214,7 +229,9 @@ def main(argv: list[str] | None = None) -> None:
     logging.basicConfig(level=logging.INFO if args.verbose else logging.WARNING, format="%(levelname)s %(message)s")
     paths = Paths(args.data_dir)
     try:
-        args.func(args, paths, load_config())
+        code = args.func(args, paths, load_config())
     except (pfmod.TradeError, FileNotFoundError) as exc:
         console.print(f"[red]{exc}[/red]")
         sys.exit(1)
+    if code:
+        raise SystemExit(code)

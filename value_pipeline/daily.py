@@ -1,12 +1,21 @@
 """The weekday check: which holdings and ideas changed enough to deserve a re-review.
 
-Pure functions; the run itself (prices, reviews, report) is added on top of these.
+``triggers`` and ``select`` are pure; ``run`` fetches prices, re-runs the agents on the
+names that fired and writes the report. Nothing here trades.
 """
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import date, timedelta
+from pathlib import Path
+
+from value_pipeline import lock, market_data, metrics, portfolio as pfmod, review, watch
+from value_pipeline.config import Paths
+from value_pipeline.render import numbered
+
+log = logging.getLogger(__name__)
 
 KINDS = ("ENTRY PRICE", "REACHED VALUE", "EARNINGS", "FREEFALL", "BIG MOVE")
 _NO_COOLDOWN = {"REACHED VALUE", "EARNINGS"}
@@ -89,3 +98,120 @@ def select(triggers: list[Trigger], last_review: dict[str, str], today: date,
     chosen = [t for _, t in ranked[:cap]]
     deferred += [(t, f"over the daily cap of {cap}") for _, t in ranked[cap:]]
     return chosen, deferred
+
+
+def _iso(text) -> date | None:
+    """A stored date, or None when it is missing or malformed (treated as unknown)."""
+    try:
+        return date.fromisoformat(text) if text else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _inputs(paths: Paths, cfg: dict, today: date):
+    """Holdings, ideas, the kill criteria of each holding and the last review date per ticker."""
+    pf = pfmod.load(paths)
+    latest = {r["ticker"]: r for r in watch.latest_results(paths)}
+    holdings, criteria, last_review = [], {}, {}
+    for p in pf.positions:
+        row = latest.get(p.ticker, {})
+        holdings.append({"ticker": p.ticker, "intrinsic_value": p.intrinsic_value_estimate,
+                         "entry_price": p.entry_price, "next_earnings_date": p.next_earnings_date,
+                         "last_review_date": p.last_review_date, "last_price": row.get("price"),
+                         "last_trend": row.get("trend")})
+        criteria[p.ticker] = p.kill_criteria
+        if _iso(p.last_review_date):
+            last_review[p.ticker] = p.last_review_date
+    max_age = cfg["watch"].get("max_rating_age_days", 120)
+    ideas = []
+    for t, row in latest.items():
+        reviewed = _iso(row.get("date"))
+        if (pf.position(t) is None and row.get("rating") != "Sell" and reviewed
+                and (today - reviewed).days <= max_age):
+            ideas.append(row)
+            last_review[t] = row["date"]
+    return holdings, ideas, criteria, last_review
+
+
+def _prices_and_trends(tickers: list[str]) -> tuple[dict, dict]:
+    """As the watch does: one price and one history call per ticker; a failure skips that ticker."""
+    prices, trends = {}, {}
+    for t in tickers:
+        try:
+            prices[t] = market_data.latest_price(t)
+        except Exception as exc:  # noqa: BLE001 - no price just means no trigger
+            log.warning("no price for %s: %s", t, exc)
+        try:
+            trends[t] = metrics.trend(market_data.closes(t)).get("trend")
+        except Exception as exc:  # noqa: BLE001 - a missing trend just skips that trigger
+            log.warning("no trend for %s: %s", t, exc)
+    return prices, trends
+
+
+def _reviews(paths: Paths, cfg: dict, selected: list[str],
+             dry_run: bool) -> tuple[list[str], int, int]:
+    """Run the agents once on every selected ticker; the report lines, reviews run, exit code."""
+    if not cfg["daily"].get("enabled", True):
+        return ["Disabled in config."], 0, 0
+    if not selected:
+        return ["None."], 0, 0
+    if dry_run:
+        return ["Dry run: nothing re-run."], 0, 0
+    try:
+        actions = review.run(paths, cfg, yes=True, dry_run=False, only=selected)
+    except (lock.Locked, review.ReviewRunning):
+        return ["a review is already running; triggers are listed, nothing was re-run."], 0, 0
+    except (Exception, SystemExit) as exc:  # noqa: BLE001 - reported, and the exit code says so
+        log.warning("daily review failed: %s", exc)
+        return [f"review failed: {exc}"], 0, 1
+    folder = actions.parent.relative_to(paths.reports).as_posix()
+    lines = [f"- [ACTIONS]({folder}/{actions.name})"]
+    lines += [f"- [{t}]({folder}/{t}/complete_report.html)" for t in selected]
+    return lines, len(selected), 0
+
+
+def run(paths: Paths, cfg: dict, *, dry_run: bool = False, notify: bool = True,
+        max_reviews: int | None = None,
+        today: date | None = None) -> tuple[list[Trigger], Path, int]:
+    """Check prices, re-review what fired, write ``reports/daily_<date>.md``; returns
+    (triggers, report path, exit code), the code 1 only when the review failed."""
+    today = today or date.today()
+    if max_reviews is not None:
+        cfg = {**cfg, "daily": {**cfg["daily"], "max_reviews": max_reviews}}
+    holdings, ideas, criteria, last_review = _inputs(paths, cfg, today)
+    rows = holdings + [{"ticker": i["ticker"], "last_price": i.get("price")} for i in ideas]
+    prices, trends = _prices_and_trends([r["ticker"] for r in rows])
+    fired = triggers(holdings, ideas, prices, trends, today, cfg)
+    selected, deferred = select(fired, last_review, today, cfg)
+    review_lines, n_run, code = _reviews(paths, cfg, selected, dry_run)
+
+    lines = [f"# Daily check {today.isoformat()}", "",
+             "Prices, then the agents on what changed. Nothing is traded: you act at your broker "
+             "and record the trade.", "", "## Checked", ""]
+    if rows:
+        lines += ["| Ticker | Price | Since review | Trend |", "| --- | ---: | ---: | --- |"]
+        for r in rows:
+            t, price, last = r["ticker"], prices.get(r["ticker"]), r.get("last_price")
+            since = f"{price / last - 1:+.0%}" if price is not None and last else "–"
+            shown = f"{price:,.2f}" if price is not None else "no price"
+            lines.append(f"| {t} | {shown} | {since} | {trends.get(t) or '–'} |")
+    else:
+        lines.append("No holdings or rated ideas yet.")
+    lines += ["", "## Triggers", ""]
+    lines += [f"- **{tr.kind}**: {tr.message}" for tr in fired] or ["Nothing fired."]
+    lines += ["", "## Reviews run", "", *review_lines]
+    if deferred:
+        lines += ["", "## Deferred", "", *[f"- {t}: {why}" for t, why in deferred]]
+    hit = list(dict.fromkeys(tr.ticker for tr in fired if criteria.get(tr.ticker)))
+    if hit:
+        lines += ["", "## Kill criteria to check", "",
+                  "Shown for you to check against the news; nothing here is evaluated.", ""]
+        lines += [f"- {t}: {numbered(criteria[t])}" for t in hit]
+    paths.reports.mkdir(parents=True, exist_ok=True)
+    out = paths.reports / f"daily_{today.isoformat()}.md"
+    out.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    if notify:
+        text = (f"{len(fired)} trigger(s): " + "; ".join(f"{tr.ticker} {tr.kind}" for tr in fired)
+                + f" — {n_run} review(s) run") if fired else "Nothing fired"
+        watch._notify("Daily check", text)
+    return fired, out, code

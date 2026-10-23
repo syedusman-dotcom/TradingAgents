@@ -64,7 +64,7 @@ def alerts(holdings: list[dict], ideas: list[dict], prices: dict, trends: dict, 
     return out
 
 
-def _latest_results(paths: Paths) -> list[dict]:
+def latest_results(paths: Paths) -> list[dict]:
     """Each ticker's newest result across the review folders."""
     from value_pipeline.review import review_dirs
 
@@ -76,6 +76,9 @@ def _latest_results(paths: Paths) -> list[dict]:
                 if not r.get("error"):
                     latest.setdefault(r["ticker"], {**r, "date": folder.name[:10]})
     return list(latest.values())
+
+
+_latest_results = latest_results
 
 
 def _notify(title: str, text: str) -> None:
@@ -94,7 +97,7 @@ def run(paths: Paths, cfg: dict, notify: bool = True) -> tuple[list[Alert], Path
     owned = {p.ticker for p in pf.positions}
     holdings = [{"ticker": p.ticker, "intrinsic_value": p.intrinsic_value_estimate, "avg_price": p.avg_price}
                 for p in pf.positions]
-    ideas = [r for r in _latest_results(paths) if r["ticker"] not in owned]
+    ideas = [r for r in latest_results(paths) if r["ticker"] not in owned]
     tickers = sorted(owned | {i["ticker"] for i in ideas})
     prices = {t: market_data.latest_price(t) for t in tickers}
     trends = {}
