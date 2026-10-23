@@ -823,27 +823,33 @@ def run_rate_value(ttm_owner_earnings, ttm_ebit, net_debt, shares, price, g3: fl
             "implied_g3": implied, "g3": g3, "decay_to": decay_to, "discount_rate": rate}
 
 
-MIN_ANNUALISE_DAYS = 80   # TTM ending within a quarter of a fiscal year end says nothing new
+MIN_TTM_VS_FY_DAYS = 80   # TTM ending within a quarter of a fiscal year end says nothing new
+# Annualising a few months' change multiplies it (29.5% over six months reads as 68% a year):
+# under this gap the raw TTM-over-fiscal-year change is used.
+ANNUALISE_MIN_MONTHS = 9
 
 
 def _run_rate_inputs(years: list[dict], inf: dict) -> dict:
     """The run-rate valuation's inputs: TTM figures from the quarters when four are reported,
     else the latest fiscal year's. g3, clamped to 0-40%, is the first of: TTM revenue on the TTM
     a year earlier (8 quarters); TTM revenue on the latest fiscal year that ended a quarter or more
-    before, annualised over the months between; the latest quarter's year-on-year growth; the
-    latest fiscal year's growth; 0."""
+    before (annualised when that year ended nine months or more before, else the raw change); the
+    latest quarter's year-on-year growth; the latest fiscal year's growth; 0."""
     cur = years[0] if years else {}
     ttm = inf.get("ttm_ebit") is not None
     growth, source = inf.get("ttm_revenue_growth"), "TTM revenue growth on the TTM a year earlier"
     if growth is None and inf.get("ttm_revenue") is not None:
         end = _date(inf.get("ttm_end"))
-        fy = _fiscal_year_before(years, end, MIN_ANNUALISE_DAYS)
+        fy = _fiscal_year_before(years, end, MIN_TTM_VS_FY_DAYS)
         ratio = div(inf["ttm_revenue"], fy.get("revenue")) if fy else None
         if ratio is not None and ratio > 0:
-            days = (end - _date(fy["fiscal_year_end"])).days
-            growth = ratio ** (365.25 / days) - 1
-            source = (f"TTM revenue on fiscal {str(fy['fiscal_year_end'])[:4]}'s, annualised over "
-                      f"{round(days / 30.44)} months")
+            fy_end = _date(fy["fiscal_year_end"])
+            if _months_back(end, ANNUALISE_MIN_MONTHS) >= fy_end:
+                days = (end - fy_end).days
+                growth = ratio ** (365.25 / days) - 1
+                source = f"ttm_vs_fy (annualised over {round(days / 30.44)} months)"
+            else:
+                growth, source = ratio - 1, "ttm_vs_fy (not annualised)"
     if growth is None:
         growth, source = inf.get("yoy_growth_latest"), "the latest quarter's revenue growth on a year earlier"
     if growth is None:

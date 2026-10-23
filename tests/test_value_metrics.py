@@ -711,12 +711,18 @@ def test_report_has_record_and_inflection_lines():
 
 
 @pytest.mark.unit
-def test_run_rate_growth_annualises_ttm_on_the_last_fiscal_year_without_eight_quarters():
-    years = [_year(fiscal_year_end="2025-12-31", revenue=480), _year(fiscal_year_end="2024-12-31")]
+def test_run_rate_growth_uses_ttm_on_the_last_fiscal_year_without_eight_quarters():
+    # Six months after the fiscal year: the raw TTM change, 518 / 400 - 1 = 29.5%, not annualised (68%).
+    years = [_year(fiscal_year_end="2025-12-31", revenue=400), _year(fiscal_year_end="2024-12-31")]
     m = vm.company_metrics(years, price=20, market_cap=2000, shares=100, quarters=_quarters()[:5])
-    elapsed = (date(2026, 6, 30) - date(2025, 12, 31)).days / 365.25
+    assert m["run_rate"]["g3"] == pytest.approx(0.295)
+    assert m["run_rate"]["g3_source"] == "ttm_vs_fy (not annualised)"
+    # Ten months after the fiscal year: annualised.
+    late = [_year(fiscal_year_end="2025-08-31", revenue=480), _year(fiscal_year_end="2024-08-31")]
+    m = vm.company_metrics(late, price=20, market_cap=2000, shares=100, quarters=_quarters()[:5])
+    elapsed = (date(2026, 6, 30) - date(2025, 8, 31)).days / 365.25
     assert m["run_rate"]["g3"] == pytest.approx((518 / 480) ** (1 / elapsed) - 1)
-    assert "annualised" in m["run_rate"]["g3_source"]
+    assert m["run_rate"]["g3_source"] == "ttm_vs_fy (annualised over 10 months)"
     few = vm.company_metrics(years, price=20, market_cap=2000, shares=100,
                              quarters=[_quarter("2026-06-30", 130, 30), _quarter("2025-06-30", 100, 20)])
     assert "latest quarter" in few["run_rate"]["g3_source"] and few["run_rate"]["g3"] == pytest.approx(0.30)
