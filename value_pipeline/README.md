@@ -52,7 +52,7 @@ uv run python -m value_pipeline status
 | `screen [--top N]` | Rank the universe; writes `data/screens/screen_YYYY-MM-DD.csv`. |
 | `review [--yes] [--dry-run] [--candidates N]` | Run the agents and write the action list. |
 | `run-all [--yes] [--dry-run]` | `screen`, then the theme scan (when `lanes.themes` names any), then `review` with the scan's inflection candidates. |
-| `themes` | The theme scan alone (see Themes below): one quick model call per theme in `lanes.themes`, the named tickers fetched and checked, `reports/<date>/themes.md` written and printed. No review. |
+| `themes` | The theme scan alone (see Themes below): one quick model call per theme in `lanes.themes`, the named tickers fetched and checked, `reports/themes_<date>.md` written and printed. No review. |
 | `watch [--no-notify]` | The free weekly check (prices only, no agents): a holding above its intrinsic value or in FREEFALL, a stock last rated Buy/Overweight now at least 30% below its value, or a stock now at or below the entry price its last review gave (ENTRY PRICE). Lists each holding's kill criteria for you to check against the news. Writes `reports/watch_<date>.md` and shows a macOS notification when something needs a look. |
 
 Use `--data-dir PATH` before the command (or `VALUE_PIPELINE_DATA`) to keep data somewhere else, and `-v` to log every skipped ticker.
@@ -173,7 +173,7 @@ lanes:
   compounder_candidates: 2                          # compounder-hinted screen names added, at most
 ```
 
-For each theme the scan asks: "Where is demand inflecting for this theme, and which listed suppliers with pricing power benefit? Name up to 8 tickers with one line of evidence each; label unverified claims." Each named ticker you don't own is fetched and evaluated like a screen row; those with TTM EBIT ≥ 1.3× the five-year average or revenue growth up ≥ 10 points join the review hinted `inflection`, best expected return first, up to `lanes.inflection_candidates`. A ticker that cannot be fetched, isn't inflecting or is over the cap is listed under Skipped. `reports/<date>/themes.md` has each theme's ideas with their evidence (verified or unverified), the candidates added and the skipped ones.
+For each theme the scan asks: "Where is demand inflecting for this theme, and which listed suppliers with pricing power benefit? Name up to 8 tickers with one line of evidence each; label unverified claims." Each named ticker you don't own is fetched and evaluated like a screen row; those with TTM EBIT ≥ 1.3× the five-year average or revenue growth up ≥ 10 points join the review hinted `inflection`, best expected return first, up to `lanes.inflection_candidates`. A ticker that cannot be fetched, isn't inflecting or is over the cap is listed under Skipped. `reports/themes_<date>.md` (beside the watch and daily reports; a dry run writes `themes_<date>-dry-run.md`) has each theme's ideas with their evidence (verified or unverified), the candidates added and the skipped ones.
 
 `themes` runs the scan alone; `run-all` runs it before the review (a dry run makes no model call, so it finds no ideas). The scan's calls are not in the cost estimate; the candidates it adds are, and the cap drops them first. `lanes.tickers` join every review except a `--tickers` one.
 
@@ -187,7 +187,8 @@ value_pipeline/data/            (gitignored: your holdings)
   cache/<TICKER>.json           Yahoo data, refreshed after 7 days
   universe.csv                  last index membership fetched
   screens/screen_<date>.csv     every screened ticker with all metrics
-  reports/<date>/ACTIONS.md|html, results.json, committee.json, themes.md, <TICKER>/complete_report.html
+  reports/<date>/ACTIONS.md|html, results.json, committee.json, <TICKER>/complete_report.html
+  reports/themes_<date>.md      the theme scan (linked from ACTIONS when it added candidates)
   logs/monthly_<date>.log       output of scheduled runs
 ```
 

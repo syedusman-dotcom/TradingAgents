@@ -320,21 +320,21 @@ def run(paths: Paths, cfg: dict, *, yes: bool = False, dry_run: bool = False,
 
 
 def discover_themes(paths: Paths, cfg: dict, llm, today: str, owned: set[str],
-                    folder: str | None = None) -> list[dict]:
-    """The theme scan's inflection candidates (screen rows hinted ``inflection``), with the
-    report written to ``reports/<folder or today>/themes.md``. Fails open: no candidates."""
+                    label: str | None = None) -> tuple[list[dict], Path | None]:
+    """The theme scan's inflection candidates (screen rows hinted ``inflection``) and the report
+    written to ``reports/themes_<label or today>.md``. Fails open: no candidates, no report."""
     names = cfg.get("lanes", {}).get("themes") or []
     if not names:
-        return []
+        return [], None
     try:
         ideas = themes_mod.scan(llm, names, today)
         kept, skipped = themes_mod.candidates(paths, cfg, ideas, owned)
-        out = themes_mod.write_report(paths, folder or today, ideas, kept, skipped)
+        out = themes_mod.write_report(paths, label or today, ideas, kept, skipped)
     except Exception as exc:  # noqa: BLE001 - discovery is extra; the review stands without it
         log.warning("theme scan failed: %s: %s", type(exc).__name__, exc)
-        return []
+        return [], None
     print(f"Theme scan: {len(ideas)} idea(s), {len(kept)} inflection candidate(s); see {out}")
-    return kept
+    return kept, out
 
 
 def _run(paths: Paths, cfg: dict, *, yes: bool, dry_run: bool, today: str | None, confirm, only,
@@ -345,12 +345,13 @@ def _run(paths: Paths, cfg: dict, *, yes: bool, dry_run: bool, today: str | None
     owned = {p.ticker for p in pf.positions}
     ta = tally = None
     discovered: dict[str, dict] = {}
+    themes_report = None
     if discover and not only and cfg.get("lanes", {}).get("themes"):
         if not dry_run:
             ta, tally = _graph(rcfg)
         exclude = owned | set(preview(paths, cfg)["tickers"])
-        kept = discover_themes(paths, cfg, ta.quick_thinking_llm if ta else None, today, exclude,
-                               folder=today + ("-dry-run" if dry_run else ""))
+        kept, themes_report = discover_themes(paths, cfg, ta.quick_thinking_llm if ta else None, today,
+                                              exclude, label=today + ("-dry-run" if dry_run else ""))
         discovered = {r["ticker"]: r for r in kept}
     scan_usage = tally.snapshot() if tally else {}
     plan_ = preview(paths, cfg, only, list(discovered))
@@ -492,7 +493,9 @@ def _run(paths: Paths, cfg: dict, *, yes: bool, dry_run: bool, today: str | None
                                  comparison=comparison, cost=cost, failures=failures, dry_run=dry_run, knives=knives,
                                  usage=usage, names={r.ticker: r.name for r in results if r.name},
                                  committee=committee, committee_unavailable=unavailable,
-                                 max_weight=cfg["sizing"]["max_position_weight"])
+                                 max_weight=cfg["sizing"]["max_position_weight"],
+                                 themes_report=themes_report.name
+                                 if themes_report and set(discovered) & set(tickers) else None)
     (out_dir / "ACTIONS.md").write_text(md, encoding="utf-8")
     (out_dir / "ACTIONS.html").write_text(render.actions_html(md, f"Value review {today}"), encoding="utf-8")
     # Written whole: the website reads these files while a review may be finishing.

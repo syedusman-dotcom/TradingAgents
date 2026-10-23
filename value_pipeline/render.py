@@ -28,7 +28,8 @@ def actions_markdown(date: str, actions: list[Action], summary: dict, *, reports
                      knives: list[str] | None = None, usage: dict | None = None,
                      names: dict[str, str] | None = None,
                      committee: tuple[committee_mod.Committee, list[str]] | None = None,
-                     committee_unavailable: str | None = None, max_weight: float = 0.10) -> str:
+                     committee_unavailable: str | None = None, max_weight: float = 0.10,
+                     themes_report: str | None = None) -> str:
     def who(ticker: str) -> str:
         return f"{names[ticker]} ({ticker})" if names and names.get(ticker) else ticker
 
@@ -56,6 +57,8 @@ def actions_markdown(date: str, actions: list[Action], summary: dict, *, reports
                      f"{usage['tokens_out']:,} out)")
     else:
         lines.append(f"- Cost of this review: ~{_money(cost)}")
+    if themes_report:          # reports/themes_<date>.md, one level above the review folder
+        lines.append(f"- Theme scan: [{themes_report}](../{themes_report}) (inflection candidates added)")
     for ticker, weight in summary.get("over_cap", []):
         lines.append(f"- **{ticker} at {weight:.0%}** of the portfolio is above the max position but was not "
                      "reviewed: consider trimming it to the cap")

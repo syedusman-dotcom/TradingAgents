@@ -86,12 +86,16 @@ def test_theme_report_lists_ideas_candidates_and_skips(tmp_path):
 
     ideas = [_idea("AI infrastructure", "CLS"), _idea("AI infrastructure", "VRT", False), _idea("grid", "ETN")]
     out = themes.write_report(Paths(tmp_path), "2026-10-23", ideas, [_row("CLS", 0.12, ttm=2.4)],
-                              ["ETN: not inflecting"])
-    assert out == Paths(tmp_path).reports / "2026-10-23" / "themes.md"
+                              ["ETN: not inflecting"], extra=["## Sector scares", "", "- Software: ADBE, CRM"])
+    assert out == Paths(tmp_path).reports / "themes_2026-10-23.md"       # beside watch_/daily_, not a review
+    from value_pipeline.review import review_dirs
+
+    assert review_dirs(Paths(tmp_path)) == []
     md = out.read_text()
     assert md.index("## AI infrastructure") < md.index("## grid") < md.index("## Candidates added")
     assert "CLS" in md and "VRT backlog up" in md and "unverified" in md
     assert md.index("## Candidates added") < md.index("## Skipped") and "ETN: not inflecting" in md
+    assert md.index("## Skipped") < md.index("## Sector scares") and "- Software: ADBE, CRM" in md
 
 
 @pytest.mark.unit
@@ -177,12 +181,15 @@ def test_run_all_includes_theme_and_compounder_candidates(tmp_path, monkeypatch)
     assert d["CLS"].formula_value == 90.0 and d["CLS"].lane_hint == "inflection"
     md = out.read_text()
     assert "CLS" in md and "(hint: inflection)" in md and "(hint: compounder)" in md
-    report = (paths.reports / "2026-10-23-dry-run" / "themes.md").read_text()
+    report = (paths.reports / "themes_2026-10-23-dry-run.md").read_text()
     assert "## AI infrastructure" in report and "BAD" in report
+    assert "Theme scan: [themes_2026-10-23-dry-run.md](../themes_2026-10-23-dry-run.md)" in md
+    assert not (paths.reports / "2026-10-23").exists()
 
     scans.clear()
     out = review.run(paths, cfg, yes=True, dry_run=True, today="2026-10-24")   # plain review: no scan
     assert scans == [] and "CLS" not in [r["ticker"] for r in json.loads((out.parent / "results.json").read_text())]
+    assert "Theme scan:" not in out.read_text()
 
 
 @pytest.mark.unit
@@ -205,7 +212,7 @@ def test_cli_themes_and_run_all_discover(tmp_path, monkeypatch):
     cfg["lanes"]["themes"] = ["AI infrastructure"]
     args = cli.build_parser().parse_args(["themes"])
     cli.cmd_themes(args, Paths(tmp_path), cfg)
-    md = next((Paths(tmp_path).reports).glob("*/themes.md")).read_text()
+    md = next((Paths(tmp_path).reports).glob("themes_????-??-??.md")).read_text()
     assert "CLS" in md and "not inflecting" in md
     with pytest.raises(SystemExit, match="lanes.themes"):
         cli.cmd_themes(args, Paths(tmp_path), copy.deepcopy(DEFAULTS))

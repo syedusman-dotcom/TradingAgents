@@ -133,17 +133,21 @@ def report_lines(ideas: list[ThemeIdea], kept: list[dict], skipped: list[str]) -
     return lines + [""]
 
 
+def report_path(paths: Paths, today: str) -> Path:
+    """``reports/themes_<today>.md``, beside the watch and daily reports (not a review folder)."""
+    return paths.reports / f"themes_{today}.md"
+
+
 def write_report(paths: Paths, today: str, ideas: list[ThemeIdea], kept: list[dict],
                  skipped: list[str], extra: list[str] | None = None) -> Path:
-    """``reports/<today>/themes.md``: each theme's ideas, then the candidates added and skipped.
-    ``extra`` lines (another discovery section) are appended after."""
-    folder = paths.review_dir(today)
-    folder.mkdir(parents=True, exist_ok=True)
+    """``reports/themes_<today>.md``: each theme's ideas, then the candidates added and skipped.
+    ``extra`` lines (another discovery section, e.g. the dislocation scan's) are appended after."""
+    paths.reports.mkdir(parents=True, exist_ok=True)
     head = [f"# Theme scan {today}", "",
             "Ideas the model named for each theme in `lanes.themes`; unverified claims are labelled. "
             "Only names whose TTM figures show the inflection join the review.", ""]
     if not ideas:
         head += ["No ideas (no themes named, or the scan gave none).", ""]
-    out = folder / "themes.md"
+    out = report_path(paths, today)
     out.write_text("\n".join(head + report_lines(ideas, kept, skipped) + (extra or [])), encoding="utf-8")
     return out
