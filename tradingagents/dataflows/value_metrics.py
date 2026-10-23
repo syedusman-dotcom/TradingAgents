@@ -613,7 +613,7 @@ RUN_RATE_DECAY = GROWTH_SCENARIOS[1]
 RUN_RATE_MIN_SPREAD = 0.02
 # The run-rate value is shown only when the numbers show an inflection: either is enough.
 RUN_RATE_SHOW_EBIT, RUN_RATE_SHOW_ACCEL = 1.3, 0.10
-MIN_CAGR_SPAN = 4               # years between the ends of the revenue CAGR
+MIN_CAGR_SPAN = 3               # years between the ends of the revenue CAGR (Yahoo's four fiscal years)
 
 
 def _fcf_cagr(years: list[dict]) -> tuple[float | None, int | None]:
@@ -675,7 +675,7 @@ def record(years: list[dict], revenue_history: dict[str, float] | None = None) -
     goodwill.
 
     ``revenue_history`` (fiscal year -> revenue, e.g. SEC EDGAR's ~20 years) lengthens the revenue
-    CAGR only. ``revenue_cagr`` spans the longest history available, at least four years
+    CAGR only. ``revenue_cagr`` spans the longest history available, at least three years
     (``revenue_cagr_years``); the 10y/5y keys are set when a figure exactly that far back exists."""
     roics = [r for r in (roic(y) for y in years[:RECORD_YEARS]) if r is not None]
     roics_gw = [r for r in (roic_incl_goodwill(y) for y in years[:RECORD_YEARS]) if r is not None]

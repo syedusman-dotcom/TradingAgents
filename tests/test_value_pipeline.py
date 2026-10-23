@@ -1702,3 +1702,63 @@ def test_an_offscreen_row_carries_its_filters_and_lane_hints(tmp_path, monkeypat
     monkeypatch.setattr(review.screener, "evaluate", lambda data, *a: {**row, "altman_z": 1.0})
     weak = review.offscreen_row("ADBE", Paths(tmp_path), DEFAULTS, {})
     assert weak["passes_filters"] is False and weak["fail_reasons"] == "Altman Z" and weak["lane_hint"] == ""
+
+
+def _inflection_screen(paths):
+    import pandas as pd
+
+    def r(t, mf, er, hints="", trend="UPTREND"):
+        return {"ticker": t, "name": f"{t} Corp", "mf_position": mf, "expected_return": er,
+                "lane_hint": hints.split(";")[0], "hints": hints, "trend": trend, "sector": "Technology",
+                "industry": "Software", "value_base": 100.0, "fscore": 7, "sector_scare": ""}
+    rows = [r("AAA", 1, 0.10), r("IN1", 20, 0.12, "inflection"), r("IN2", 21, 0.16, "inflection"),
+            r("IN3", 22, 0.14, "inflection"), r("IN4", 23, 0.09, "inflection"),
+            r("INF", 24, 0.30, "inflection", trend="FREEFALL"), r("OWN", 25, 0.40, "inflection"),
+            r("DS1", 26, 0.13, "dislocation;inflection")]
+    paths.screens.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(rows).to_csv(paths.screens / "screen_2026-10-20.csv", index=False)
+
+
+def _inflection_setup(tmp_path, monkeypatch):
+    import copy
+
+    from value_pipeline import market_data, operations as ops
+
+    paths = Paths(tmp_path)
+    _inflection_screen(paths)
+    monkeypatch.setattr(market_data, "quote_fx", lambda t: ("USD", 1.0))
+    ops.init_portfolio(paths, 1000.0, on="2026-10-01")
+    ops.record_buy(paths, "OWN", 1, 10.0, on="2026-10-02")
+    cfg = copy.deepcopy(DEFAULTS)
+    cfg["review"].update(candidates=1, committee=False)
+    cfg["lanes"].update(compounder_candidates=0, dislocation_candidates=0)
+    return paths, cfg
+
+
+@pytest.mark.unit
+def test_screen_inflections_join_after_the_dislocations(tmp_path, monkeypatch):
+    from value_pipeline import review
+
+    paths, cfg = _inflection_setup(tmp_path, monkeypatch)
+    picks = screener.top_candidates(paths, {"OWN"}, 1, inflections=3)
+    assert [p["ticker"] for p in picks] == ["AAA", "IN2", "IN3", "DS1"]      # best return, no FREEFALL/owned
+    assert [p["ticker"] for p in screener.top_candidates(paths, {"OWN"}, 1, dislocations=1, inflections=2)] == [
+        "AAA", "DS1", "IN2", "IN3"]
+    assert [p["ticker"] for p in screener.top_candidates(paths, {"OWN"}, 1)] == ["AAA"]
+    assert cfg["lanes"]["inflection_candidates"] == 3
+    assert review.preview(paths, cfg)["tickers"] == ["OWN", "AAA", "IN2", "IN3", "DS1"]      # no themes
+    with_themes = review.preview(paths, cfg, None, ["TH1", "TH2"])
+    assert with_themes["tickers"] == ["OWN", "AAA", "IN2", "TH1", "TH2"]       # themes keep priority
+    assert review.preview(paths, cfg, None, ["TH1", "TH2", "TH3", "TH4"])["tickers"] == [
+        "OWN", "AAA", "TH1", "TH2", "TH3", "TH4"]
+    cfg["review"].update(cost_per_run=1.0, max_cost_per_review=4.0)
+    capped = review.preview(paths, cfg, None, ["TH1", "TH2"])
+    assert capped["tickers"] == ["OWN", "AAA", "IN2", "TH1"] and capped["dropped"] == 1   # trims from the end
+
+
+@pytest.mark.unit
+def test_the_screen_hints_a_compounder_on_a_four_year_record():
+    row = {"passes_filters": True, "roic_gw_min": 0.18, "roic_years_counted": 4, "revenue_cagr": 0.11,
+           "revenue_cagr_years": 3, "fcf_cagr": 0.09, "fcf_cagr_years": 3}
+    assert screener.lane_hints(row) == ["compounder"]
+    assert screener.lane_hints({**row, "revenue_cagr_years": 2}) == []

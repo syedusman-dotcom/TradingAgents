@@ -214,12 +214,13 @@ def latest_screen(paths: Paths) -> Path | None:
 
 
 def top_candidates(paths: Paths, owned: set[str], n: int, compounders: int = 0,
-                   dislocations: int = 0) -> list[dict]:
+                   dislocations: int = 0, inflections: int = 0) -> list[dict]:
     """The best-ranked, not-owned, not-FREEFALL tickers from the latest screen, then up to
     ``compounders`` compounder-hinted ones (best compounder return first: yield + earned growth +
     reversion at most 0), then up to ``dislocations`` dislocation-hinted ones (best expected
     return first), each not already listed. A dislocated compounder counts as a dislocation too
-    (its ``hints`` column lists both). A screen from before the compounder return ranks
+    (its ``hints`` column lists both). Then up to ``inflections`` inflection-hinted ones (best
+    expected return first). A screen from before the compounder return ranks
     compounders by expected return."""
     path = latest_screen(paths)
     if path is None:
@@ -227,7 +228,8 @@ def top_candidates(paths: Paths, owned: set[str], n: int, compounders: int = 0,
     df = pd.read_csv(path)
     df = df[~df["ticker"].isin(owned) & (df["trend"] != "FREEFALL")]
     picks = df[df["mf_position"].notna()].sort_values("mf_position").head(n)
-    for hint, count in (("compounder", compounders), ("dislocation", dislocations)):
+    for hint, count in (("compounder", compounders), ("dislocation", dislocations),
+                        ("inflection", inflections)):
         if count <= 0 or "lane_hint" not in df:
             continue
         has = _hint_series(df).map(lambda h, hint=hint: hint in h.split(";"))
@@ -249,7 +251,9 @@ def _hint_series(df: pd.DataFrame) -> pd.Series:
 
 # The lane hints: a pointer for the review, not a verdict (the Portfolio Manager decides the lane).
 COMPOUNDER_ROIC, COMPOUNDER_ROIC_YEARS = 0.15, 4           # ROIC including goodwill, worst counted year
-COMPOUNDER_CAGR, COMPOUNDER_CAGR_YEARS = 0.08, 5
+# The screen sees Yahoo's four fiscal years (a 3-year span); the review's SEC history verifies the
+# Portfolio Manager's longer bar.
+COMPOUNDER_CAGR, COMPOUNDER_CAGR_YEARS = 0.08, 3
 COMPOUNDER_FCF_CAGR, COMPOUNDER_FCF_YEARS = 0.05, 3
 INFLECTION_EBIT, INFLECTION_ACCELERATION = 1.5, 0.10
 DISLOCATION_DRAWDOWN, DISLOCATION_MONTH = -0.25, -0.20

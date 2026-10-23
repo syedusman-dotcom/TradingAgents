@@ -278,17 +278,21 @@ def preview(paths: Paths, cfg: dict, only: list[str] | None = None,
 
     Candidates: the names in ``lanes.tickers``, the screen's best Magic Formula names, up to
     ``lanes.compounder_candidates`` compounder-hinted ones, up to ``lanes.dislocation_candidates``
-    dislocation-hinted ones, then ``discovered`` (the theme scan's inflection candidates); the
-    cost cap drops from the end."""
+    dislocation-hinted ones, up to ``lanes.inflection_candidates`` minus the ``discovered`` count
+    inflection-hinted ones, then ``discovered`` (the theme scan's inflection candidates, which keep
+    priority); the cost cap drops from the end."""
     rcfg, lanes = cfg["review"], cfg.get("lanes", {})
     pf = pfmod.load(paths)
     owned = {p.ticker for p in pf.positions}
     candidates: list[str] = []
     if not only:
+        n_themes = len({t for t in discovered or [] if t not in owned})
+        inflections = max(0, int(lanes.get("inflection_candidates", 0)) - n_themes)
         named = [t.strip().upper() for t in lanes.get("tickers") or [] if t.strip()]
         screened = screener.top_candidates(paths, owned, rcfg["candidates"],
                                            compounders=int(lanes.get("compounder_candidates", 0)),
-                                           dislocations=int(lanes.get("dislocation_candidates", 0)))
+                                           dislocations=int(lanes.get("dislocation_candidates", 0)),
+                                           inflections=inflections)
         candidates = [t for t in dict.fromkeys(named + [c["ticker"] for c in screened] + (discovered or []))
                       if t not in owned]
     tickers, n_held, n_new = select_tickers([p.ticker for p in pf.positions], candidates, only)

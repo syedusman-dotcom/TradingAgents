@@ -126,7 +126,7 @@ def test_lane_hint_column():
     assert screener.lane_hint({**good, "roic_years_counted": 3}) == ""
     assert screener.lane_hint({**good, "roic_gw_min": 0.14}) == ""
     assert screener.lane_hint({**good, "roic_min": 0.5, "roic_gw_min": None}) == ""
-    assert screener.lane_hint({**good, "revenue_cagr_years": 4}) == ""
+    assert screener.lane_hint({**good, "revenue_cagr_years": 2}) == ""
     assert screener.lane_hint({**good, "fcf_cagr": 0.04}) == ""
     assert screener.lane_hint({**good, "fcf_cagr_years": 2}) == ""
     assert screener.lane_hint({**good, "passes_filters": False}) == ""

@@ -953,13 +953,14 @@ def test_yahoo_vendor_extends_the_record_with_the_sec_revenue_history(monkeypatc
     assert asked == ["ABC"] and "- Revenue CAGR 10.0%" in report and "- Revenue CAGR years 10" in report
     monkeypatch.setattr(yahoo_vm.sec_edgar, "cik_for", lambda t: None)
     monkeypatch.setattr(yahoo_vm.sec_filings, "annual_revenue", lambda t: pytest.fail("not a US filer"))
-    assert "- Revenue CAGR n/a" in yahoo_vm.get_value_metrics("ABC", "2026-10-23")   # a 3-year span is too short
+    no_sec = yahoo_vm.get_value_metrics("ABC", "2026-10-23")        # Yahoo's four fiscal years alone
+    assert "- Revenue CAGR 10.0%" in no_sec and "- Revenue CAGR years 3" in no_sec
 
     def down(t):
         raise RuntimeError("EDGAR down")
 
     monkeypatch.setattr(yahoo_vm.sec_edgar, "cik_for", down)
-    assert "- Revenue CAGR n/a" in yahoo_vm.get_value_metrics("ABC", "2026-10-23")
+    assert "- Revenue CAGR years 3" in yahoo_vm.get_value_metrics("ABC", "2026-10-23")   # Yahoo alone
 
 
 @pytest.mark.unit
@@ -979,3 +980,13 @@ def test_sec_annual_revenue_by_fiscal_year(monkeypatch):
     assert sec_filings.annual_revenue("ABC") == {"2016": 70, "2015": 60, "2014": 50}
     monkeypatch.setattr(sec_edgar, "cik_for", lambda t: None)
     assert sec_filings.annual_revenue("ABC") == {}
+
+
+@pytest.mark.unit
+def test_record_computes_the_cagr_from_four_fiscal_years():
+    def grow(n):
+        return [_year(fiscal_year_end=f"{2025 - i}-12-31", revenue=1000 * 1.1 ** (n - 1 - i)) for i in range(n)]
+    four = vm.record(grow(4))                        # Yahoo serves four fiscal years: three intervals
+    assert four["revenue_cagr_years"] == 3 and four["revenue_cagr"] == pytest.approx(0.10)
+    three = vm.record(grow(3))
+    assert three["revenue_cagr"] is None and three["revenue_cagr_years"] is None
