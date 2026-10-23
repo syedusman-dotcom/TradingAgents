@@ -46,8 +46,27 @@ def test_theme_scan_extracts_ideas_with_a_stub_model():
 
 
 def _row(ticker, er, ttm=None, accel=None, **kw):
+    """A screen row passing the hard filters a theme candidate is held to."""
     return {"ticker": ticker, "expected_return": er, "ttm_vs_5y_ebit": ttm, "revenue_acceleration": accel,
-            "sector": "Industrials", **kw}
+            "sector": "Industrials", "market_cap": 5e9, "altman_z": 3.0, "free_cash_flow": 100.0,
+            "interest_coverage": 10.0, **kw}
+
+
+@pytest.mark.unit
+def test_theme_candidates_are_held_to_the_hard_filters(tmp_path, monkeypatch):
+    from value_pipeline import review, themes
+
+    rows = {"CLS": _row("CLS", 0.12, ttm=2.4, fscore=4, roic_min=0.02),     # F-Score and ROIC floor not applied
+            "WEAK": _row("WEAK", 0.30, ttm=2.0, altman_z=1.2, free_cash_flow=-5.0),
+            "TINY": _row("TINY", 0.25, ttm=2.0, market_cap=None)}
+    monkeypatch.setattr(review, "offscreen_row", lambda t, paths, cfg, screen: dict(rows[t]))
+    monkeypatch.setattr(review, "_screen_rows", lambda paths: {})
+    ideas = [_idea("AI infrastructure", t) for t in ("CLS", "WEAK", "TINY")]
+    kept, skipped = themes.candidates(Paths(tmp_path), copy.deepcopy(DEFAULTS), ideas, owned=set())
+    assert [r["ticker"] for r in kept] == ["CLS"]
+    assert kept[0]["passes_filters"] is True and kept[0]["fail_reasons"] == ""
+    assert kept[0]["theme"] == "AI infrastructure" and kept[0]["hints"] == "inflection"
+    assert "WEAK: fails Altman Z; FCF" in skipped and "TINY: fails market cap" in skipped
 
 
 @pytest.mark.unit

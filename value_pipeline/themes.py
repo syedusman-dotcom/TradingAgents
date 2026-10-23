@@ -88,6 +88,17 @@ def _inflecting(row: dict) -> bool:
                              "revenue_acceleration": _num(row, "revenue_acceleration")})
 
 
+# The screen's hard filters a theme candidate must pass (the F-Score and the five-year ROIC floor
+# are not applied: an inflection is a break from the record they measure).
+THEME_FILTERS = ("market cap", "Altman Z", "FCF", "interest coverage")
+
+
+def _hard_failures(row: dict, filters: dict) -> list[str]:
+    from value_pipeline import screener
+
+    return [r for r in screener.failed_filters(row, filters) if r in THEME_FILTERS]
+
+
 def _figures(row: dict) -> str:
     ebit, accel = _num(row, "ttm_vs_5y_ebit"), _num(row, "revenue_acceleration")
     return (f"TTM EBIT {'–' if ebit is None else f'{ebit:.2f}x'} the 5-year average, latest-quarter "
@@ -99,7 +110,9 @@ def candidates(paths: Paths, cfg: dict, ideas: list[ThemeIdea],
                owned: set[str]) -> tuple[list[dict], list[str]]:
     """The ideas the numbers confirm, as screen rows hinted ``inflection`` (best expected return
     first, at most ``lanes.inflection_candidates``), and a note for every ticker left out.
-    Each distinct, not-owned ticker is fetched and evaluated once; one that cannot be is noted."""
+    Each distinct, not-owned ticker is fetched and evaluated once; one that cannot be is noted.
+    A ticker failing the market-cap, Altman Z, positive-FCF or interest-coverage filter is left
+    out ("fails …"); kept rows carry ``fail_reasons`` "" and ``passes_filters`` True."""
     from value_pipeline import review
 
     cap = int(cfg.get("lanes", {}).get("inflection_candidates", 3))
@@ -118,12 +131,15 @@ def candidates(paths: Paths, cfg: dict, ideas: list[ThemeIdea],
             row = None
         if row is None:
             skipped.append(f"{ticker}: no figures (fundamentals unavailable)")
+        elif failures := _hard_failures(row, cfg["filters"]):
+            skipped.append(f"{ticker}: fails {'; '.join(failures)}")
         elif not _inflecting(row):
             skipped.append(f"{ticker}: not inflecting ({_figures(row)})")
         else:
             others = row.get("hints") if isinstance(row.get("hints"), str) else ""
             hints = ";".join(dict.fromkeys(["inflection", *(h for h in others.split(";") if h)]))
-            passing.append({**row, "lane_hint": "inflection", "hints": hints, "theme": theme_of[ticker]})
+            passing.append({**row, "lane_hint": "inflection", "hints": hints, "theme": theme_of[ticker],
+                            "fail_reasons": "", "passes_filters": True})
     passing.sort(key=lambda r: (_num(r, "expected_return") is None, -(_num(r, "expected_return") or 0.0)))
     kept = passing[:cap]
     skipped += [f"{r['ticker']}: over the cap of {cap} inflection candidates" for r in passing[cap:]]
