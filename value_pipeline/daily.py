@@ -29,8 +29,9 @@ class Trigger:
     message: str
 
 
-def _entry(t: str, price: float, entry) -> Trigger | None:
-    if entry and price <= entry:
+def _entry(t: str, price: float, entry, last) -> Trigger | None:
+    """Fires when the price is at or below the entry and the last review did not already see it so."""
+    if entry and price <= entry and not (last and last <= entry):
         return Trigger(t, "ENTRY PRICE", f"{t} at {price:,.2f} is at or below its entry price {entry:,.2f}")
     return None
 
@@ -61,11 +62,12 @@ def triggers(holdings: list[dict], ideas: list[dict], prices: dict, trends: dict
         if price is None:
             continue
         found = []
-        if (hit := _entry(t, price, h.get("entry_price"))):
+        if (hit := _entry(t, price, h.get("entry_price"), h.get("last_price"))):
             found.append(hit)
-        value = h.get("intrinsic_value")
-        if value and price >= value:
-            found.append(Trigger(t, "REACHED VALUE", f"{t} at {price:,.2f} is above its value {value:,.2f}"))
+        value, last = h.get("intrinsic_value"), h.get("last_price")
+        if value and price >= value and not (last and last >= value):
+            found.append(Trigger(t, "REACHED VALUE",
+                                 f"{t} at {price:,.2f} is at or above its value {value:,.2f}"))
         found += _common(h, price, trends.get(t), today, cfg)
         out += sorted(found, key=lambda x: KINDS.index(x.kind))
     for row in ideas:
@@ -74,27 +76,27 @@ def triggers(holdings: list[dict], ideas: list[dict], prices: dict, trends: dict
             continue
         h = {"ticker": t, "last_price": row.get("price"), "last_trend": row.get("trend"),
              "next_earnings_date": row.get("earnings_date"), "last_review_date": row.get("date")}
-        found = [hit] if (hit := _entry(t, price, row.get("entry_price"))) else []
+        found = [hit] if (hit := _entry(t, price, row.get("entry_price"), row.get("price"))) else []
         found += _common(h, price, trends.get(t), today, cfg)
         out += sorted(found, key=lambda x: KINDS.index(x.kind))
     return out
 
 
-def select(triggers: list[Trigger], last_review: dict[str, str], today: date,
+def select(found: list[Trigger], last_review: dict[str, str], today: date,
            cfg: dict) -> tuple[list[str], list[tuple[str, str]]]:
     """Tickers to re-review today, in priority order, and those deferred with the reason."""
     cooldown, cap = cfg["daily"]["cooldown_days"], cfg["daily"]["max_reviews"]
     by_ticker: dict[str, list[str]] = {}
-    for tr in triggers:
+    for tr in found:
         by_ticker.setdefault(tr.ticker, []).append(tr.kind)
     ranked, deferred = [], []
-    for t, found in by_ticker.items():
+    for t, kinds in by_ticker.items():
         reviewed = last_review.get(t)
-        if (reviewed and not _NO_COOLDOWN & set(found)
+        if (reviewed and not _NO_COOLDOWN & set(kinds)
                 and (today - date.fromisoformat(reviewed)).days < cooldown):
             deferred.append((t, f"cooldown: reviewed on {reviewed}"))
         else:
-            ranked.append((min(KINDS.index(k) for k in found), t))
+            ranked.append((min(KINDS.index(k) for k in kinds), t))
     ranked.sort()
     chosen = [t for _, t in ranked[:cap]]
     deferred += [(t, f"over the daily cap of {cap}") for _, t in ranked[cap:]]
@@ -176,10 +178,11 @@ def _reviews(paths: Paths, cfg: dict, selected: list[str],
         log.warning("daily review failed: %s", exc)
         return [f"review failed: {exc}"], 0, 1
     folder = actions.parent.relative_to(paths.reports).as_posix()
-    lines = [f"- [ACTIONS]({folder}/{actions.name})"]
+    # Site paths, as the Reviews page links them: the dashboard renders this report.
+    lines = [f"- [ACTIONS](/reports/{folder}/ACTIONS.html)"]
     failed = _errored(actions.parent)
-    lines += [f"- {t}: {failed[t]}" if t in failed else f"- [{t}]({folder}/{t}/complete_report.html)"
-              for t in selected]
+    lines += [f"- {t}: {failed[t]}" if t in failed
+              else f"- [{t}](/reports/{folder}/{t}/complete_report.html)" for t in selected]
     return lines, len(selected), 0
 
 
@@ -190,7 +193,7 @@ def run(paths: Paths, cfg: dict, *, dry_run: bool = False, notify: bool = True,
     (triggers, report path, exit code), the code 1 only when the review failed."""
     today = today or date.today()
     if max_reviews is not None:
-        cfg = {**cfg, "daily": {**cfg["daily"], "max_reviews": max_reviews}}
+        cfg = {**cfg, "daily": {**cfg["daily"], "max_reviews": max(0, max_reviews)}}
     holdings, ideas, criteria, last_review = _inputs(paths, cfg, today)
     rows = holdings + [{"ticker": i["ticker"], "last_price": i.get("price")} for i in ideas]
     prices, trends = _prices_and_trends([r["ticker"] for r in rows])

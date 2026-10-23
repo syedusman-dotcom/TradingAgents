@@ -205,16 +205,16 @@ To run it by hand without spending anything: `uv run python -m value_pipeline da
 **The weekday daily check.** `scripts/daily.sh` runs `daily` Monday to Friday at 7:30 and logs to `value_pipeline/data/logs/daily_<date>.log`; it shows a notification if it fails. Install the template that ships in the repo (it assumes the repo path above; edit it if yours differs):
 
 ```bash
-cp scripts/local.value-pipeline-daily.plist ~/Library/LaunchAgents/ && launchctl load ~/Library/LaunchAgents/local.value-pipeline-daily.plist
+cp scripts/local.value-pipeline-daily.plist ~/Library/LaunchAgents/ && launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.value-pipeline-daily.plist
 sudo pmset repeat wakeorpoweron MTWRFS 07:25:00
 ```
 
 `scripts/daily.sh --check` tests access without spending anything. The `pmset` line wakes the Mac at 7:25 Monday to Saturday, five minutes before the jobs. So that one wake serves both, move the Saturday plist's hour from 9 to 7 and its minute to 30:
 
 ```bash
-launchctl unload ~/Library/LaunchAgents/local.value-pipeline.plist
+launchctl bootout gui/$(id -u)/local.value-pipeline
 # edit ~/Library/LaunchAgents/local.value-pipeline.plist: Hour 7, Minute 30
-launchctl load ~/Library/LaunchAgents/local.value-pipeline.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.value-pipeline.plist
 ```
 
 ## Tests

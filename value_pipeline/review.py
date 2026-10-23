@@ -199,13 +199,15 @@ def _days_between(earlier: str | None, later: str) -> int | None:
 
 
 def _trend(ticker: str, screen_row: dict | None) -> str | None:
-    if screen_row and isinstance(screen_row.get("trend"), str):
-        return screen_row["trend"]
+    """Today's trend; the screen's (possibly a month old) only when there is no live one."""
     try:
-        return metrics.trend(market_data.closes(ticker)).get("trend")
-    except Exception as exc:  # noqa: BLE001
+        live = metrics.trend(market_data.closes(ticker)).get("trend")
+    except Exception as exc:  # noqa: BLE001 - a missing trend falls back to the screen's
         log.warning("no trend for %s: %s", ticker, exc)
-        return None
+        live = None
+    if live:
+        return live
+    return screen_row["trend"] if screen_row and isinstance(screen_row.get("trend"), str) else None
 
 
 def select_tickers(owned: list[str], candidates: list[str], only: list[str] | None) -> tuple[list[str], int, int]:

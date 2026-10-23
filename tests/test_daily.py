@@ -56,12 +56,26 @@ def test_reached_value_fires_for_holdings_only():
     ts = triggers([holding()], [idea(intrinsic_value=700.0, entry_price=None)],
                   {"HRB": 56.10, "DNLM.L": 800.0}, {}, TODAY, CFG)
     assert [(t.ticker, t.kind) for t in ts] == [("HRB", "REACHED VALUE")]
-    assert ts[0].message == "HRB at 56.10 is above its value 55.00"
+    assert ts[0].message == "HRB at 56.10 is at or above its value 55.00"
 
 
 def test_reached_value_quiet_below_or_missing():
     assert triggers([holding()], [], {"HRB": 54.0}, {}, TODAY, CFG) == []
     assert triggers([holding(intrinsic_value=None)], [], {"HRB": 99.0}, {}, TODAY, CFG) == []
+
+
+def test_reached_value_quiet_when_the_last_review_already_saw_it():
+    assert triggers([holding(last_price=56.0)], [], {"HRB": 57.0}, {}, TODAY, CFG) == []
+    assert kinds(triggers([holding(last_price=54.0)], [], {"HRB": 57.0}, {}, TODAY, CFG)) == [
+        "REACHED VALUE"]
+
+
+def test_entry_price_quiet_when_the_last_review_already_saw_it():
+    assert triggers([], [idea(price=740.0)], {"DNLM.L": 745.0}, {}, TODAY, CFG) == []
+    assert kinds(triggers([], [idea(price=760.0)], {"DNLM.L": 745.0}, {}, TODAY, CFG)) == [
+        "ENTRY PRICE"]
+    assert triggers([holding(entry_price=40.0, last_price=39.0)], [], {"HRB": 38.0}, {},
+                    TODAY, CFG) == []
 
 
 def test_freefall_fires_only_on_a_new_freefall():
@@ -163,7 +177,7 @@ def test_daily_dry_run_writes_the_report_and_runs_nothing(tmp_path, monkeypatch)
     assert "| HRB | 56.00 | +12% | UPTREND |" in text
     assert "| DNLM.L | 740.00 | -7% | UPTREND |" in text
     assert "SELLME" not in text
-    assert "- **REACHED VALUE**: HRB at 56.00 is above its value 55.00" in text
+    assert "- **REACHED VALUE**: HRB at 56.00 is at or above its value 55.00" in text
     assert "Dry run: nothing re-run." in text
     assert "## Kill criteria to check" in text
     assert "- HRB: 1. Revenue falls two years running; 2. Net debt above 3x EBITDA" in text
@@ -184,9 +198,9 @@ def test_daily_runs_the_review_on_fired_tickers(tmp_path, monkeypatch):
     assert code == 0
     assert calls == [(True, False, ["DNLM.L", "HRB"])]
     text = out.read_text()
-    assert "(2026-10-23/ACTIONS.md)" in text
-    assert "(2026-10-23/DNLM.L/complete_report.html)" in text
-    assert "(2026-10-23/HRB/complete_report.html)" in text
+    assert "- [ACTIONS](/reports/2026-10-23/ACTIONS.html)" in text
+    assert "- [DNLM.L](/reports/2026-10-23/DNLM.L/complete_report.html)" in text
+    assert "- [HRB](/reports/2026-10-23/HRB/complete_report.html)" in text
     assert notes == ["2 trigger(s): HRB REACHED VALUE; DNLM.L ENTRY PRICE — 2 review(s) run"]
 
 
@@ -285,5 +299,26 @@ def test_daily_links_no_report_for_an_errored_ticker(tmp_path, monkeypatch):
     _, out, code = daily.run(paths, RUN_CFG, notify=False, today=TODAY)
     text = out.read_text()
     assert code == 0
-    assert "(2026-10-23/HRB/complete_report.html)" in text
+    assert "- [HRB](/reports/2026-10-23/HRB/complete_report.html)" in text
     assert "DNLM.L/complete_report.html" not in text
+
+
+def test_daily_negative_max_runs_nothing(tmp_path, monkeypatch):
+    paths = _data(tmp_path, monkeypatch, {"HRB": 56.0, "DNLM.L": 740.0})
+    monkeypatch.setattr(review, "run", _no_review)
+    found, out, code = daily.run(paths, RUN_CFG, notify=False, max_reviews=-1, today=TODAY)
+    assert code == 0 and len(found) == 2
+    text = out.read_text()
+    assert "- HRB: over the daily cap of 0" in text
+    assert "- DNLM.L: over the daily cap of 0" in text
+
+
+def test_web_daily_job_fails_when_the_review_failed(tmp_path, monkeypatch):
+    from value_pipeline.web import app as webapp
+
+    monkeypatch.setattr(daily, "run", lambda paths, cfg, notify: ([], tmp_path / "d.md", 1))
+    job = webapp._default_job_funcs()["daily"]
+    with pytest.raises(RuntimeError, match="the daily re-review failed"):
+        job(Paths(tmp_path), RUN_CFG)
+    monkeypatch.setattr(daily, "run", lambda paths, cfg, notify: ([], tmp_path / "d.md", 0))
+    job(Paths(tmp_path), RUN_CFG)

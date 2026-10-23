@@ -61,12 +61,18 @@ def _default_job_funcs() -> dict:
     def owned(paths: Paths) -> set[str]:
         return {p.ticker for p in pfmod.load(paths).positions} if paths.portfolio.exists() else set()
 
+    def run_daily(paths: Paths, cfg, **kw):
+        found, out, code = daily.run(paths, cfg, notify=False)
+        if code:
+            raise RuntimeError(f"the daily re-review failed; see {out}")
+        return found, out, code
+
     return {
         "screen": lambda paths, cfg, **kw: screener.run(paths, cfg, owned(paths)),
         "review": lambda paths, cfg, only=None, dry_run=False: reviewmod.run(
             paths, cfg, yes=True, dry_run=dry_run, only=only),
         "watch": lambda paths, cfg, **kw: watch.run(paths, cfg, notify=False),
-        "daily": lambda paths, cfg, **kw: daily.run(paths, cfg, notify=False),
+        "daily": run_daily,
     }
 
 

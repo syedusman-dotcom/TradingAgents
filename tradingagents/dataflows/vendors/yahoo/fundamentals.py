@@ -1,3 +1,4 @@
+from datetime import date
 from typing import Annotated
 
 import yfinance as yf
@@ -173,11 +174,13 @@ def next_earnings_date(symbol: str) -> str | None:
     """The next earnings date Yahoo lists for ``symbol`` as YYYY-MM-DD, or None when unknown.
 
     Yahoo knows only today's next date, so callers use it for a run dated today.
-    A found date is kept for the process: the context and the snapshot share one call.
+    A found date is kept for the process until it has passed: the context and the snapshot
+    share one call, and a long-running website asks again once the date is behind it.
     """
     canonical = normalize_symbol(symbol)
-    if canonical in _earnings_dates:
-        return _earnings_dates[canonical]
+    cached = _earnings_dates.get(canonical)
+    if cached and cached >= date.today().isoformat():   # a past date: look up the next one
+        return cached
     try:
         calendar = yf_retry(lambda: yf.Ticker(canonical).calendar) or {}
         dates = calendar.get("Earnings Date") or []

@@ -77,3 +77,17 @@ def test_income_figures_without_a_stated_reporting_currency_are_printed_bare():
     out = _fundamentals({"longName": "X", "currency": "USD", "marketCap": 1000, "totalRevenue": 50})
 
     assert "Market Cap: 1000 USD" in out and "Revenue (TTM): 50\n" in out + "\n"
+
+
+@pytest.mark.unit
+def test_a_cached_earnings_date_already_past_is_looked_up_again(monkeypatch):
+    from datetime import date, timedelta
+    from types import SimpleNamespace
+
+    future = date.today() + timedelta(days=30)
+    monkeypatch.setitem(fundamentals._earnings_dates, "HRB", "2020-01-01")
+    monkeypatch.setattr(fundamentals.yf, "Ticker",
+                        lambda symbol: SimpleNamespace(calendar={"Earnings Date": [future]}))
+    monkeypatch.setattr(fundamentals, "yf_retry", lambda fn: fn())
+    assert fundamentals.next_earnings_date("HRB") == future.isoformat()
+    assert fundamentals._earnings_dates["HRB"] == future.isoformat()

@@ -1194,3 +1194,14 @@ def test_results_json_stores_the_trend_at_review_time(tmp_path, monkeypatch):
 
     row, d = _review_one(tmp_path, monkeypatch, _good_decision(), 50.0)
     assert row["trend"] == "UPTREND" == d.trend
+
+
+@pytest.mark.unit
+def test_results_json_trend_is_the_live_one_over_the_screens(tmp_path, monkeypatch):
+    from tests.test_decision_math import _good_decision
+    from value_pipeline import market_data
+
+    monkeypatch.setattr(market_data, "closes", lambda t: [1.0])
+    monkeypatch.setattr(metrics, "trend", lambda closes: {"trend": "FREEFALL"})
+    row, d = _review_one(tmp_path, monkeypatch, _good_decision(), 50.0)
+    assert row["trend"] == "FREEFALL" == d.trend

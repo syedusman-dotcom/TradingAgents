@@ -17,7 +17,7 @@
 <span class="muted">prices only, free</span>
 <hr style="border:0; border-top:1px solid var(--line); margin:12px 0">
 <form method="post" action="/run/start" class="inline"><input type="hidden" name="token" value="{{ token }}"><input type="hidden" name="kind" value="daily"><button class="secondary">Run daily check</button></form>
-<span class="muted">prices free; re-reviews (a few dollars of agent time) only the names that fired, at most a few</span>
+<span class="muted">prices free; re-reviews only the names that fired, at most a few agent runs</span>
 </fieldset>
 <h2>Current job</h2>
 {% if current %}<p><b>{{ current.kind }}</b> running since {{ current.started }}. It keeps running if you close this page.</p>{% else %}<p class="muted">Nothing running.</p>{% endif %}
