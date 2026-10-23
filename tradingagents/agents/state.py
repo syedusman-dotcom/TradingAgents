@@ -66,6 +66,7 @@ class AgentState(MessagesState):
     risk_debate_state: Annotated[
         RiskDebateState, "Current state of the debate on evaluating risk"
     ]
+    premortem: Annotated[str, "The pre-mortem's most likely failure path, written after the risk debate"]
     final_trade_decision: Annotated[str, "Final decision from the Portfolio Manager"]
     final_rating: Annotated[str, "The Portfolio Manager's 5-tier rating, or REVIEW when it has none"]
     past_context: Annotated[str, "Memory log context for the Portfolio Manager (same-ticker decisions + cross-ticker lessons), written by the Memory Log step"]

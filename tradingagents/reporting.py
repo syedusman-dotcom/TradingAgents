@@ -69,6 +69,7 @@ _SECTIONS = (
         ("Aggressive Analyst", "aggressive.md", ("risk_debate_state", "aggressive_history")),
         ("Conservative Analyst", "conservative.md", ("risk_debate_state", "conservative_history")),
         ("Neutral Analyst", "neutral.md", ("risk_debate_state", "neutral_history")),
+        ("Pre-mortem", "premortem.md", ("premortem",)),
     )),
     ("V. Portfolio Manager Decision", "5_portfolio", (
         ("Portfolio Manager", "decision.md", ("final_trade_decision",)),

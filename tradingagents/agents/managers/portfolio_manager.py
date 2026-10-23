@@ -38,6 +38,12 @@ def create_portfolio_manager(llm):
             if past_context
             else ""
         )
+        premortem = state.get("premortem", "")
+        premortem_block = (
+            f"**Pre-mortem (the most likely way this loses money):**\n{premortem}\n"
+            if premortem
+            else ""
+        )
 
         prompt = f"""As the Portfolio Manager, synthesize the risk analysts' debate and deliver the final trading decision.
 
@@ -60,7 +66,7 @@ def create_portfolio_manager(llm):
 {lessons_line}
 **Risk Analysts Debate History:**
 {history}
-
+{premortem_block}
 ---
 
 Ground every conclusion in specific evidence from the analysts. Decide as a disciplined value investor, scoring the company on three tests: Good business, Good management, Cheap (margin of safety).
@@ -69,7 +75,7 @@ Ground every conclusion in specific evidence from the analysts. Decide as a disc
 - Hold: a good company at a fair price, or evidence too thin.
 - Underweight/Sell: a test clearly fails, the stock is above intrinsic value, or the original thesis is broken.
 - Never rate Buy in FREEFALL; wait for BASING.
-Think in a 1-3 year horizon. Conflicting arguments alone are not a reason to Hold; the debate always contains conflict, so decide which side the evidence supports. Prefer doing nothing over frequent trading: only change the rating from a previous decision on this ticker if the facts changed, not because the price moved. For a stock already held, buying and selling have different bars: a margin of safety that has shrunk but is still positive means stop adding (Hold), not sell; rate a holding Underweight or Sell only when the price is above intrinsic value or the thesis is broken. Weigh the analysts on their merits, independent of speaking order.
+Think in a 1-3 year horizon. Conflicting arguments alone are not a reason to Hold; the debate always contains conflict, so decide which side the evidence supports. Prefer doing nothing over frequent trading: only change the rating from a previous decision on this ticker if the facts changed, not because the price moved. For a stock already held, buying and selling have different bars: a margin of safety that has shrunk but is still positive means stop adding (Hold), not sell; rate a holding Underweight or Sell only when the price is above intrinsic value or the thesis is broken. Weigh the analysts on their merits, independent of speaking order. Answer the pre-mortem explicitly: say how the thesis survives that failure path, or why you accept the risk.
 
 ## Output
 

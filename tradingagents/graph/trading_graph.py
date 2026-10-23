@@ -168,6 +168,8 @@ class TradingAgentsGraph:
             # before the Memory Log step would resume without the lessons.
             "analysts=parallel",
             "memory=parallel",
+            # A checkpoint saved before the pre-mortem step would resume without it.
+            "premortem=1",
             f"settings={digest}",
         ])
 
@@ -478,6 +480,7 @@ class TradingAgentsGraph:
                 "history": final_state["risk_debate_state"]["history"],
             },
             "investment_plan": final_state["investment_plan"],
+            "premortem": final_state.get("premortem", ""),
             "final_trade_decision": final_state["final_trade_decision"],
             "final_rating": run_rating(final_state),
             "run_settings": self.run_settings(),

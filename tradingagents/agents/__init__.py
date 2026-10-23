@@ -3,6 +3,7 @@ from .analysts.market_analyst import create_market_analyst
 from .analysts.news_analyst import create_news_analyst
 from .analysts.sentiment_analyst import create_sentiment_analyst
 from .managers.portfolio_manager import create_portfolio_manager
+from .managers.premortem import create_premortem
 from .managers.research_manager import create_research_manager
 from .researchers.bear_researcher import create_bear_researcher
 from .researchers.bull_researcher import create_bull_researcher
@@ -25,6 +26,7 @@ __all__ = [
     "create_news_analyst",
     "create_aggressive_debator",
     "create_portfolio_manager",
+    "create_premortem",
     "create_conservative_debator",
     "create_sentiment_analyst",
     "create_trader",

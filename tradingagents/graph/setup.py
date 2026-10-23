@@ -16,6 +16,7 @@ from tradingagents.agents import (
     create_neutral_debator,
     create_news_analyst,
     create_portfolio_manager,
+    create_premortem,
     create_research_manager,
     create_sentiment_analyst,
     create_trader,
@@ -41,6 +42,7 @@ RISK_ANALYSIS_PATH_MAP = {
     "Aggressive Analyst": "Aggressive Analyst",
     "Conservative Analyst": "Conservative Analyst",
     "Neutral Analyst": "Neutral Analyst",
+    "Pre-mortem": "Pre-mortem",
     "Portfolio Manager": "Portfolio Manager",
 }
 
@@ -152,6 +154,7 @@ class GraphSetup:
         workflow.add_node("Aggressive Analyst", aggressive_analyst)
         workflow.add_node("Neutral Analyst", neutral_analyst)
         workflow.add_node("Conservative Analyst", conservative_analyst)
+        workflow.add_node("Pre-mortem", create_premortem(self.quick_thinking_llm))
         workflow.add_node("Portfolio Manager", portfolio_manager_node)
 
         # The analysts work at the same time; the research debate starts once
@@ -181,7 +184,8 @@ class GraphSetup:
                 self.conditional_logic.should_continue_risk_analysis,
                 RISK_ANALYSIS_PATH_MAP,
             )
-
+        # The risk round ends at the pre-mortem, which the Portfolio Manager must answer.
+        workflow.add_edge("Pre-mortem", "Portfolio Manager")
         workflow.add_edge("Portfolio Manager", END)
 
         return workflow

@@ -334,6 +334,16 @@ def run_analysis(checkpoint: bool | None = None, portfolio=None, flags=None):
                         message_buffer.update_report_section(
                             "final_trade_decision", f"### Neutral Analyst Analysis\n{neu_hist}"
                         )
+                    premortem = (chunk.get("premortem") or "").strip()
+                    if premortem:
+                        if message_buffer.agent_status.get("Pre-mortem") != "completed":
+                            for debater in ("Aggressive Analyst", "Conservative Analyst",
+                                            "Neutral Analyst", "Pre-mortem"):
+                                message_buffer.update_agent_status(debater, "completed")
+                            message_buffer.update_agent_status("Portfolio Manager", "in_progress")
+                        message_buffer.update_report_section(
+                            "final_trade_decision", f"### Pre-mortem\n{premortem}"
+                        )
                     if judge and message_buffer.agent_status.get("Portfolio Manager") != "completed":
                         message_buffer.update_agent_status("Portfolio Manager", "in_progress")
                         message_buffer.update_report_section(
@@ -342,6 +352,7 @@ def run_analysis(checkpoint: bool | None = None, portfolio=None, flags=None):
                         message_buffer.update_agent_status("Aggressive Analyst", "completed")
                         message_buffer.update_agent_status("Conservative Analyst", "completed")
                         message_buffer.update_agent_status("Neutral Analyst", "completed")
+                        message_buffer.update_agent_status("Pre-mortem", "completed")
                         message_buffer.update_agent_status("Portfolio Manager", "completed")
 
                 update_display(layout, stats_handler=stats_handler, start_time=start_time)

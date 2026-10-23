@@ -389,3 +389,28 @@ def test_the_memory_step_reads_lessons_as_of_the_trade_date_and_settles_once(tmp
 
     assert asked == ["2026-01-20", "2026-01-20"]
     assert (tmp_path / "log.md").read_text() == log_after_first
+
+
+@pytest.mark.unit
+def test_risk_round_ends_at_the_premortem_then_the_portfolio_manager(tmp_path, monkeypatch, offline):
+    model = TimedModel()
+    graph = _graph(tmp_path, monkeypatch, model)
+
+    state, _ = graph.propagate("NVDA", TRADE_DATE)
+
+    steps = [c[0] for c in model.seen]
+    assert steps[-3:] == ["Neutral Analyst", "Pre-mortem", "Portfolio Manager"]
+    assert state["premortem"] == "Pre-mortem: " + TEXT
+    premortem_prompt = next(c[1] for c in model.seen if c[0] == "Pre-mortem")
+    assert "this position has lost 40%" in premortem_prompt
+    logged = next(tmp_path.glob("results/NVDA/TradingAgentsStrategy_logs/*.json")).read_text()
+    assert '"premortem": "Pre-mortem: ' in logged
+
+
+@pytest.mark.unit
+def test_run_signature_mentions_premortem():
+    g = object.__new__(trading_graph.TradingAgentsGraph)
+    g.selected_analysts = ("market",)
+    g.config = {"max_debate_rounds": 1, "max_risk_discuss_rounds": 1}
+
+    assert "premortem=1" in g._run_signature("stock").split("|")

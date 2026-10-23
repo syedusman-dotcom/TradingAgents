@@ -28,7 +28,9 @@ class MessageBuffer:
     FIXED_AGENTS = {
         "Research Team": ["Bull Researcher", "Bear Researcher", "Research Manager"],
         "Trading Team": ["Trader"],
-        "Risk Management": ["Aggressive Analyst", "Neutral Analyst", "Conservative Analyst"],
+        "Risk Management": [
+            "Aggressive Analyst", "Neutral Analyst", "Conservative Analyst", "Pre-mortem",
+        ],
         "Portfolio Management": ["Portfolio Manager"],
     }
 
@@ -217,7 +219,9 @@ def update_display(layout, spinner_text=None, stats_handler=None, start_time=Non
         ],
         "Research Team": ["Bull Researcher", "Bear Researcher", "Research Manager"],
         "Trading Team": ["Trader"],
-        "Risk Management": ["Aggressive Analyst", "Neutral Analyst", "Conservative Analyst"],
+        "Risk Management": [
+            "Aggressive Analyst", "Neutral Analyst", "Conservative Analyst", "Pre-mortem",
+        ],
         "Portfolio Management": ["Portfolio Manager"],
     }
 
@@ -426,6 +430,8 @@ def display_complete_report(final_state):
             risk_reports.append(("Conservative Analyst", risk["conservative_history"]))
         if risk.get("neutral_history"):
             risk_reports.append(("Neutral Analyst", risk["neutral_history"]))
+        if final_state.get("premortem"):
+            risk_reports.append(("Pre-mortem", final_state["premortem"]))
         if risk_reports:
             console.print(Panel("[bold]IV. Risk Management Team Decision[/bold]", border_style="red"))
             for title, content in risk_reports:

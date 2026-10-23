@@ -545,3 +545,70 @@ def test_the_trader_names_the_levels_it_did_not_give():
     for field in ("Entry Price", "Stop Loss", "Position Sizing"):
         assert field in rendered
     assert rendered.lower().count("not provided") == 3
+
+
+def _make_pm_state(premortem=""):
+    return {
+        "company_of_interest": "NVDA",
+        "risk_debate_state": {
+            "history": "Risk debate.", "aggressive_history": "", "conservative_history": "",
+            "neutral_history": "Neutral Analyst: hold", "current_aggressive_response": "",
+            "current_conservative_response": "", "current_neutral_response": "", "count": 3,
+        },
+        "investment_plan": "Research plan.",
+        "trader_investment_plan": "Trader plan.",
+        "final_trade_decision": "PM DECISION",
+        "premortem": premortem,
+    }
+
+
+def _structured_pm_llm(captured: dict):
+    decision = PortfolioDecision(rating=PortfolioRating.HOLD, executive_summary="s",
+                                 investment_thesis="t")
+    structured = MagicMock()
+    structured.invoke.side_effect = lambda prompt: captured.__setitem__("prompt", prompt) or decision
+    llm = MagicMock()
+    llm.with_structured_output.return_value = structured
+    return llm
+
+
+@pytest.mark.unit
+def test_premortem_text_reaches_the_pm_prompt_and_the_report(tmp_path):
+    from tradingagents.reporting import write_report_tree
+
+    captured = {}
+    state = _make_pm_state("Pre-mortem: margins revert to the cycle average.")
+    create_portfolio_manager(_structured_pm_llm(captured))(state)
+
+    assert "**Pre-mortem" in captured["prompt"]
+    assert "margins revert to the cycle average" in captured["prompt"]
+    assert "Answer the pre-mortem explicitly" in captured["prompt"]
+    write_report_tree(state, "NVDA", tmp_path)
+    assert (tmp_path / "4_risk" / "premortem.md").read_text() == state["premortem"]
+
+
+@pytest.mark.unit
+def test_without_a_premortem_the_pm_prompt_has_no_premortem_block():
+    captured = {}
+    create_portfolio_manager(_structured_pm_llm(captured))(_make_pm_state())
+
+    assert "**Pre-mortem" not in captured["prompt"]
+
+
+@pytest.mark.unit
+def test_the_premortem_writes_the_most_likely_failure_path():
+    from tradingagents.agents import create_premortem
+
+    llm = MagicMock()
+    llm.invoke.return_value = MagicMock(content="Margins revert.")
+    state = {**_make_pm_state(), "fundamentals_report": "FUNDAMENTALS"}
+
+    result = create_premortem(llm)(state)
+
+    assert result == {"premortem": "Pre-mortem: Margins revert."}
+    prompt = llm.invoke.call_args.args[0]
+    assert "It is three years on and this position has lost 40%." in prompt
+    for context in ("FUNDAMENTALS", "Research plan.", "Trader plan.", "Risk debate."):
+        assert context in prompt
+    llm.bind_tools.assert_not_called()
+    llm.with_structured_output.assert_not_called()
