@@ -59,7 +59,7 @@
 {% endif %}
 {% if intl %}
 <h2>Other markets (exploratory)</h2>
-<p class="muted">Screen {{ intl.date }} of UK, European, Canadian, Japanese, Korean and US small-cap index members · {{ intl.rows | length }} companies · same filters, figures in USD at that day's FX, one US discount rate for every market · no agent review yet.</p>
+<p class="muted">Screen {{ intl.date }} of UK, European, Canadian, Japanese and US small-cap index members · {{ intl.rows | length }} companies · same filters, figures in USD at that day's FX, one US discount rate for every market · no agent review yet.</p>
 <fieldset>
   <label>Region <select id="i-region"><option value="">All</option>{% for s in intl.regions %}<option>{{ s }}</option>{% endfor %}</select></label>
   <label><input type="checkbox" id="i-pass" checked> Passes filters only</label>
