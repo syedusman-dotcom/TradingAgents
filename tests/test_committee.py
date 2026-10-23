@@ -254,3 +254,42 @@ def test_a_failed_committee_call_does_not_fail_the_review(tmp_path, monkeypatch)
     assert "Investment committee: not available (" in md and (out / "results.json").exists()
     assert not (out / "committee.json").exists()
     assert len(json.loads((out / "results.json").read_text())) == 2
+
+
+@pytest.mark.unit
+def test_payload_values_a_pence_holding_in_dollars_and_names_its_currency():
+    from value_pipeline import portfolio as pfmod
+    from value_pipeline.committee import build_payload
+
+    d = Decision(ticker="DNLM.L", rating="Hold", price=886.0, held_shares=10, currency="GBp", fx_to_usd=0.0133)
+    pf = pfmod.Portfolio(cash=1000.0, positions=[pfmod.Position("DNLM.L", 10, 880.0, "2026-01-01")])
+    _, summary = plan([d], pf.cash, SIZING)
+    stock = build_payload([d], [{"ticker": "DNLM.L", "error": None}], pf, summary, SIZING)["stocks"][0]
+    assert stock["currency"] == "GBp"
+    assert stock["held_weight"] == pytest.approx(10 * 886 * 0.0133 / (1000 + 10 * 886 * 0.0133))
+
+
+@pytest.mark.unit
+def test_payload_lists_errored_reviews_apart_and_the_prompt_says_null_is_unknown():
+    from value_pipeline import portfolio as pfmod
+    from value_pipeline.committee import PROMPT, RankedIdea, build_payload
+
+    decisions = _decisions()
+    results = [{"ticker": d.ticker, "error": "RuntimeError: x" if d.ticker == "AAPL" else None}
+               for d in decisions]
+    pf = pfmod.Portfolio(cash=500.0, positions=[])
+    _, summary = plan(decisions, pf.cash, SIZING)
+    payload = build_payload(decisions, results, pf, summary, SIZING)
+    assert [s["ticker"] for s in payload["stocks"]] == ["HRB", "MSFT"]
+    assert payload["not_reviewed"] == [{"ticker": "AAPL", "error": "RuntimeError: x"}]
+    assert ("A null field is unknown. Never estimate an expected return, downside or sector yourself; "
+            "say it is unknown and rank that stock on what is known.") in PROMPT
+    assert "Never invent one" in RankedIdea.model_fields["expected_return"].description
+
+
+@pytest.mark.unit
+def test_a_committee_weight_of_exactly_one_is_read_as_one_percent():
+    from value_pipeline.committee import render_committee
+
+    md = "\n".join(render_committee(_weighted(1.0), [], None))
+    assert "| 1 | T1 | BUY | 1% | – | r |" in md

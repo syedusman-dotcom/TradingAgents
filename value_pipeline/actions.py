@@ -32,10 +32,24 @@ class Decision:
     value_bridge: list[dict] = field(default_factory=list)   # [{"reason", "amount"}] from formula to target
     upside_downside: float | None = None    # bull gain over bear loss, at the review price when known
     weighted_mos: float | None = None       # probability-weighted margin of safety at the review price
+    currency: str | None = None             # the quote currency; None is taken as US dollars
+    fx_to_usd: float | None = 1.0           # US dollars per quoted unit; None when the rate is unknown
 
     @property
     def held(self) -> bool:
         return self.held_shares > 0
+
+    @property
+    def price_usd(self) -> float | None:
+        """Today's price in US dollars; None without a price or a known rate."""
+        if self.price is None or self.fx_to_usd is None:
+            return None
+        return self.price * self.fx_to_usd
+
+    @property
+    def unsizable(self) -> bool:
+        """Priced, but in a currency whose dollar rate is unknown: size it by hand."""
+        return self.price is not None and self.fx_to_usd is None and self.currency != "USD"
 
 
 @dataclass
@@ -132,20 +146,25 @@ def plan(decisions: list[Decision], cash: float, sizing: dict,
     the total and the sector cap even though they were not reviewed.
     """
     actions = [base_action(d) for d in decisions]
-    held_value = sum(d.held_shares * (d.price or 0.0) for d in decisions if d.held) + sum(v for _, v, _ in others)
+    for a in actions:
+        if a.decision.unsizable:
+            a.flags.append(f"quoted in {a.decision.currency}: size by hand")
+    held_value = sum(d.held_shares * (d.price_usd or 0.0) for d in decisions if d.held) + \
+        sum(v for _, v, _ in others)
     total_value = cash + held_value
     cap_value = sizing["max_position_weight"] * total_value
 
     for a in actions:
         d = a.decision
-        if a.action in ("SELL", "TRIM") and d.price is not None:
+        px = d.price_usd
+        if a.action in ("SELL", "TRIM") and px is not None:
             a.shares = d.held_shares if a.action == "SELL" else round(d.held_shares / 2, 4)
-            a.amount = round(a.shares * d.price, 2)
-        elif a.action == "KEEP" and d.price is not None and d.held_shares * d.price - cap_value >= sizing["min_trade_amount"]:
+            a.amount = round(a.shares * px, 2)
+        elif a.action == "KEEP" and px is not None and d.held_shares * px - cap_value >= sizing["min_trade_amount"]:
             # A position that grew past the cap is trimmed back to it, whatever its rating.
             a.action = "TRIM"
-            a.shares = round((d.held_shares * d.price - cap_value) / d.price, 4)
-            a.amount = round(a.shares * d.price, 2)
+            a.shares = round((d.held_shares * px - cap_value) / px, 4)
+            a.amount = round(a.shares * px, 2)
             a.reason += f"; above the {sizing['max_position_weight']:.0%} max position: trim back to the cap"
     available = cash + sum(a.amount or 0.0 for a in actions if a.action in ("SELL", "TRIM"))
 
@@ -156,8 +175,8 @@ def plan(decisions: list[Decision], cash: float, sizing: dict,
             sector_value[sector] = sector_value.get(sector, 0.0) + value
     for a in actions:
         d = a.decision
-        if d.held and d.sector and d.price is not None:
-            sector_value[d.sector] = sector_value.get(d.sector, 0.0) + d.held_shares * d.price - (
+        if d.held and d.sector and d.price_usd is not None:
+            sector_value[d.sector] = sector_value.get(d.sector, 0.0) + d.held_shares * d.price_usd - (
                 a.amount or 0.0 if a.action in ("SELL", "TRIM") else 0.0)
     sector_cap = sizing.get("max_sector_weight", 1.0) * total_value
 
@@ -180,7 +199,7 @@ def plan(decisions: list[Decision], cash: float, sizing: dict,
             if d.trend == "FREEFALL":
                 a.reason += "; no adding in FREEFALL"
                 continue
-            gap = target_value * size_factor(d.rating) - d.held_shares * (d.price or 0.0)
+            gap = target_value * size_factor(d.rating) - d.held_shares * (d.price_usd or 0.0)
             if gap > 0:
                 wants.append((1 if d.rating == "Buy" else 3, a, gap))
     wants.sort(key=lambda w: (w[0], -(w[1].decision.margin_of_safety if w[1].decision.margin_of_safety is not None else -1.0)))
@@ -190,7 +209,9 @@ def plan(decisions: list[Decision], cash: float, sizing: dict,
         room = sector_cap - sector_value.get(d.sector, 0.0) if d.sector else float("inf")
         amount = round(min(wanted, available, max(room, 0.0)), 2)
         capped = room < min(wanted, available)
-        if d.price is None:
+        if d.unsizable:
+            continue  # flagged above: no dollar amount in an unknown rate
+        if d.price_usd is None:
             a.reason += "; no current price, size it yourself"
             if a.action == "BUY":
                 a.amount = amount
@@ -206,7 +227,7 @@ def plan(decisions: list[Decision], cash: float, sizing: dict,
                 a.reason += f"; no add, {limit}"
             continue
         a.amount = amount
-        a.shares = round(amount / d.price, 4)
+        a.shares = round(amount / d.price_usd, 4)
         available -= amount
         if d.sector:
             sector_value[d.sector] = sector_value.get(d.sector, 0.0) + amount

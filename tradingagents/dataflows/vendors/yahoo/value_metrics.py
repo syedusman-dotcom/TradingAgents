@@ -21,7 +21,12 @@ from tradingagents.dataflows.value_metrics import (
     render_report,
     share_count,
 )
-from tradingagents.dataflows.vendors.yahoo.common import raise_for_empty, usd_rate, yf_retry
+from tradingagents.dataflows.vendors.yahoo.common import (
+    MINOR_UNITS,
+    raise_for_empty,
+    usd_rate,
+    yf_retry,
+)
 
 # Each field's Yahoo row label, best first.
 ROWS: dict[str, tuple[str, ...]] = {
@@ -55,8 +60,9 @@ ROWS: dict[str, tuple[str, ...]] = {
 }
 assert set(ROWS) == set(YEAR_FIELDS)
 
-# Quote currencies Yahoo gives in a minor unit.
-_MINOR_UNITS = {"GBp", "GBX", "ZAc", "ILA"}
+
+# What each minor quote unit is called, for the worksheet's note.
+_MINOR_NAMES = {"GBp": "pence", "GBX": "pence", "ZAc": "cents", "ILA": "agorot"}
 
 
 def statement_years(*frames: pd.DataFrame) -> list[dict]:
@@ -92,6 +98,33 @@ def yearly_average_closes(history: pd.DataFrame) -> dict[str, float]:
         return {}
 
 
+def _to_quote_unit(metrics: dict, factor: float) -> dict:
+    """``metrics`` with every per-share price multiplied by ``factor`` (100 for pence); ratios,
+    totals in money and share counts are left alone. Returns a copy."""
+    import copy
+
+    m = copy.deepcopy(metrics)
+
+    def scale(x):
+        return None if x is None else x * factor
+
+    m["price"] = scale(m.get("price"))
+    v = m.get("valuation")
+    if v:
+        v["methods"] = {k: [scale(x) for x in vals] for k, vals in v["methods"].items()}
+        for key in ("low", "high", "base", "epv"):
+            if key in v:
+                v[key] = scale(v[key])
+        v["grid"] = {k: [scale(x) for x in row] for k, row in (v.get("grid") or {}).items()}
+    ca = m.get("capital_allocation")
+    if ca:
+        for r in ca["per_year"]:
+            r["buyback_price"], r["avg_price"] = scale(r["buyback_price"]), scale(r["avg_price"])
+        ca["totals"]["avg_buyback_price"] = scale(ca["totals"].get("avg_buyback_price"))
+        ca["price"] = scale(ca.get("price"))
+    return m
+
+
 def get_value_metrics(
     ticker: Annotated[str, "ticker symbol of the company"],
     as_of_date: Annotated[str, "analysis date in YYYY-MM-DD format"] = None,
@@ -113,15 +146,24 @@ def get_value_metrics(
 
     quote, reported = info.get("currency"), info.get("financialCurrency")
     price = info.get("currentPrice") or info.get("regularMarketPrice")
+    # A London listing is quoted in pence and reports in pounds: compute in the major unit,
+    # then show per-share values in the quote unit the user sees at the broker.
+    minor = quote in MINOR_UNITS and MINOR_UNITS[quote] == reported
+    factor = 100.0 if minor else 1.0
+    if minor and price is not None:
+        price = price / factor
     yahoo_shares = info.get("sharesOutstanding")
     shares = share_count(info.get("marketCap"), price, years[0].get("shares"), yahoo_shares)
     note = ""
     if yahoo_shares and shares and abs(yahoo_shares / shares - 1) > 0.10:
         note = (f"\n\nYahoo's sharesOutstanding ({yahoo_shares / 1e6:,.0f}M) counts one share class; the per-share "
                 f"figures above use market cap / price ({shares / 1e6:,.0f}M), which covers every class.")
-    if quote in _MINOR_UNITS or (quote and reported and quote != reported):
+    if minor:
+        note += (f"\n\nPer-share values in {quote} ({_MINOR_NAMES.get(quote, 'minor unit')}), the quote unit; "
+                 f"statements in {reported}.")
+    elif quote in MINOR_UNITS or (quote and reported and quote != reported):
         # Per-share values would mix currencies (an ADR quoted in USD reporting in
-        # TWD, a London listing quoted in pence): keep the ratios, drop the price.
+        # TWD): keep the ratios, drop the price.
         price = None
         note = (f"\n\nThe quote is in {quote} but the statements are in {reported}, so price-based "
                 "figures and the formula valuation are left out rather than mixed.")
@@ -129,7 +171,8 @@ def get_value_metrics(
     avg_prices = {}  # fail-open: the report renders without average prices
     if price is not None:  # None means the quote currency differs; its averages would mix currencies
         try:
-            avg_prices = yearly_average_closes(yf_retry(lambda: t.history(period="10y", auto_adjust=True)))
+            history = yf_retry(lambda: t.history(period="10y", auto_adjust=True))
+            avg_prices = {k: v / factor for k, v in yearly_average_closes(history).items()}
         except Exception:
             avg_prices = {}
     revenue_usd = None  # the growth base rates are in dollars; revenue arrives in the reporting currency
@@ -139,4 +182,6 @@ def get_value_metrics(
     metrics = company_metrics(years, price, info.get("marketCap") if price else None, shares,
                               rate=rate["rate"], treasury_10y=rate["treasury_10y"], avg_prices=avg_prices,
                               revenue_usd=revenue_usd)
+    if minor:
+        metrics = _to_quote_unit(metrics, factor)
     return render_report(canonical, as_of_date or "today", metrics, currency=reported or quote) + note

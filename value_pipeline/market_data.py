@@ -16,6 +16,7 @@ import pandas as pd
 import requests
 import yfinance as yf
 
+from tradingagents.dataflows.vendors.yahoo.common import MINOR_UNITS, usd_rate
 from tradingagents.dataflows.vendors.yahoo.value_metrics import statement_years
 from value_pipeline.config import Paths
 
@@ -127,6 +128,27 @@ def latest_price(ticker: str) -> float | None:
     except Exception as exc:  # noqa: BLE001
         log.warning("no price for %s: %s", ticker, exc)
         return None
+
+
+def quote_fx(ticker: str) -> tuple[str | None, float | None]:
+    """The quote currency and US dollars per quoted unit (a pence quote's rate is the pound's / 100).
+
+    ``(None, 1.0)`` when the currency cannot be read (taken as dollars, as before);
+    ``(currency, None)`` when its rate is unknown, so nothing is sized in the wrong unit.
+    """
+    try:
+        currency = yf.Ticker(ticker).fast_info["currency"]
+    except Exception as exc:  # noqa: BLE001
+        log.warning("no quote currency for %s: %s", ticker, exc)
+        return None, 1.0
+    if not currency:
+        return None, 1.0
+    if currency == "USD":
+        return currency, 1.0
+    rate = usd_rate(currency)
+    if rate is None:
+        return currency, None
+    return currency, rate / 100 if currency in MINOR_UNITS else rate
 
 
 def closes_between(ticker: str, start: str, end: str | None = None) -> pd.Series:

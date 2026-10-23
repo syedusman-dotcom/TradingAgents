@@ -1016,3 +1016,91 @@ def test_fake_decision_carries_the_checklist_sections():
     legs = parse.scenarios(text)
     assert sum(legs[leg]["probability"] for leg in ("bear", "base", "bull")) == pytest.approx(1.0)
     assert parse.value_bridge(text) is not None and "**Pre-mortem Answer**: Fake" in text
+
+
+@pytest.mark.unit
+def test_a_pence_quote_is_sized_in_dollars():
+    d = Decision("DNLM.L", "Buy", price=886.0, currency="GBp", fx_to_usd=0.0133)
+    actions, summary = plan([d], cash=10_000.0, sizing=SIZING)
+    assert actions[0].amount == pytest.approx(1000.0)
+    assert actions[0].shares == pytest.approx(1000.0 / (886.0 * 0.0133), abs=1e-3)   # ~85, not ~1.1
+    held = _held("Hold", shares=100, price=886.0, currency="GBp", fx_to_usd=0.0133)
+    _, summary = plan([held], cash=1000.0, sizing=SIZING)
+    assert summary["total_value"] == pytest.approx(1000.0 + 100 * 886.0 * 0.0133)
+
+
+@pytest.mark.unit
+def test_an_unknown_rate_is_flagged_to_size_by_hand_with_no_amount():
+    new = Decision("DNLM.L", "Buy", price=886.0, currency="GBp", fx_to_usd=None)
+    sell = _held("Sell", shares=10, price=886.0, currency="GBp", fx_to_usd=None)
+    actions, _ = plan([new, sell], cash=10_000.0, sizing=SIZING)
+    for a in actions:
+        assert a.amount is None and a.shares is None
+        assert "quoted in GBp: size by hand" in a.flags
+
+
+@pytest.mark.unit
+def test_entry_note_shows_a_foreign_quote_unit():
+    assert render._entry_note(Decision("DNLM.L", "Hold", price=886.0, entry_price=645.0,
+                                       currency="GBp")) == " — buy below 645.00 GBp"
+    assert render._entry_note(Decision("X", "Hold", price=8.0, entry_price=6.0,
+                                       currency="USD")) == " — buy below 6.00"
+
+
+@pytest.mark.unit
+def test_quote_fx_reads_the_currency_and_scales_a_minor_unit(monkeypatch):
+    from value_pipeline import market_data
+
+    class FakeTicker:
+        def __init__(self, t):
+            self.fast_info = {"currency": {"DNLM.L": "GBp", "HRB": "USD", "X.KS": "KRW"}[t]}
+
+    monkeypatch.setattr(market_data.yf, "Ticker", FakeTicker)
+    monkeypatch.setattr(market_data, "usd_rate", lambda c: {"GBp": 1.33, "USD": 1.0}.get(c))
+    assert market_data.quote_fx("DNLM.L") == ("GBp", pytest.approx(0.0133))
+    assert market_data.quote_fx("HRB") == ("USD", 1.0)
+    assert market_data.quote_fx("X.KS") == ("KRW", None)
+    monkeypatch.setattr(market_data.yf, "Ticker", lambda t: (_ for _ in ()).throw(RuntimeError("down")))
+    assert market_data.quote_fx("HRB") == (None, 1.0)
+
+
+def _offscreen_years():
+    from tests.test_value_metrics import _year
+
+    return [_year(fiscal_year_end=f"{2025 - i}-06-30") for i in range(4)]
+
+
+@pytest.mark.unit
+def test_a_ticker_outside_the_screen_gets_its_row_built_for_the_review(tmp_path, monkeypatch):
+    import pandas as pd
+
+    from tests.test_decision_math import _good_decision
+    from tradingagents.agents.schemas import render_pm_decision
+    from value_pipeline import market_data, operations as ops, review
+
+    paths = Paths(tmp_path)
+    ops.init_portfolio(paths, 1000.0, on="2026-10-01")
+    text = render_pm_decision(_good_decision())
+    monkeypatch.setattr(review, "fake_run", lambda t, i, held, price: review.RunResult(t, "Overweight", text))
+    peers = {f"P{i}": {"ticker": f"P{i}", "sector": "Industrials", "ev_ebit": m, "trend": "UPTREND"}
+             for i, m in enumerate((10.0, 11.0, 14.0))}
+    monkeypatch.setattr(review, "_screen_rows", lambda paths: peers)
+    record = {"ticker": "ZZZ", "years": _offscreen_years(), "market_cap": 2000.0, "price": 20.0,
+              "shares": 100, "closes": [], "sector": "Industrials"}
+    monkeypatch.setattr(market_data, "fundamentals", lambda t, p, days=7: dict(record))
+    monkeypatch.setattr(market_data, "cached_sector", lambda t, p: "Industrials")
+    monkeypatch.setattr(market_data, "latest_price", lambda t: 20.0)
+    monkeypatch.setattr(market_data, "quote_fx", lambda t: ("USD", 1.0))
+    monkeypatch.setattr(market_data, "closes_between", lambda *a, **k: pd.Series(dtype=float))
+    planned = {}
+    real_plan = review.plan
+    monkeypatch.setattr(review, "plan", lambda d, *a: planned.setdefault("d", d) and real_plan(d, *a))
+    out = review.run(paths, DEFAULTS, yes=True, dry_run=True, today="2026-10-23", only=["ZZZ"])
+    row = json.loads((out.parent / "results.json").read_text())[0]
+    want = metrics.expected_return(record["years"], 20.0, 2000.0, 100, target_multiple=11.0)
+    assert row["formula_value"] is not None and row["expected_return"] == pytest.approx(want["expected_return"])
+    assert row["currency"] == "USD" and row["fx_to_usd"] == 1.0
+    d = planned["d"][0]
+    assert d.expected_return == pytest.approx(want["expected_return"]) and d.sector == "Industrials"
+    assert d.fscore is not None and d.formula_value == row["formula_value"]
+    assert d.currency == "USD" and d.fx_to_usd == 1.0

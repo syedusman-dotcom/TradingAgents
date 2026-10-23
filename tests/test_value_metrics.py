@@ -445,3 +445,68 @@ def test_report_skips_the_base_rate_note_for_foreign_revenue_without_a_rate():
     m = vm.company_metrics(years, price=20, market_cap=2000, shares=100, revenue_usd=None)
     text = vm.render_report("7203.T", "2026-10-23", m, currency="JPY")
     assert "## Valuation worksheet" in text and "companies with revenue" not in text
+
+
+def _gbp_ticker(history=None):
+    col = [pd.Timestamp("2025-06-30"), pd.Timestamp("2024-06-30"), pd.Timestamp("2023-06-30")]
+
+    def frame(rows):
+        return pd.DataFrame(dict.fromkeys(col, rows))
+
+    class FakeTicker:
+        info = {"currency": "GBp", "financialCurrency": "GBP", "currentPrice": 886.0,
+                "marketCap": 886e6, "sharesOutstanding": 1e8}
+        income_stmt = frame({"Total Revenue": 1e9, "EBIT": 1.2e8, "Net Income": 9e7, "Gross Profit": 4e8})
+        balance_sheet = frame({"Total Assets": 2e9, "Current Assets": 6e8, "Current Liabilities": 3e8,
+                               "Stockholders Equity": 9e8, "Total Debt": 2e8,
+                               "Cash And Cash Equivalents": 5e7, "Ordinary Shares Number": 1e8})
+        cashflow = frame({"Free Cash Flow": 1e8, "Operating Cash Flow": 1.3e8, "Repurchase Of Capital Stock": -2e7})
+
+        def history(self, **kw):
+            FakeTicker.history_kwargs = kw
+            return history
+
+    return FakeTicker
+
+
+@pytest.mark.unit
+def test_vendor_presents_a_pence_quote_in_pence_against_pound_statements(monkeypatch):
+    from tradingagents.agents.decision_math import worksheet_base
+
+    fake = _gbp_ticker()
+    monkeypatch.setattr(yahoo_vm.yf, "Ticker", lambda *a: fake())
+    monkeypatch.setattr(yahoo_vm, "is_historical", lambda d: False)
+    monkeypatch.setattr(yahoo_vm, "current_discount_rate", lambda: {"rate": 0.09, "treasury_10y": None})
+    monkeypatch.setattr(yahoo_vm, "usd_rate", lambda c: None)
+    report = yahoo_vm.get_value_metrics("DNLM.L", "2026-10-23")
+
+    years = yahoo_vm.statement_years(fake.income_stmt, fake.balance_sheet, fake.cashflow)
+    pounds = vm.company_metrics(years, 8.86, 886e6, 1e8, rate=0.09)["valuation"]
+    base = worksheet_base(report)
+    assert base == pytest.approx(100 * pounds["base"], rel=1e-3)
+    mos = (base - 886) / base
+    assert f"margin of safety at base {mos:.1%}" in report
+    assert "Per-share values in GBp (pence), the quote unit; statements in GBP." in report
+    assert "Price 886.00" in report and "left out rather than mixed" not in report
+
+
+@pytest.mark.unit
+def test_to_quote_unit_scales_every_per_share_value_and_leaves_ratios():
+    years = [_year(fiscal_year_end="2025-12-31", shares=98), _year(fiscal_year_end="2024-12-31")]
+    m = vm.company_metrics(years, price=8.0, market_cap=784.0, shares=98,
+                           avg_prices={"2025": 7.0})
+    scaled = yahoo_vm._to_quote_unit(m, 100)
+    v, s = m["valuation"], scaled["valuation"]
+    assert scaled["price"] == 800.0
+    for key in ("low", "high", "base", "epv"):
+        assert s[key] == pytest.approx(100 * v[key])
+    assert s["methods"]["fcf"] == pytest.approx([100 * x for x in v["methods"]["fcf"]])
+    assert s["grid"]["r"] == pytest.approx([100 * x for x in v["grid"]["r"]])
+    assert s["margin_of_safety"] == v["margin_of_safety"] and s["implied_growth"] == v["implied_growth"]
+    ca, sca = m["capital_allocation"], scaled["capital_allocation"]
+    assert sca["per_year"][0]["buyback_price"] == pytest.approx(100 * ca["per_year"][0]["buyback_price"])
+    assert sca["per_year"][0]["avg_price"] == 700.0
+    assert sca["totals"]["avg_buyback_price"] == pytest.approx(100 * ca["totals"]["avg_buyback_price"])
+    assert sca["price"] == 800.0
+    assert scaled["expected_return"] == m["expected_return"]
+    assert m["price"] == 8.0  # the input is not changed

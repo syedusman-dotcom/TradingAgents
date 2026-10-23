@@ -86,22 +86,30 @@ def evaluate(data: dict, normalize_years: int = 5, roic_cap: float = 1.0,
 SECTOR_MIN_ROWS = 3
 
 
+def sector_target(rows, sector) -> float:
+    """The reversion target for ``sector``: the median EV/EBIT of its rows with a positive
+    multiple, or 12x when fewer than three have one."""
+    peers = [r["ev_ebit"] for r in rows
+             if r.get("sector") == sector and isinstance(r.get("ev_ebit"), (int, float))
+             and r["ev_ebit"] == r["ev_ebit"] and r["ev_ebit"] > 0]
+    return median(peers) if len(peers) >= SECTOR_MIN_ROWS else metrics.ER_DEFAULT_TARGET
+
+
+def with_target(row: dict, years, price, market_cap, shares, target: float) -> None:
+    """Re-run ``row``'s expected return with ``target`` as the EV/EBIT reversion target."""
+    er = metrics.expected_return(years, price, market_cap, shares, target_multiple=target) or {}
+    row.update(expected_return=er.get("expected_return"), er_yield=er.get("yield"),
+               er_growth=er.get("growth"), er_reversion=er.get("reversion"),
+               ev_ebit=er.get("ev_ebit_now"), er_target_multiple=er.get("ev_ebit_target"))
+
+
 def apply_sector_targets(rows: list[dict], inputs: dict[str, tuple]) -> None:
     """Re-run each row's expected return with its sector's median EV/EBIT as the reversion target
     (12x when the sector has fewer than three companies with a positive multiple).
     ``inputs`` maps ticker -> (years, price, market_cap, shares)."""
-    by_sector: dict = {}
+    targets = {r.get("sector"): sector_target(rows, r.get("sector")) for r in rows}
     for r in rows:
-        if (r.get("ev_ebit") or 0) > 0:
-            by_sector.setdefault(r.get("sector"), []).append(r["ev_ebit"])
-    for r in rows:
-        peers = by_sector.get(r.get("sector"), [])
-        target = median(peers) if len(peers) >= SECTOR_MIN_ROWS else metrics.ER_DEFAULT_TARGET
-        years, price, mcap, shares = inputs[r["ticker"]]
-        er = metrics.expected_return(years, price, mcap, shares, target_multiple=target) or {}
-        r.update(expected_return=er.get("expected_return"), er_yield=er.get("yield"),
-                 er_growth=er.get("growth"), er_reversion=er.get("reversion"),
-                 ev_ebit=er.get("ev_ebit_now"), er_target_multiple=er.get("ev_ebit_target"))
+        with_target(r, *inputs[r["ticker"]], targets[r.get("sector")])
 
 
 def failed_filters(row: dict, filters: dict) -> list[str]:

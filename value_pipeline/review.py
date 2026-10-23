@@ -251,6 +251,32 @@ def _sector(paths: Paths, ticker: str, screen_row: dict | None) -> str | None:
     return market_data.cached_sector(ticker, paths)
 
 
+def _quote_fx(ticker: str) -> tuple[str | None, float | None]:
+    try:
+        return market_data.quote_fx(ticker)
+    except Exception as exc:  # noqa: BLE001 - fail open: priced as dollars, as before
+        log.warning("no quote currency for %s: %s", ticker, exc)
+        return None, 1.0
+
+
+def offscreen_row(ticker: str, paths: Paths, cfg: dict, screen: dict[str, dict]) -> dict | None:
+    """The screen's row for a ticker the screen did not cover (a holding or a --tickers name),
+    built the same way, with its sector's median EV/EBIT from the screen as the reversion
+    target; None when its fundamentals cannot be fetched."""
+    scfg = cfg["screen"]
+    try:
+        data = market_data.fundamentals(ticker, paths, scfg["cache_days"])
+        row = screener.evaluate(data, scfg["normalize_years"], scfg["roic_cap"],
+                                metrics.current_discount_rate()["rate"])
+    except Exception as exc:  # noqa: BLE001 - the review stands without the formula's figures
+        log.warning("no screen figures for %s: %s", ticker, exc)
+        return None
+    row["sector"] = market_data.cached_sector(ticker, paths) or data.get("sector")
+    target = screener.sector_target(list(screen.values()), row["sector"])
+    screener.with_target(row, data["years"], data.get("price"), row["market_cap"], row["shares"], target)
+    return row
+
+
 def run(paths: Paths, cfg: dict, *, yes: bool = False, dry_run: bool = False,
         today: str | None = None, confirm=input, only: list[str] | None = None) -> Path:
     try:
@@ -300,6 +326,8 @@ def _run(paths: Paths, cfg: dict, *, yes: bool, dry_run: bool, today: str | None
     out_dir.mkdir(parents=True, exist_ok=True)
     screen = _screen_rows(paths)
     prices = {t: market_data.latest_price(t) for t in sorted(set(tickers) | owned)}
+    fx = {t: _quote_fx(t) for t in sorted(set(tickers) | owned)}
+    screen_row = {t: screen.get(t) or offscreen_row(t, paths, cfg, screen) for t in tickers}
 
     results: list[RunResult] = []
     usage = None
@@ -327,7 +355,7 @@ def _run(paths: Paths, cfg: dict, *, yes: bool, dry_run: bool, today: str | None
     decisions = []
     for r in results:
         held = pf.position(r.ticker)
-        row = screen.get(r.ticker)
+        row = screen_row.get(r.ticker)
         fscore = row.get("fscore") if row else None
         decisions.append(Decision(
             ticker=r.ticker,
@@ -348,9 +376,12 @@ def _run(paths: Paths, cfg: dict, *, yes: bool, dry_run: bool, today: str | None
             value_bridge=parse.value_bridge(r.decision),
             upside_downside=(scenarios[r.ticker] or {}).get("upside_downside"),
             weighted_mos=(scenarios[r.ticker] or {}).get("weighted_mos"),
+            currency=fx[r.ticker][0],
+            fx_to_usd=fx[r.ticker][1],
         ))
     reviewed = {d.ticker for d in decisions}
-    others = [(p.ticker, p.shares * (prices.get(p.ticker) or p.avg_price), _sector(paths, p.ticker, screen.get(p.ticker)))
+    others = [(p.ticker, _holding_value(p, prices.get(p.ticker), fx[p.ticker]),
+               _sector(paths, p.ticker, screen.get(p.ticker)))
               for p in pf.positions if p.ticker not in reviewed]
     actions, summary = plan(decisions, pf.cash, cfg["sizing"], others)
     failures = [f"{r.ticker}: {r.error}" for r in results if r.error]
@@ -366,7 +397,10 @@ def _run(paths: Paths, cfg: dict, *, yes: bool, dry_run: bool, today: str | None
          "tokens_in": r.tokens_in, "tokens_out": r.tokens_out, "nominal_cost_usd": round(r.nominal_cost_usd, 4),
          "intrinsic_value": parse.intrinsic_value(r.decision), "margin_of_safety": parse.margin_of_safety(r.decision),
          "thesis": parse.thesis_summary(r.decision), "price": prices.get(r.ticker),
-         "formula_value": _float(screen[r.ticker].get("value_base")) if r.ticker in screen else None,
+         "formula_value": _float(screen_row[r.ticker].get("value_base")) if screen_row.get(r.ticker) else None,
+         "expected_return": _float(screen_row[r.ticker].get("expected_return"))
+         if screen_row.get(r.ticker) else None,
+         "currency": fx[r.ticker][0], "fx_to_usd": fx[r.ticker][1],
          "entry_price": parse.entry_price(r.decision), "kill_criteria": parse.kill_criteria(r.decision),
          "checklist": parse.checklist(r.decision), "scenarios": scenarios[r.ticker],
          "value_bridge": parse.value_bridge(r.decision), "red_flags": parse.red_flags(r.decision)}
@@ -399,6 +433,13 @@ def _run(paths: Paths, cfg: dict, *, yes: bool, dry_run: bool, today: str | None
     if not dry_run:
         _record_ratings(paths, pf, actions, today)
     return out_dir / "ACTIONS.md"
+
+
+def _holding_value(p, price: float | None, fx: tuple[str | None, float | None]) -> float:
+    """An unreviewed holding's value in US dollars: today's price at the quote's rate, else its
+    cost basis as recorded (as before)."""
+    rate = fx[1]
+    return p.shares * price * rate if price is not None and rate is not None else p.shares * p.avg_price
 
 
 def _write_whole(path: Path, data) -> None:

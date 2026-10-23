@@ -123,7 +123,10 @@ def numbered(items: list[str]) -> str:
 
 
 def _entry_note(d) -> str:
-    return "" if d is None or d.entry_price is None else f" — buy below {d.entry_price:,.2f}"
+    if d is None or d.entry_price is None:
+        return ""
+    unit = f" {d.currency}" if getattr(d, "currency", None) and d.currency != "USD" else ""
+    return f" — buy below {d.entry_price:,.2f}{unit}"
 
 
 def _er_note(d) -> str:

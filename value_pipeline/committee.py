@@ -19,7 +19,10 @@ PROMPT = (
     "candidate's expected return exceeds a holding's by at least 5 percentage points; name "
     "concentration and correlation risks (same sector, same end market, same macro factor); give one "
     "paragraph of rationale per action. Never recommend buying a stock whose own review rated it Sell. "
-    "Nothing is traded automatically; this is advice for a human."
+    "Nothing is traded automatically; this is advice for a human. "
+    "Prices are in each stock's quote currency (its \"currency\" field); held weights and cash are in "
+    "US dollars. A null field is unknown. Never estimate an expected return, downside or sector yourself; "
+    "say it is unknown and rank that stock on what is known."
 )
 
 _BUYS = {"BUY", "ADD"}
@@ -30,7 +33,9 @@ class RankedIdea(BaseModel):
     rank: int = Field(description="1 is the best idea")
     action: Literal["BUY", "ADD", "HOLD", "TRIM", "SELL", "SKIP"]
     weight: float = Field(description="Proposed portfolio weight as a fraction (0.08 = 8%)")
-    expected_return: float | None = Field(description="Expected annual return as a fraction (0.12 = 12%/yr)")
+    expected_return: float | None = Field(
+        description="Expected annual return as a fraction (0.12 = 12%/yr). Copied from the stock's "
+                    "expected_return; null when the review has none. Never invent one.")
     downside: str = Field(description="The probability-weighted downside in a sentence")
     rationale: str = Field(description="One paragraph on why this action")
 
@@ -64,14 +69,18 @@ def build_payload(decisions: list[Decision], results: list[dict], portfolio, sum
     rows = {r["ticker"]: r for r in results}
     total = summary.get("total_value") or 0.0
     reviewed = {d.ticker for d in decisions}
-    stocks = []
+    stocks, not_reviewed = [], []
     for d in decisions:
         row = rows.get(d.ticker, {})
-        value = d.held_shares * d.price if d.held and d.price else 0.0
+        if row.get("error"):
+            not_reviewed.append({"ticker": d.ticker, "error": row["error"]})
+            continue
+        value = d.held_shares * d.price_usd if d.held and d.price_usd else 0.0
         stocks.append({
-            "ticker": d.ticker, "name": row.get("name"), "rating": d.rating, "error": row.get("error"),
+            "ticker": d.ticker, "name": row.get("name"), "rating": d.rating,
             "held": d.held, "held_weight": value / total if total > 0 else 0.0,
-            "price": d.price, "intrinsic_value": d.intrinsic_value, "margin_of_safety": d.margin_of_safety,
+            "price": d.price, "currency": d.currency or "USD", "intrinsic_value": d.intrinsic_value,
+            "margin_of_safety": d.margin_of_safety,
             "expected_return": d.expected_return, "entry_price": d.entry_price,
             "upside_downside": d.upside_downside, "sector": d.sector, "fscore": d.fscore, "trend": d.trend,
             "checklist": row.get("checklist"), "scenarios": row.get("scenarios"),
@@ -80,7 +89,8 @@ def build_payload(decisions: list[Decision], results: list[dict], portfolio, sum
         })
     others = [{"ticker": p.ticker, "shares": p.shares, "avg_price": p.avg_price}
               for p in portfolio.positions if p.ticker not in reviewed]
-    return _clean({"stocks": stocks, "other_holdings": others, "cash": portfolio.cash,
+    return _clean({"stocks": stocks, "not_reviewed": not_reviewed, "other_holdings": others,
+                   "cash": portfolio.cash,
                    "total_value": total, "sizing": dict(sizing)})
 
 
@@ -139,9 +149,9 @@ SKIPPED_DRY_RUN = "skipped (dry run: no agent calls)"
 
 
 def _weight(weight: float, cap: float) -> str:
-    """A weight as a percentage; one above 1.0 is taken as already a percentage, and one above
-    the position cap is shown at the cap."""
-    w = weight / 100 if weight > 1.0 else weight
+    """A weight as a percentage; one of 1.0 or more is taken as already a percentage (no position
+    is ever the whole portfolio), and one above the position cap is shown at the cap."""
+    w = weight / 100 if weight >= 1.0 else weight
     if w > cap + 1e-9:
         return f"{cap:.0%} (capped from {w:.0%})"
     return f"{w:.0%}"
