@@ -119,17 +119,40 @@ def reconcile(committee: Committee, actions: list[Action]) -> tuple[Committee, l
         swaps.append(s)
     for idea in ranking:
         rule = rules.get(idea.ticker)
-        said = "KEEP" if idea.action == "HOLD" else idea.action
-        if rule is not None and said != rule.action:
+        if rule is not None and _rules_word(idea.action, rule.held) != rule.action:
             notes.append(f"{idea.ticker}: committee says {idea.action}, rules say {rule.action} ({rule.reason})")
     return committee.model_copy(update={"ranking": ranking, "swaps": swaps}), notes
+
+
+def _rules_word(action: str, held: bool) -> str:
+    """The committee's action in the rules' words: HOLD is KEEP; buying more of a holding is
+    ADD, and adding to a stock not yet owned is BUY."""
+    if action == "HOLD":
+        return "KEEP"
+    if action in _BUYS:
+        return "ADD" if held else "BUY"
+    return action
+
+
+SKIPPED_FEW = "skipped (fewer than 2 successful reviews)"
+SKIPPED_DRY_RUN = "skipped (dry run: no agent calls)"
+
+
+def _weight(weight: float, cap: float) -> str:
+    """A weight as a percentage; one above 1.0 is taken as already a percentage, and one above
+    the position cap is shown at the cap."""
+    w = weight / 100 if weight > 1.0 else weight
+    if w > cap + 1e-9:
+        return f"{cap:.0%} (capped from {w:.0%})"
+    return f"{w:.0%}"
 
 
 def _cell(text) -> str:
     return str(text).replace("|", "\\|").replace("\n", " ")
 
 
-def render_committee(committee: Committee, notes: list[str], names: dict[str, str] | None) -> list[str]:
+def render_committee(committee: Committee, notes: list[str], names: dict[str, str] | None,
+                     max_weight: float = 0.10) -> list[str]:
     """The ACTIONS section, as Markdown lines."""
     def who(ticker: str) -> str:
         return f"{names[ticker]} ({ticker})" if names and names.get(ticker) else ticker
@@ -138,7 +161,7 @@ def render_committee(committee: Committee, notes: list[str], names: dict[str, st
              "| Rank | Ticker | Action | Weight | Expected return | Rationale |", "|---|---|---|---|---|---|"]
     for r in sorted(committee.ranking, key=lambda r: r.rank):
         er = "–" if r.expected_return is None else f"{r.expected_return:.0%}/yr"
-        lines.append(f"| {r.rank} | {_cell(who(r.ticker))} | {r.action} | {r.weight:.0%} | {er} | {_cell(r.rationale)} |")
+        lines.append(f"| {r.rank} | {_cell(who(r.ticker))} | {r.action} | {_weight(r.weight, max_weight)} | {er} | {_cell(r.rationale)} |")
     lines += ["", "### Swaps", ""]
     lines += [f"- Sell {s.sell}, buy {s.buy}: {s.reason}" for s in committee.swaps] or ["None proposed."]
     lines += ["", "### Concentration", ""]
@@ -149,4 +172,6 @@ def render_committee(committee: Committee, notes: list[str], names: dict[str, st
 
 
 def render_unavailable(reason: str) -> list[str]:
-    return ["## Investment committee", "", f"Investment committee: not available ({reason})", ""]
+    """The section when there is no committee answer: skipped on purpose, or a failure's reason."""
+    line = reason if reason.startswith("skipped") else f"not available ({reason})"
+    return ["## Investment committee", "", f"Investment committee: {line}", ""]

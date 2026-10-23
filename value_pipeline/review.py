@@ -342,7 +342,11 @@ def _run(paths: Paths, cfg: dict, *, yes: bool, dry_run: bool, today: str | None
     ]
 
     committee, unavailable = None, None
-    if rcfg["committee"] and not dry_run and sum(1 for r in results if not r.error) >= 2:
+    if rcfg["committee"] and dry_run:
+        unavailable = committee_mod.SKIPPED_DRY_RUN
+    elif rcfg["committee"] and sum(1 for r in results if not r.error) < 2:
+        unavailable = committee_mod.SKIPPED_FEW
+    elif rcfg["committee"]:
         committee, unavailable = _committee(ta, tally, decisions, rows, pf, summary, cfg["sizing"], actions)
         used = tally.snapshot()
         for key in ("tokens_in", "tokens_out", "nominal_cost_usd"):
@@ -351,7 +355,8 @@ def _run(paths: Paths, cfg: dict, *, yes: bool, dry_run: bool, today: str | None
     md = render.actions_markdown(today, actions, summary, reports={r.ticker: r.report for r in results if r.report},
                                  comparison=comparison, cost=cost, failures=failures, dry_run=dry_run, knives=knives,
                                  usage=usage, names={r.ticker: r.name for r in results if r.name},
-                                 committee=committee, committee_unavailable=unavailable)
+                                 committee=committee, committee_unavailable=unavailable,
+                                 max_weight=cfg["sizing"]["max_position_weight"])
     (out_dir / "ACTIONS.md").write_text(md, encoding="utf-8")
     (out_dir / "ACTIONS.html").write_text(render.actions_html(md, f"Value review {today}"), encoding="utf-8")
     # Written whole: the website reads these files while a review may be finishing.

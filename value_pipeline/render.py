@@ -27,7 +27,7 @@ def actions_markdown(date: str, actions: list[Action], summary: dict, *, reports
                      knives: list[str] | None = None, usage: dict | None = None,
                      names: dict[str, str] | None = None,
                      committee: tuple[committee_mod.Committee, list[str]] | None = None,
-                     committee_unavailable: str | None = None) -> str:
+                     committee_unavailable: str | None = None, max_weight: float = 0.10) -> str:
     def who(ticker: str) -> str:
         return f"{names[ticker]} ({ticker})" if names and names.get(ticker) else ticker
 
@@ -61,7 +61,7 @@ def actions_markdown(date: str, actions: list[Action], summary: dict, *, reports
     lines.append("")
 
     if committee:
-        lines += committee_mod.render_committee(*committee, names)
+        lines += committee_mod.render_committee(*committee, names, max_weight)
     elif committee_unavailable:
         lines += committee_mod.render_unavailable(committee_unavailable)
 

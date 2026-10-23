@@ -92,6 +92,52 @@ def test_reconcile_lists_disagreements():
 
 
 @pytest.mark.unit
+def test_committee_buy_on_a_holding_matches_the_rules_add():
+    from value_pipeline.committee import reconcile
+
+    decisions = [Decision(ticker="HRB", rating="Buy", price=50.0, held_shares=1, sector="Industrials",
+                          expected_return=0.12, intrinsic_value=80.0, margin_of_safety=0.4, trend="UPTREND"),
+                 Decision(ticker="MSFT", rating="Buy", price=400.0, sector="Tech", expected_return=0.15,
+                          intrinsic_value=500.0)]
+    actions, _ = plan(decisions, 5000.0, SIZING)
+    rules = {a.ticker: a for a in actions}
+    assert rules["HRB"].action == "ADD" and rules["HRB"].held
+    _, notes = reconcile(_committee(("HRB", "BUY"), ("MSFT", "BUY")), actions)
+    assert notes == []
+    _, notes = reconcile(_committee(("HRB", "TRIM"), ("MSFT", "BUY")), actions)
+    assert notes == [f"HRB: committee says TRIM, rules say ADD ({rules['HRB'].reason})"]
+
+
+def _weighted(*weights):
+    from value_pipeline.committee import Committee, RankedIdea
+
+    return Committee(ranking=[RankedIdea(ticker=f"T{i}", rank=i, action="BUY", weight=w, expected_return=None,
+                                         downside="-", rationale="r") for i, w in enumerate(weights, 1)],
+                     swaps=[], concentration=[], summary="s")
+
+
+@pytest.mark.unit
+def test_committee_weights_given_as_percentages_are_read_as_percentages():
+    from value_pipeline.committee import render_committee
+
+    md = "\n".join(render_committee(_weighted(8.0, 0.05), [], None))
+    assert "| 1 | T1 | BUY | 8% | – | r |" in md
+    assert "| 2 | T2 | BUY | 5% | – | r |" in md
+
+
+@pytest.mark.unit
+def test_committee_weights_above_the_cap_are_shown_at_the_cap():
+    from value_pipeline.committee import render_committee
+
+    md = "\n".join(render_committee(_weighted(0.15, 25.0, 0.10), [], None))
+    assert "| 1 | T1 | BUY | 10% (capped from 15%) | – | r |" in md
+    assert "| 2 | T2 | BUY | 10% (capped from 25%) | – | r |" in md
+    assert "| 3 | T3 | BUY | 10% | – | r |" in md
+    md = "\n".join(render_committee(_weighted(0.15), [], None, max_weight=0.20))
+    assert "| 1 | T1 | BUY | 15% | – | r |" in md
+
+
+@pytest.mark.unit
 def test_actions_render_the_committee_section_before_holdings():
     from value_pipeline import render
 
@@ -182,6 +228,9 @@ def test_review_skips_the_committee_when_disabled_or_dry_run(tmp_path, monkeypat
     assert not (dry / "committee.json").exists()
     one = _review(tmp_path / "one", monkeypatch, llm, tickers=("HRB",))
     assert not (one / "committee.json").exists()
+    one_md = (one / "ACTIONS.md").read_text()
+    assert "Investment committee: skipped (fewer than 2 successful reviews)" in one_md
+    assert one_md.index("Investment committee: skipped") < one_md.index("## Holdings")
     llm.with_structured_output.return_value.invoke.assert_not_called()
 
     from tradingagents.llm_clients import usage
