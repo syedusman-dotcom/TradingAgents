@@ -153,7 +153,9 @@ _FAKE_NEW = ("Buy", "Overweight", "Hold")
 def fake_run(ticker: str, index: int, held: bool, price: float | None) -> RunResult:
     """A made-up rating and decision for --dry-run, cycling through every rule. The decision is
     rendered by the Portfolio Manager's own renderer, so the dry run exercises the checklist,
-    kill criteria, entry price, scenarios, value bridge and pre-mortem sections."""
+    kill criteria, entry price, scenarios, value bridge and pre-mortem sections; every fourth run
+    from the second is a compounder and every fourth from the fourth an inflection decision, so
+    the lane sizing and caps run too."""
     from tradingagents.agents.schemas import (
         Adjustment,
         PortfolioDecision,
@@ -168,6 +170,14 @@ def fake_run(ticker: str, index: int, held: bool, price: float | None) -> RunRes
     mos = None if not value or not price else (value - price) / value
     mos_text = f"Margin of safety: {mos * 100 if mos is not None else 0:.0f}%"
     formula = round(value * 0.9, 2) if value else None
+    lane = {1: "compounder", 3: "inflection"}.get(index % 4, "value")
+    kills = ["Fake: ROIC below 12% for two years", "Fake: net debt above 3x EBITDA",
+             "Fake: revenue falls two years running"]
+    evidence = {"compounder": ["Fake: ROIC incl. goodwill ≥ 15% 5/5 years", "Fake: FCF 9.0%/yr 4y"],
+                "inflection": ["Fake: TTM EBIT 1.80× the 5-year average",
+                               "verified: Fake: backlog up 30%, 10-Q filed 2026-08-01"]}.get(lane, [])
+    if lane == "inflection":
+        kills = ["Fake: backlog falls two quarters running", *kills]
     decision = PortfolioDecision(
         rating=rating,
         executive_summary="Dry run.",
@@ -178,8 +188,9 @@ def fake_run(ticker: str, index: int, held: bool, price: float | None) -> RunRes
         good_management=Verdict(passed=index % 2 == 0, note="Fake: buybacks below the formula value."),
         cheap=Verdict(passed=bool(mos and mos >= 0.3), note=f"Fake: {mos_text}"),
         red_flags=["Fake: receivables growing faster than revenue"] if index % 3 == 2 else [],
-        kill_criteria=["Fake: ROIC below 12% for two years", "Fake: net debt above 3x EBITDA",
-                       "Fake: revenue falls two years running"],
+        kill_criteria=kills,
+        lane=lane,
+        lane_evidence=evidence,
         entry_price=round(value * 0.7, 2) if value else None,
         formula_value=formula,
         value_bridge=[Adjustment(reason="Fake: normalised margins", amount=round(value - formula, 2))]

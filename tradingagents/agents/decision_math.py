@@ -101,7 +101,9 @@ INFLECTION_UPSIDE_DOWNSIDE = 2.0
 _EXPECTED_RETURN = re.compile(
     r"Expected return \(\d+-year\):\s*[+\-−]?[\d.]+%/yr = yield ([+\-−]?[\d.]+)% \+ growth "
     r"([+\-−]?[\d.]+)% \+ multiple reversion ([+\-−]?[\d.]+)%")
-_DEMAND = re.compile(r"\b(orders?|backlog|capex|capital spending|demand|bookings?)\b", re.I)
+# A demand indicator, in a kill criterion (and the order the reports list an inflection's criteria in).
+DEMAND_WORDS = re.compile(r"\b(orders?|backlog|book-to-bill|RPO|remaining performance obligations?|lead times?"
+                          r"|capex|capital spending|demand|bookings?)\b", re.I)
 
 
 def _pct(x: float) -> str:
@@ -239,7 +241,7 @@ def _inflection_problems(decision, price, worksheet) -> list[str]:
         problems.append("The inflection lane needs the bear case (growth stops now) at a probability of at "
                         f"least {INFLECTION_BEAR_PROBABILITY:.0%}; it is "
                         f"{decision.scenarios.bear.probability:.0%}.")
-    if not any(_DEMAND.search(k) for k in decision.kill_criteria):
+    if not any(DEMAND_WORDS.search(k) for k in decision.kill_criteria):
         problems.append("The inflection lane needs a kill criterion on a demand indicator: orders, backlog, "
                         "bookings, customer capex or demand.")
     if not any(item.strip().lower().startswith("verified:") for item in decision.lane_evidence):

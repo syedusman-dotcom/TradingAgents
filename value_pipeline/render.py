@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import html
-import re
 
 from markdown_it import MarkdownIt
 
+from tradingagents.agents.decision_math import DEMAND_WORDS
 from value_pipeline import committee as committee_mod
 from value_pipeline.actions import Action
 
@@ -128,14 +128,12 @@ def numbered(items: list[str]) -> str:
     return "; ".join(f"{i}. {c}" for i, c in enumerate(items, 1))
 
 
-_DEMAND = re.compile(r"orders|backlog|capex|demand|bookings", re.I)
-
-
 def demand_first(items: list[str], lane: str) -> list[str]:
-    """An inflection holding's kill criteria with the demand ones first (the rest keep their order)."""
+    """An inflection holding's kill criteria with the demand ones first (the rest keep their order);
+    a demand criterion is one the Portfolio Manager's check counts (``DEMAND_WORDS``)."""
     if lane != "inflection":
         return list(items)
-    return [c for c in items if _DEMAND.search(c)] + [c for c in items if not _DEMAND.search(c)]
+    return [c for c in items if DEMAND_WORDS.search(c)] + [c for c in items if not DEMAND_WORDS.search(c)]
 
 
 def _hint_note(d) -> str:

@@ -1054,6 +1054,31 @@ def test_fake_decision_carries_the_checklist_sections():
 
 
 @pytest.mark.unit
+def test_the_dry_run_cycles_a_compounder_and_an_inflection_decision():
+    from value_pipeline import parse, review
+
+    lanes = [parse.lane(review.fake_run(f"T{i}", i, False, 50.0).decision) for i in range(4)]
+    assert lanes == ["value", "compounder", "value", "inflection"]
+    inflection = review.fake_run("T3", 3, False, 50.0).decision
+    assert any(e.startswith("verified:") for e in parse.lane_evidence(inflection))
+    assert parse.kill_criteria(inflection)[0].startswith("Fake: backlog")
+
+
+@pytest.mark.unit
+def test_one_demand_vocabulary_for_the_check_and_the_ordering():
+    from tradingagents.agents.decision_math import DEMAND_WORDS
+    from value_pipeline import render
+
+    for words in ("Book-to-bill below 1.0", "RPO falls 10%", "remaining performance obligations shrink",
+                  "lead times shorten", "customer capex cut", "orders fall"):
+        assert DEMAND_WORDS.search(words), words
+    assert not DEMAND_WORDS.search("Gross margin below 30%")
+    assert render.demand_first(["ROIC below 12%", "RPO falls 10%"], "inflection") == [
+        "RPO falls 10%", "ROIC below 12%"]
+    assert render.DEMAND_WORDS is DEMAND_WORDS
+
+
+@pytest.mark.unit
 def test_a_pence_quote_is_sized_in_dollars():
     d = Decision("DNLM.L", "Buy", price=886.0, currency="GBp", fx_to_usd=0.0133)
     actions, summary = plan([d], cash=10_000.0, sizing=SIZING)
@@ -1407,8 +1432,8 @@ def test_watch_lists_demand_criteria_first(tmp_path, monkeypatch):
     monkeypatch.setattr(watch.market_data, "closes", lambda t: [])
     _, out = watch.run(paths, DEFAULTS, notify=False)
     text = out.read_text()
-    assert ("- INF: 1. Backlog falls year on year; 2. Net debt above 3x EBITDA; "
-            "3. Book-to-bill below 1 for two quarters") in text
+    assert ("- INF: 1. Book-to-bill below 1 for two quarters; 2. Backlog falls year on year; "
+            "3. Net debt above 3x EBITDA") in text                     # book-to-bill is demand (M1)
     assert "- HRB: 1. Dividend cut; 2. Demand drops" in text
 
 
