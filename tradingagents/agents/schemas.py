@@ -345,6 +345,14 @@ class PortfolioDecision(BaseModel):
             "How the thesis survives the pre-mortem's failure path, or why the risk is accepted."
         ),
     )
+    consensus_view: str = Field(
+        default="",
+        description=(
+            "Where the thesis agrees with or differs from the worksheet's consensus estimates "
+            "(revenue growth, price target) and why; a value far below consensus with no stated "
+            "reason is a problem. Empty only when the worksheet shows no consensus."
+        ),
+    )
     lane: Literal["value", "compounder", "inflection"] = Field(
         default="value",
         description=(
@@ -422,6 +430,7 @@ def render_pm_decision(decision: PortfolioDecision, price: float | None = None) 
                                           else " not provided")])
     parts.extend(["", "**Value Bridge**:\n" + _render_bridge(decision)])
     parts.extend(["", f"**Pre-mortem Answer**: {decision.premortem_answer or 'not provided'}"])
+    parts.extend(["", f"**Consensus**: {decision.consensus_view or 'not provided'}"])
     return "\n".join(parts)
 
 

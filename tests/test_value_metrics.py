@@ -990,3 +990,188 @@ def test_record_computes_the_cagr_from_four_fiscal_years():
     assert four["revenue_cagr_years"] == 3 and four["revenue_cagr"] == pytest.approx(0.10)
     three = vm.record(grow(3))
     assert three["revenue_cagr"] is None and three["revenue_cagr_years"] is None
+
+
+# --- the eight-quarter trend table --------------------------------------------------
+
+def _trend_quarters():
+    """Nine quarters (newest first) with the trend fields; the oldest only feeds a y/y."""
+    out = []
+    for i, q in enumerate(_quarters()):
+        rev = q["revenue"]
+        out.append({**q, "gross_profit": rev * (0.42 if i == 0 else 0.40), "net_income": 20.0,
+                    "operating_cash_flow": 22.0 if i == 0 else 18.0, "free_cash_flow": 15.0,
+                    "receivables": rev * 0.5})
+    return out
+
+
+@pytest.mark.unit
+def test_quarter_trend_rows_newest_first_with_date_matched_yoy():
+    rows = vm.quarter_trend(_trend_quarters())
+    assert len(rows) == 8 and [r["period_end"] for r in rows] == Q_ENDS[:8]
+    assert set(rows[0]) == {"period_end", "revenue", "revenue_yoy", "gross_margin", "ebit_margin",
+                            "operating_cash_flow", "free_cash_flow", "cash_conversion",
+                            "receivables_to_revenue"}
+    assert rows[0]["revenue"] == 143 and rows[0]["revenue_yoy"] == pytest.approx(143 / 110 - 1)
+    assert rows[4]["revenue_yoy"] == pytest.approx(110 / 100 - 1)    # the ninth quarter, not shown, matches
+    assert rows[5]["revenue_yoy"] is None                              # nothing a year before it
+    assert rows[0]["gross_margin"] == pytest.approx(0.42) and rows[1]["gross_margin"] == pytest.approx(0.40)
+    assert rows[0]["ebit_margin"] == pytest.approx(0.25) and rows[7]["ebit_margin"] == pytest.approx(0.20)
+    assert rows[0]["cash_conversion"] == pytest.approx(22 / 20) and rows[1]["cash_conversion"] == pytest.approx(0.9)
+    assert rows[0]["receivables_to_revenue"] == pytest.approx(0.5)
+    assert rows[0]["operating_cash_flow"] == 22.0 and rows[0]["free_cash_flow"] == 15.0
+
+
+@pytest.mark.unit
+def test_quarter_trend_tolerates_gaps_and_skips_quarters_without_revenue():
+    quarters = [{"fiscal_year_end": "2026-09-30", "cash": 5.0}, *_quarters()[:3]]
+    quarters[2] = {**quarters[2], "net_income": -5.0, "operating_cash_flow": 10.0}
+    rows = vm.quarter_trend(quarters)
+    assert [r["period_end"] for r in rows] == Q_ENDS[:3]              # the balance-sheet-only quarter is left out
+    assert rows[0]["revenue_yoy"] is None and rows[0]["gross_margin"] is None
+    assert rows[0]["cash_conversion"] is None and rows[0]["receivables_to_revenue"] is None
+    assert rows[1]["cash_conversion"] is None                          # a loss: no conversion ratio
+    assert vm.quarter_trend([]) == [] and vm.quarter_trend(None) == []
+
+
+@pytest.mark.unit
+def test_render_report_shows_the_eight_quarter_table_after_the_annual_table():
+    years = [_year(fiscal_year_end=f"{2025 - i}-12-31") for i in range(3)]
+    m = vm.company_metrics(years, 20, 2000, 100, quarters=_trend_quarters())
+    text = vm.render_report("X", "2026-10-23", m)
+    assert text.index("## By fiscal year") < text.index("## Last eight quarters") < text.index("## Price today")
+    start = text.index("## Last eight quarters")
+    section = text[start:text.index("\n## ", start)]
+    assert ("| Quarter end | Revenue | Revenue y/y | Gross margin | EBIT margin | Operating cash flow "
+            "| FCF | Cash conversion | Receivables / revenue |") in section
+    assert section.count("\n| 20") == 8
+    assert "| 2026-06-30 | 0 | 30.0% | 42.0% | 25.0% | 0 | 0 | 1.10× | 50.0% |" in section
+    # Oldest shown (2024-09-30) to newest: gross margin +2 points, EBIT margin +5, conversion 0.90 -> 1.10.
+    assert ("Over the span: gross margin up 2.0 points, EBIT margin up 5.0 points, "
+            "cash conversion 0.90× → 1.10×.") in section
+    flat = vm.render_report("X", "2026-10-23", vm.company_metrics(years, 20, 2000, 100))
+    assert "## Last eight quarters" in flat and "No quarterly statements with revenue." in flat
+
+
+@pytest.mark.unit
+def test_quarter_trend_prose_calls_small_moves_flat_and_drops_missing_parts():
+    rows = [{"period_end": "2026-06-30", "gross_margin": 0.403, "ebit_margin": 0.18, "cash_conversion": None},
+            {"period_end": "2025-06-30", "gross_margin": 0.400, "ebit_margin": 0.20, "cash_conversion": 1.0}]
+    assert vm.quarter_trend_prose(rows) == ("Over the span: gross margin flat 0.3 points, "
+                                            "EBIT margin down 2.0 points.")
+    assert vm.quarter_trend_prose(rows[:1]) is None
+
+
+# --- consensus ------------------------------------------------------------------
+
+CONSENSUS = {"revenue_growth_next": 0.062, "revenue_growth_following": 0.051, "eps_growth_next": 0.084,
+             "analysts": 12, "target_mean": 61.5, "target_median": 60.0, "target_high": 75.0,
+             "target_low": 48.0}
+
+
+@pytest.mark.unit
+def test_render_report_shows_the_consensus_section_after_the_record():
+    years = [_year(fiscal_year_end=f"{2025 - i}-12-31", revenue=1000 * 1.1 ** (4 - i)) for i in range(5)]
+    m = vm.company_metrics(years, 20, 2000, 100, consensus=CONSENSUS)
+    assert m["consensus"] == CONSENSUS
+    text = vm.render_report("X", "2026-10-23", m)
+    assert text.index("## Record and inflection") < text.index("## Consensus (Yahoo estimates)")
+    for line in ("- Consensus revenue growth next year 6.2%", "- Consensus revenue growth following year 5.1%",
+                 "- Consensus EPS growth next year 8.4%", "- Consensus analysts 12",
+                 "- Consensus price target median 60.00"):
+        assert line in text
+    implied, earned = m["valuation"]["implied_growth"], m["record"]["earned_growth"]
+    assert (f"Consensus sees 6.2% revenue growth next year against {implied:.1%} implied by the price "
+            f"and {earned:.1%} earned growth.") in text
+
+
+@pytest.mark.unit
+def test_render_report_consensus_partial_and_empty():
+    years = [_year(fiscal_year_end=f"{2025 - i}-12-31") for i in range(2)]
+    partial = vm.render_report("X", "d", vm.company_metrics(
+        years, None, None, 100, consensus={"revenue_growth_next": 0.05, "analysts": 3}))
+    assert "- Consensus revenue growth next year 5.0%" in partial
+    assert "- Consensus EPS growth next year n/a" in partial and "- Consensus price target median n/a" in partial
+    assert "Consensus sees 5.0% revenue growth next year." in partial      # no implied or earned growth
+    empty = vm.render_report("X", "d", vm.company_metrics(years, 20, 2000, 100, consensus={}))
+    assert "- Consensus revenue growth next year n/a" in empty and "- Consensus analysts n/a" in empty
+    assert "Consensus sees" not in empty
+    assert "## Consensus" not in vm.render_report("X", "d", vm.company_metrics(years, 20, 2000, 100))
+
+
+def _estimates(growth_0y=0.062, growth_1y=0.051, analysts=12):
+    idx = ["0q", "+1q", "0y", "+1y"]
+    return pd.DataFrame({"avg": [1.0] * 4, "low": [0.9] * 4, "high": [1.1] * 4,
+                         "numberOfAnalysts": [10, 10, analysts, 9], "growth": [0.01, 0.02, growth_0y, growth_1y]},
+                        index=idx)
+
+
+@pytest.mark.unit
+def test_consensus_reads_yahoo_estimates_and_targets(monkeypatch):
+    from tradingagents.dataflows.vendors.yahoo import consensus as cons
+
+    class Full:
+        revenue_estimate = _estimates()
+        earnings_estimate = _estimates(growth_0y=0.084, growth_1y=0.07, analysts=14)
+        analyst_price_targets = {"current": 50.0, "high": 75.0, "low": 48.0, "mean": 61.5, "median": 60.0}
+
+    monkeypatch.setattr(cons.yf, "Ticker", lambda *a: Full())
+    assert cons.consensus("HRB") == pytest.approx(CONSENSUS)
+
+    class Partial:
+        revenue_estimate = pd.DataFrame()
+        analyst_price_targets = {"median": 60.0, "mean": float("nan")}
+
+        @property
+        def earnings_estimate(self):
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(cons.yf, "Ticker", lambda *a: Partial())
+    got = cons.consensus("HRB")
+    assert got["target_median"] == 60.0 and got["target_mean"] is None
+    assert got["revenue_growth_next"] is None and got["eps_growth_next"] is None and got["analysts"] is None
+
+    class Empty:
+        revenue_estimate = earnings_estimate = None
+        analyst_price_targets = {}
+
+    monkeypatch.setattr(cons.yf, "Ticker", lambda *a: Empty())
+    assert cons.consensus("HRB") == {}
+    monkeypatch.setattr(cons.yf, "Ticker", lambda *a: (_ for _ in ()).throw(RuntimeError("down")))
+    assert cons.consensus("HRB") == {}
+
+
+@pytest.mark.unit
+def test_vendor_puts_consensus_on_the_worksheet_with_targets_in_pence(monkeypatch):
+    fake = _gbp_ticker()
+    monkeypatch.setattr(yahoo_vm.yf, "Ticker", lambda *a: fake())
+    monkeypatch.setattr(yahoo_vm, "is_historical", lambda d: False)
+    monkeypatch.setattr(yahoo_vm, "current_discount_rate", lambda: {"rate": 0.09, "treasury_10y": None})
+    monkeypatch.setattr(yahoo_vm, "usd_rate", lambda c: None)
+    monkeypatch.setattr(yahoo_vm, "consensus", lambda s: {**CONSENSUS, "target_median": 950.0})
+    report = yahoo_vm.get_value_metrics("DNLM.L", "2026-10-23")
+    assert "- Consensus price target median 950.00" in report       # pence in, pence out
+    assert "- Consensus revenue growth next year 6.2%" in report
+
+
+@pytest.mark.unit
+def test_vendor_leaves_out_consensus_targets_when_currencies_differ(monkeypatch):
+    col = [pd.Timestamp("2025-12-31"), pd.Timestamp("2024-12-31")]
+
+    def frame(rows):
+        return pd.DataFrame(dict.fromkeys(col, rows))
+
+    class FakeTicker:
+        info = {"currency": "USD", "financialCurrency": "TWD", "currentPrice": 150.0,
+                "marketCap": 7e11, "sharesOutstanding": 5e9}
+        income_stmt = frame({"Total Revenue": 3e12, "EBIT": 1.4e12, "Net Income": 1.1e12, "Gross Profit": 1.7e12})
+        balance_sheet = frame({"Total Assets": 6e12, "Current Assets": 3e12, "Current Liabilities": 1e12,
+                               "Stockholders Equity": 4e12})
+        cashflow = frame({"Free Cash Flow": 9e11, "Operating Cash Flow": 1.8e12})
+
+    monkeypatch.setattr(yahoo_vm.yf, "Ticker", lambda *a: FakeTicker())
+    monkeypatch.setattr(yahoo_vm, "is_historical", lambda d: False)
+    monkeypatch.setattr(yahoo_vm, "consensus", lambda s: dict(CONSENSUS))
+    report = yahoo_vm.get_value_metrics("TSM", "2026-10-11")
+    assert "- Consensus price target median n/a" in report
+    assert "- Consensus revenue growth next year 6.2%" in report

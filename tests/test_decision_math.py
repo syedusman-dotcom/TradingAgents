@@ -586,3 +586,56 @@ def test_a_free_text_lane_line_parses():
     assert parse.lane_evidence(text) == ["ROIC ≥ 20% 5/5 years", "sustainable growth 14%"]
     assert parse.lane("**Lane**: inflection lane: verified: backlog") == "inflection"
     assert parse.lane_evidence("**Lane**: inflection lane: verified: backlog") == ["verified: backlog"]
+
+
+# --- consensus ------------------------------------------------------------------
+
+CONSENSUS_SECTION = (
+    "## Consensus (Yahoo estimates)\n\n"
+    "- Consensus revenue growth next year 6.2%\n- Consensus revenue growth following year -1.5%\n"
+    "- Consensus EPS growth next year n/a\n- Consensus analysts 12\n- Consensus price target median 60.00\n\n"
+    "Consensus sees 6.2% revenue growth next year against 3.0% implied by the price.")
+EMPTY_CONSENSUS = ("## Consensus (Yahoo estimates)\n\n- Consensus revenue growth next year n/a\n"
+                   "- Consensus revenue growth following year n/a\n- Consensus EPS growth next year n/a\n"
+                   "- Consensus analysts n/a\n- Consensus price target median n/a")
+
+
+@pytest.mark.unit
+def test_worksheet_consensus_reads_the_five_labels():
+    from tradingagents.agents.decision_math import consensus_excerpt, worksheet_consensus
+
+    got = worksheet_consensus(CONSENSUS_SECTION)
+    assert got == {"revenue_growth_next": pytest.approx(0.062), "revenue_growth_following": pytest.approx(-0.015),
+                   "eps_growth_next": None, "analysts": 12, "target_median": 60.0}
+    assert isinstance(got["analysts"], int)
+    assert set(worksheet_consensus(EMPTY_CONSENSUS).values()) == {None}
+    report = "prose\n## Record and inflection\n- Revenue CAGR 5.0%\n\n" + CONSENSUS_SECTION + "\n## Next\nx"
+    assert consensus_excerpt(report) == CONSENSUS_SECTION
+    assert consensus_excerpt("no section") == ""
+
+
+@pytest.mark.unit
+def test_decision_checks_ask_for_a_consensus_view_only_when_the_worksheet_has_estimates():
+    problem = ("The worksheet shows consensus estimates; say where your thesis differs from them and why "
+               "(Consensus field)")
+    assert problem in decision_checks(_good_decision(), 80.33, 50.0, CONSENSUS_SECTION)
+    assert decision_checks(_decision(consensus_view="We sit below the 60 median: margins revert."),
+                           80.33, 50.0, CONSENSUS_SECTION) == []
+    assert decision_checks(_good_decision(), 80.33, 50.0, EMPTY_CONSENSUS) == []
+    assert decision_checks(_good_decision(), 80.33, 50.0, "") == []
+
+
+@pytest.mark.unit
+def test_consensus_view_renders_after_the_premortem_and_parses_back():
+    text = render_pm_decision(_decision(consensus_view="Below consensus: we doubt the 6% growth."))
+    assert text.endswith("**Pre-mortem Answer**: Margins revert, but the bear case covers it.\n\n"
+                         "**Consensus**: Below consensus: we doubt the 6% growth.")
+    assert parse.consensus_view(text) == "Below consensus: we doubt the 6% growth."
+    blank = render_pm_decision(_good_decision())
+    assert blank.endswith("**Consensus**: not provided") and parse.consensus_view(blank) == ""
+    assert parse.consensus_view(blank + "\n\n**Unresolved Checks**:\n- x") == ""
+    assert parse.consensus_view("**Rating**: Hold") == ""
+    # The first five sections are unchanged.
+    assert blank.startswith("**Rating**: Overweight\n\n**Executive Summary**: Buy below 46.\n\n"
+                            "**Investment Thesis**: Durable franchise. Margin of safety: 18%\n\n"
+                            "**Price Target**: 56.0\n\n**Time Horizon**: 1-3 years\n\n**Checklist**:")

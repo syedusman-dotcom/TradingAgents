@@ -857,6 +857,55 @@ def inflection(years: list[dict], quarters: list[dict]) -> dict:
     }
 
 
+TREND_QUARTERS = 8
+TREND_FLAT_POINTS = 0.005     # a margin move under half a point reads as flat
+
+
+def quarter_trend(quarters: list[dict] | None) -> list[dict]:
+    """The latest eight quarters that report revenue (newest first): revenue and its growth on the
+    quarter that ended about a year before (searched over every quarter given, shown or not),
+    gross and EBIT margins, operating and free cash flow, cash conversion (operating cash flow /
+    net income; None at a loss) and receivables / revenue. Missing inputs give None."""
+    avail = [q for q in (quarters or []) if num(q.get("revenue")) is not None]
+    rows = []
+    for i, q in enumerate(avail[:TREND_QUARTERS]):
+        before = _year_before(avail, i)
+        net_income = num(q.get("net_income"))
+        rows.append({
+            "period_end": q.get("fiscal_year_end"),
+            "revenue": num(q.get("revenue")),
+            "revenue_yoy": _growth(q.get("revenue"), before.get("revenue")) if before else None,
+            "gross_margin": div(q.get("gross_profit"), q.get("revenue")),
+            "ebit_margin": div(q.get("ebit"), q.get("revenue")),
+            "operating_cash_flow": num(q.get("operating_cash_flow")),
+            "free_cash_flow": num(q.get("free_cash_flow")),
+            "cash_conversion": div(q.get("operating_cash_flow"), net_income)
+            if net_income is not None and net_income > 0 else None,
+            "receivables_to_revenue": div(q.get("receivables"), q.get("revenue")),
+        })
+    return rows
+
+
+def quarter_trend_prose(rows: list[dict]) -> str | None:
+    """How the margins and cash conversion moved from the oldest row shown to the newest; None
+    with fewer than two rows or nothing to compare."""
+    if len(rows) < 2:
+        return None
+    new, old = rows[0], rows[-1]
+    parts = []
+    for key, name in (("gross_margin", "gross margin"), ("ebit_margin", "EBIT margin")):
+        a, b = new.get(key), old.get(key)
+        if a is None or b is None:
+            continue
+        change = a - b
+        word = "flat" if abs(change) < TREND_FLAT_POINTS else "up" if change > 0 else "down"
+        parts.append(f"{name} {word} {abs(change) * 100:.1f} points")
+    a, b = new.get("cash_conversion"), old.get("cash_conversion")
+    if a is not None and b is not None:
+        parts.append(f"cash conversion {b:.2f}× → {a:.2f}×")
+    return "Over the span: " + ", ".join(parts) + "." if parts else None
+
+
 def _two_stage(earnings: float, g3: float, rate: float, decay_to: float) -> float:
     """Value today of ``earnings`` growing at ``g3`` for three years, then a growing perpetuity
     at ``decay_to``: sum of E(1+g)^t/(1+r)^t for t = 1..3, plus E(1+g)^3 x (1+d)/(r-d) / (1+r)^3."""
@@ -945,10 +994,12 @@ def company_metrics(years: list[dict], price, market_cap, shares,
                     rate: float = DISCOUNT_RATE, treasury_10y: float | None = None,
                     avg_prices: dict | None = None, revenue_usd: float | None = None,
                     quarters: list[dict] | None = None,
-                    revenue_history: dict[str, float] | None = None) -> dict:
+                    revenue_history: dict[str, float] | None = None,
+                    consensus: dict | None = None) -> dict:
     """Everything the fundamentals analyst needs, computed once from the statements
-    (``quarters``: the quarterly statements, newest first, for the TTM and inflection figures;
-    ``revenue_history``: fiscal year -> revenue from a longer record, for the revenue CAGR)."""
+    (``quarters``: the quarterly statements, newest first, for the TTM, inflection and trend
+    figures; ``revenue_history``: fiscal year -> revenue from a longer record, for the revenue
+    CAGR; ``consensus``: the analysts' estimates, shown as given, None when not looked up)."""
     cur = years[0]
     net_debt = (num(cur.get("total_debt")) or 0.0) - (num(cur.get("cash")) or 0.0)
     ev = enterprise_value(market_cap, cur.get("total_debt"), cur.get("cash"))
@@ -996,6 +1047,8 @@ def company_metrics(years: list[dict], price, market_cap, shares,
     return {
         "record": rec,
         "inflection": inf,
+        "quarter_trend": quarter_trend(quarters),
+        "consensus": consensus,
         "run_rate": run_rate,
         "run_rate_note": run_rate_note,
         "price": num(price),
@@ -1084,6 +1137,7 @@ def render_report(symbol: str, as_of: str, m: dict, currency: str | None = None)
             f"{_money(y['buybacks'])} | {_money(y['dividends'])} | {_x(y['debt_to_equity'])} | "
             f"{_x(y['interest_coverage'])} |"
         )
+    lines += _quarter_section(m)
     ca = m.get("capital_allocation")
     if ca and ca["per_year"]:
         t = ca["totals"]
@@ -1192,6 +1246,7 @@ def render_report(symbol: str, as_of: str, m: dict, currency: str | None = None)
     else:
         lines.append("Formula valuation: not computable (no price, or averaged FCF and EBIT are not positive).")
     lines += _record_section(m)
+    lines += _consensus_section(m)
     return "\n".join(lines)
 
 
@@ -1276,4 +1331,52 @@ def _record_section(m: dict) -> list[str]:
         lines.append(f"Run-rate: not shown — {m['run_rate_note']}.")
     else:
         lines.append("Run-rate: not computable (no price, or run-rate owner earnings and EBIT are not positive).")
+    return lines
+
+
+def _quarter_section(m: dict) -> list[str]:
+    """The eight-quarter trend table and its one-line summary."""
+    rows = m.get("quarter_trend") or []
+    lines = ["", "## Last eight quarters (newest first)", ""]
+    if not rows:
+        return lines + ["No quarterly statements with revenue.", ""]
+    lines += ["| Quarter end | Revenue | Revenue y/y | Gross margin | EBIT margin | Operating cash flow "
+              "| FCF | Cash conversion | Receivables / revenue |",
+              "|---|---|---|---|---|---|---|---|---|"]
+    for r in rows:
+        lines.append(
+            f"| {r['period_end']} | {_money(r['revenue'])} | {_pct(r['revenue_yoy'])} | "
+            f"{_pct(r['gross_margin'])} | {_pct(r['ebit_margin'])} | {_money(r['operating_cash_flow'])} | "
+            f"{_money(r['free_cash_flow'])} | {_x2(r['cash_conversion'], '×')} | "
+            f"{_pct(r['receivables_to_revenue'])} |")
+    prose = quarter_trend_prose(rows)
+    return lines + ([""] + [prose] if prose else []) + [""]
+
+
+def _consensus_section(m: dict) -> list[str]:
+    """The analysts' estimates as ``- Label value`` lines (one number each or n/a, which the
+    decision checks parse), then one line setting the growth they expect against the price's
+    implied growth and the record's earned growth. Absent when consensus was not looked up."""
+    c = m.get("consensus")
+    if c is None:
+        return []
+    analysts = num(c.get("analysts"))
+    labelled = [
+        ("Consensus revenue growth next year", c.get("revenue_growth_next"), ".1%"),
+        ("Consensus revenue growth following year", c.get("revenue_growth_following"), ".1%"),
+        ("Consensus EPS growth next year", c.get("eps_growth_next"), ".1%"),
+        ("Consensus analysts", int(analysts) if analysts is not None else None, "d"),
+        ("Consensus price target median", c.get("target_median"), ".2f"),
+    ]
+    lines = ["", "## Consensus (Yahoo estimates)", ""]
+    lines += [f"- {label} {_fmt(num(value) if spec != 'd' else value, spec)}" for label, value, spec in labelled]
+    growth = num(c.get("revenue_growth_next"))
+    if growth is not None:
+        implied = num((m.get("valuation") or {}).get("implied_growth"))
+        earned = num((m.get("record") or {}).get("earned_growth"))
+        against = [f"{implied:.1%} implied by the price" if implied is not None else None,
+                   f"{earned:.1%} earned growth" if earned is not None else None]
+        against = [a for a in against if a]
+        lines += ["", f"Consensus sees {growth:.1%} revenue growth next year"
+                  + (" against " + " and ".join(against) if against else "") + "."]
     return lines

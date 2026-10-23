@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from tradingagents.dataflows.vendors.yahoo.consensus import consensus
 from tradingagents.dataflows.vendors.yahoo.fundamentals import next_earnings_date
 from value_pipeline import (
     benchmark,
@@ -226,6 +227,16 @@ def _scenarios_at(decision: str, price: float | None) -> dict | None:
         return {"weighted_mos": None, **parsed, "price_basis": "decision text"}
     legs = Scenarios(**{leg: Scenario(**parsed[leg]) for leg in ("bear", "base", "bull")})
     return {**parsed, **scenario_stats(legs, price), "price_basis": "review price"}
+
+
+def _consensus_figures(ticker: str) -> tuple[float | None, float | None]:
+    """Yahoo's consensus revenue growth next year and median price target (quote currency) for the
+    committee; (None, None) when Yahoo has none or fails."""
+    try:
+        c = consensus(ticker) or {}
+    except Exception:  # noqa: BLE001 - the review stands without it
+        return None, None
+    return _float(c.get("revenue_growth_next")), _float(c.get("target_median"))
 
 
 def _screen_rows(paths: Paths) -> dict[str, dict]:
@@ -488,6 +499,7 @@ def _run(paths: Paths, cfg: dict, *, yes: bool, dry_run: bool, today: str | None
             r.earnings_date = None
 
     scenarios = {r.ticker: _scenarios_at(r.decision, prices.get(r.ticker)) for r in results}
+    consensus_of = {r.ticker: _consensus_figures(r.ticker) for r in results}
     decisions = []
     for r in results:
         held = pf.position(r.ticker)
@@ -546,7 +558,9 @@ def _run(paths: Paths, cfg: dict, *, yes: bool, dry_run: bool, today: str | None
          "checklist": parse.checklist(r.decision), "scenarios": scenarios[r.ticker],
          "value_bridge": parse.value_bridge(r.decision), "red_flags": parse.red_flags(r.decision),
          "lane": parse.lane(r.decision), "lane_evidence": parse.lane_evidence(r.decision),
-         "lane_hint": _hint(screen_row.get(r.ticker))}
+         "lane_hint": _hint(screen_row.get(r.ticker)),
+         "consensus_view": parse.consensus_view(r.decision),
+         "consensus_growth": consensus_of[r.ticker][0], "consensus_target": consensus_of[r.ticker][1]}
         for r in results
     ]
 

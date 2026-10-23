@@ -1762,3 +1762,30 @@ def test_the_screen_hints_a_compounder_on_a_four_year_record():
            "revenue_cagr_years": 3, "fcf_cagr": 0.09, "fcf_cagr_years": 3}
     assert screener.lane_hints(row) == ["compounder"]
     assert screener.lane_hints({**row, "revenue_cagr_years": 2}) == []
+
+
+@pytest.mark.unit
+def test_results_json_carries_the_consensus_view_and_estimates(tmp_path, monkeypatch):
+    from tests.test_decision_math import _decision
+    from value_pipeline import review
+
+    calls = []
+    monkeypatch.setattr(review, "consensus", lambda t: calls.append(t) or {
+        "revenue_growth_next": 0.06, "target_median": 60.0, "target_mean": 61.0})
+    row, _ = _review_one(tmp_path, monkeypatch, _decision(consensus_view="Below consensus: margins revert."), 50.0)
+    assert row["consensus_view"] == "Below consensus: margins revert."
+    assert row["consensus_growth"] == 0.06 and row["consensus_target"] == 60.0
+    assert calls == ["HRB"]
+
+
+@pytest.mark.unit
+def test_results_json_consensus_fails_open(tmp_path, monkeypatch):
+    from tests.test_decision_math import _good_decision
+    from value_pipeline import review
+
+    def down(t):
+        raise RuntimeError("Yahoo down")
+
+    monkeypatch.setattr(review, "consensus", down)
+    row, _ = _review_one(tmp_path, monkeypatch, _good_decision(), 50.0)
+    assert row["consensus_view"] == "" and row["consensus_growth"] is None and row["consensus_target"] is None

@@ -924,3 +924,52 @@ def test_fundamentals_analyst_quotes_the_record_and_appends_the_tools_record(mon
                         lambda prompt, llm, tools, msgs: (AIMessage(content=exact), exact))
     report = fundamentals_analyst.create_fundamentals_analyst(MagicMock())(state)["fundamentals_report"]
     assert report == exact                                      # already the tool's: not repeated
+
+
+@pytest.mark.unit
+def test_pm_reads_the_consensus_section_and_asks_for_a_consensus_view():
+    from tests.test_decision_math import CONSENSUS_SECTION, _decision
+
+    prompts = []
+    llm, structured = _sequenced_pm_llm(prompts, [_decision(), _decision(consensus_view="Below: margins revert.")])
+    report = ("## Valuation worksheet (per share)\n- Price today 50.00\n- **Range 60.00 to 95.00, base (3% growth) "
+              "80.33; margin of safety at base 30%**\n\n## Record and inflection\n\n- Revenue CAGR 5.0%\n\n"
+              + CONSENSUS_SECTION)
+    result = create_portfolio_manager(llm)(state={**_make_pm_state(), "fundamentals_report": report})
+    assert "- Consensus price target median 60.00" in prompts[0]
+    assert ("State where your value differs from consensus and why; a value far below consensus with no "
+            "stated reason is a problem.") in prompts[0]
+    assert "**Consensus**:" in prompts[0]
+    assert structured.invoke.call_count == 2
+    assert "say where your thesis differs from them and why (Consensus field)" in prompts[1]
+    assert result["final_trade_decision"].endswith("**Consensus**: Below: margins revert.")
+
+
+@pytest.mark.unit
+def test_fundamentals_analyst_uses_the_quarter_table_for_the_trend():
+    from tradingagents.agents.analysts import fundamentals_analyst
+
+    source = " ".join(inspect.getsource(fundamentals_analyst).replace('"', " ").split())
+    assert "Use the eight-quarter table for the trend; annual figures for the level." in source
+
+
+@pytest.mark.unit
+def test_fundamentals_report_carries_the_tools_consensus_section(monkeypatch):
+    from langchain_core.messages import AIMessage, ToolMessage
+
+    from tests.test_decision_math import CONSENSUS_SECTION
+    from tradingagents.agents.analysts import fundamentals_analyst
+    from tradingagents.agents.decision_math import consensus_excerpt, record_excerpt
+
+    tool_text = ("# Verified value metrics\n## Valuation worksheet (per share)\n\n- Price today 50.00\n\n"
+                 "## Record and inflection\n\n- Revenue CAGR 5.0%\n\n" + CONSENSUS_SECTION)
+    messages = [AIMessage(content="", tool_calls=[{"name": "get_value_metrics", "args": {}, "id": "1"}]),
+                ToolMessage(content=tool_text, name="get_value_metrics", tool_call_id="1")]
+    prose = "## 3. Is it cheap? Yes"
+    monkeypatch.setattr(fundamentals_analyst, "take_turn",
+                        lambda prompt, llm, tools, msgs: (AIMessage(content=prose), prose))
+    monkeypatch.setattr(fundamentals_analyst, "get_instrument_context_from_state", lambda s: "")
+    state = {"trade_date": "2026-10-23", "company_of_interest": "HRB", "messages": messages}
+    report = fundamentals_analyst.create_fundamentals_analyst(MagicMock())(state)["fundamentals_report"]
+    assert consensus_excerpt(report) == CONSENSUS_SECTION
+    assert record_excerpt(report) == "## Record and inflection\n\n- Revenue CAGR 5.0%"

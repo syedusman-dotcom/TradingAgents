@@ -76,7 +76,14 @@ def decision_checks(decision: PortfolioDecision, formula_value: float | None,
             problems += _compounder_problems(decision, formula_value, price, worksheet)
         elif decision.lane == "inflection":
             problems += _inflection_problems(decision, price, worksheet)
+    if (any(v is not None for v in worksheet_consensus(worksheet).values())
+            and not decision.consensus_view.strip()):
+        problems.append(CONSENSUS_PROBLEM)
     return problems
+
+
+CONSENSUS_PROBLEM = ("The worksheet shows consensus estimates; say where your thesis differs from them "
+                     "and why (Consensus field)")
 
 
 # --- the lanes' bars ------------------------------------------------------------
@@ -279,6 +286,12 @@ def worksheet_excerpt(report: str) -> str:
     return _section_excerpt(report, "## Valuation worksheet")
 
 
+def consensus_excerpt(report: str) -> str:
+    """The report's ``## Consensus (Yahoo estimates)`` section; the last one, as the tool's is
+    appended after the analyst's prose. Empty when the report has none."""
+    return _section_excerpt(report, "## Consensus (Yahoo estimates)", last=True)
+
+
 def record_excerpt(report: str) -> str:
     """The report's ``## Record and inflection`` section; the last one, since the tool's is
     appended after the analyst's prose. Empty when the report has none."""
@@ -311,7 +324,14 @@ _INFLECTION_LABELS = {
     "run_rate_decay": "Run-rate decay",
     "implied_g3": "Implied 3-year growth",
 }
-_COUNTS = {"roic_years_above_20", "roic_years_counted", "revenue_cagr_years", "roic_gw_years_above_15",
+_CONSENSUS_LABELS = {
+    "revenue_growth_next": "Consensus revenue growth next year",
+    "revenue_growth_following": "Consensus revenue growth following year",
+    "eps_growth_next": "Consensus EPS growth next year",
+    "analysts": "Consensus analysts",
+    "target_median": "Consensus price target median",
+}
+_COUNTS = {"analysts", "roic_years_above_20", "roic_years_counted", "revenue_cagr_years", "roic_gw_years_above_15",
            "fcf_cagr_years"}
 _IMPLIED = re.compile(r"Reverse DCF: today's price assumes\s*([+\-−]?\d+(?:\.\d+)?)%")
 
@@ -337,6 +357,12 @@ def worksheet_record(excerpt: str) -> dict:
     match = _IMPLIED.search(excerpt)
     out["implied_growth"] = float(match.group(1).replace("−", "-")) / 100 if match else None
     return out
+
+
+def worksheet_consensus(excerpt: str) -> dict:
+    """The consensus figures from the Consensus section's lines (growth as fractions, the analyst
+    count, the median price target); None where n/a or absent."""
+    return _read(excerpt, _CONSENSUS_LABELS)
 
 
 def worksheet_inflection(excerpt: str) -> dict:

@@ -3,7 +3,7 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 from tradingagents.agents.analysts.turn import take_turn
 from tradingagents.agents.context import get_instrument_context_from_state, get_language_instruction
-from tradingagents.agents.decision_math import record_excerpt, worksheet_excerpt
+from tradingagents.agents.decision_math import consensus_excerpt, record_excerpt, worksheet_excerpt
 from tradingagents.agents.tools import (
     get_annual_report,
     get_balance_sheet,
@@ -61,6 +61,7 @@ def create_fundamentals_analyst(llm):
             " from it and state each adjustment. Quote the worksheet's expected-return line and the sensitivity grid."
             " Quote the Record and inflection lines and the run-rate value; the run-rate value applies to"
             " inflection candidates only; otherwise value on the worksheet base."
+            " Use the eight-quarter table for the trend; annual figures for the level."
             " If it is not available for this date, compute what you can from the statements and say so."
             " Then call `get_income_statement`, `get_balance_sheet` and `get_cashflow` with freq='annual'"
             " to explain one-offs, plus freq='quarterly' for the latest trend, `get_fundamentals` for the profile,"
@@ -125,10 +126,14 @@ def create_fundamentals_analyst(llm):
             # appended (read back as the report's last) unless the report already ends with it.
             metrics = tool_metrics(state["messages"], state["company_of_interest"], current_date)
             sheet, record = worksheet_excerpt(metrics), record_excerpt(metrics)
+            consensus = consensus_excerpt(metrics)
             if sheet and not worksheet_excerpt(report):
                 report = f"{report}\n\n{sheet}"
             if record and record_excerpt(report) != record:
                 report = f"{report}\n\n{record}"
+            # Likewise the tool's consensus lines, which the Portfolio Manager's check reads.
+            if consensus and consensus_excerpt(report) != consensus:
+                report = f"{report}\n\n{consensus}"
 
         return {
             "messages": [result],

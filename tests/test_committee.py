@@ -312,3 +312,17 @@ def test_committee_payload_carries_lanes():
     assert "inflection at 20%" in prompt and "cut inflection positions first" in prompt
     caps = committee_prompt({**SIZING, "lane_caps": {"compounder": 0.25, "inflection": 0.15}})
     assert "compounder positions are capped at 25% and inflection at 15%" in caps
+
+
+@pytest.mark.unit
+def test_committee_payload_carries_the_consensus_growth_and_target():
+    from value_pipeline import portfolio as pfmod
+    from value_pipeline.committee import build_payload
+
+    decisions = [Decision(ticker="HRB", rating="Hold", price=50.0), Decision(ticker="KO", rating="Hold", price=60.0)]
+    results = [{"ticker": "HRB", "consensus_growth": 0.06, "consensus_target": 60.0}, {"ticker": "KO"}]
+    pf = pfmod.Portfolio(cash=100.0)
+    _, summary = plan(decisions, 100.0, SIZING)
+    stocks = {s["ticker"]: s for s in build_payload(decisions, results, pf, summary, SIZING)["stocks"]}
+    assert stocks["HRB"]["consensus_growth"] == 0.06 and stocks["HRB"]["consensus_target"] == 60.0
+    assert stocks["KO"]["consensus_growth"] is None and stocks["KO"]["consensus_target"] is None

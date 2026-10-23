@@ -98,6 +98,7 @@ def build_payload(decisions: list[Decision], results: list[dict], portfolio, sum
             "red_flags": row.get("red_flags") or [], "kill_criteria": list(d.kill_criteria),
             "thesis": row.get("thesis"),
             "lane": d.lane, "lane_evidence": row.get("lane_evidence") or [],
+            "consensus_growth": row.get("consensus_growth"), "consensus_target": row.get("consensus_target"),
         })
     others = [{"ticker": p.ticker, "shares": p.shares, "avg_price": p.avg_price}
               for p in portfolio.positions if p.ticker not in reviewed]

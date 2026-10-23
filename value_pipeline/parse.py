@@ -65,6 +65,12 @@ def margin_of_safety(decision: str) -> float | None:
     return None
 
 
+def consensus_view(decision: str) -> str:
+    """Where the decision stands against consensus; "" when absent or 'not provided'."""
+    text = section(decision, "Consensus").strip()
+    return "" if text.lower() == "not provided" else text
+
+
 def thesis_summary(decision: str, limit: int = 300) -> str:
     text = " ".join(section(decision, "Investment Thesis").split())
     return text if len(text) <= limit else text[: limit - 1].rsplit(" ", 1)[0] + "…"

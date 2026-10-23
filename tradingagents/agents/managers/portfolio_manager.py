@@ -16,6 +16,7 @@ from tradingagents.agents.context import (
     get_portfolio_context_from_state,
 )
 from tradingagents.agents.decision_math import (
+    consensus_excerpt,
     decision_checks,
     record_excerpt,
     worksheet_base,
@@ -60,13 +61,16 @@ def create_portfolio_manager(llm):
         report = state.get("fundamentals_report", "")
         excerpt = worksheet_excerpt(report)
         record = record_excerpt(report)
+        consensus = consensus_excerpt(report)
         base = worksheet_base(excerpt)
         price = worksheet_price(excerpt)
-        # The lane checks read the worksheet's reverse DCF and its Record and inflection lines.
-        sheet = "\n\n".join(part for part in (excerpt, record) if part)
+        # The lane checks read the worksheet's reverse DCF and its Record and inflection lines;
+        # the consensus check, its Consensus lines.
+        sheet = "\n\n".join(part for part in (excerpt, record, consensus) if part)
         worksheet_block = (
             f"**Valuation worksheet (formula value):**\n{excerpt}\n" if excerpt else ""
-        ) + (f"**Record and inflection (the lanes' numbers):**\n{record}\n" if record else "")
+        ) + (f"**Record and inflection (the lanes' numbers):**\n{record}\n" if record else "") + (
+            f"**Consensus (Yahoo estimates):**\n{consensus}\n" if consensus else "")
 
         prompt = f"""As the Portfolio Manager, synthesize the risk analysts' debate and deliver the final trading decision.
 
@@ -123,6 +127,7 @@ Write these sections, in this order, starting with the rating on its own line:
 - **Scenarios**: three lines "Bear 25%: 42.00 — basis", "Base 50%: …", "Bull 25%: …" with probabilities summing to 100%, then "Expected value: 56.00", which should equal the price target
 - **Value Bridge**: "Formula value 80.33" from the worksheet, one line per adjustment with its sign ("-12.00 reason"), then "= Price Target 56.00"; the adjustments must sum to the price target
 - **Pre-mortem Answer**: how the thesis survives the pre-mortem, or why you accept the risk
+- **Consensus**: State where your value differs from consensus and why; a value far below consensus with no stated reason is a problem.
 
 {NO_EXTERNAL_TOOLS}{get_language_instruction()}"""
 

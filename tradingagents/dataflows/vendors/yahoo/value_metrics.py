@@ -28,6 +28,7 @@ from tradingagents.dataflows.vendors.yahoo.common import (
     usd_rate,
     yf_retry,
 )
+from tradingagents.dataflows.vendors.yahoo.consensus import consensus
 
 # Each field's Yahoo row label, best first.
 ROWS: dict[str, tuple[str, ...]] = {
@@ -149,6 +150,23 @@ def fiscal_average_closes(history: pd.DataFrame, fiscal_year_ends: list[str]) ->
         return {}
 
 
+TARGET_KEYS = ("target_mean", "target_median", "target_high", "target_low")
+
+
+def _consensus_in(price, factor: float, symbol: str) -> dict:
+    """Yahoo's consensus for ``symbol`` with its price targets in the worksheet's unit: divided by
+    ``factor`` (a pence quote, scaled back by ``_to_quote_unit``), or left out when there is no
+    price (the quote's currency differs from the statements'). ``{}`` when it fails."""
+    try:
+        c = dict(consensus(symbol) or {})
+    except Exception:  # noqa: BLE001 - the worksheet stands without it
+        return {}
+    for key in TARGET_KEYS:
+        if key in c:
+            c[key] = c[key] / factor if price is not None and c[key] is not None else None
+    return c
+
+
 def _to_quote_unit(metrics: dict, factor: float) -> dict:
     """``metrics`` with every per-share price multiplied by ``factor`` (100 for pence); ratios,
     totals in money and share counts are left alone. Returns a copy."""
@@ -178,6 +196,10 @@ def _to_quote_unit(metrics: dict, factor: float) -> dict:
             r["buyback_price"], r["avg_price"] = scale(r["buyback_price"]), scale(r["avg_price"])
         ca["totals"]["avg_buyback_price"] = scale(ca["totals"].get("avg_buyback_price"))
         ca["price"] = scale(ca.get("price"))
+    c = m.get("consensus")
+    if c:
+        for key in TARGET_KEYS:
+            c[key] = scale(c.get(key))
     return m
 
 
@@ -241,7 +263,8 @@ def get_value_metrics(
     metrics = company_metrics(years, price, info.get("marketCap") if price else None, shares,
                               rate=rate["rate"], treasury_10y=rate["treasury_10y"], avg_prices=avg_prices,
                               revenue_usd=revenue_usd, quarters=quarters,
-                              revenue_history=sec_revenue_history(canonical, reported))
+                              revenue_history=sec_revenue_history(canonical, reported),
+                              consensus=_consensus_in(price, factor, canonical))
     if minor:
         metrics = _to_quote_unit(metrics, factor)
     return render_report(canonical, as_of_date or "today", metrics, currency=reported or quote) + note

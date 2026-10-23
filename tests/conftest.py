@@ -79,6 +79,8 @@ def _no_network(request, monkeypatch):
 def _no_earnings_lookup(monkeypatch):
     """review.run looks up each ticker's next earnings date; never from Yahoo in a test."""
     monkeypatch.setattr("value_pipeline.review.next_earnings_date", lambda t: None)
+    # Nor its analysts' consensus.
+    monkeypatch.setattr("value_pipeline.review.consensus", lambda t: {})
 
 
 @pytest.fixture(autouse=True)
