@@ -40,6 +40,8 @@ case "$mode" in
     if uv run python -m value_pipeline run-all --yes >> "$log" 2>&1; then
       # The free watch after the review keeps the weekly "New ideas" list and its sidecar current.
       uv run python -m value_pipeline watch --no-notify >> "$log" 2>&1 || true
+      # Refresh the cached closes so the Calibration page is current; never fails the run.
+      uv run python -m value_pipeline calibration >> "$log" 2>&1 || true
       notify "Value review done" "Open the website or value_pipeline/data/reports for ACTIONS.md"
     else
       notify "Value review failed" "Nothing to act on. See $log"

@@ -80,7 +80,7 @@ The first screen of a week fetches every ticker (roughly 20-40 minutes); later r
 ## The review
 
 1. Scores past decisions in the memory log (`settle_all_pending`).
-2. Runs TradingAgents (market, news, fundamentals analysts) on every holding, then on the names in `lanes.tickers`, the top `review.candidates` (default 5) screen picks you don't own, up to `lanes.compounder_candidates` (default 2) compounder-hinted names, up to `lanes.dislocation_candidates` (default 3) dislocation-hinted names, and up to `lanes.inflection_candidates` (default 3) inflection candidates, in that order: the theme scan's names (`run-all`) come first and inflection-hinted screen names (best expected return, not owned, not in FREEFALL) fill the remainder. Every run sees your holdings and cash.
+2. Runs TradingAgents (market, news, fundamentals analysts, with the filings tools for US filers) on every holding, then on the names in `lanes.tickers`, the top `review.candidates` (default 5) screen picks you don't own, up to `lanes.compounder_candidates` (default 2) compounder-hinted names, up to `lanes.dislocation_candidates` (default 3) dislocation-hinted names, and up to `lanes.inflection_candidates` (default 3) inflection candidates, in that order: the theme scan's names (`run-all`) come first and inflection-hinted screen names (best expected return, not owned, not in FREEFALL) fill the remainder. Every run sees your holdings and cash.
 3. Prints the number of runs and the estimated cost (`cost_per_run`, default $2) and asks before starting, unless you pass `--yes`. Candidates are dropped from the end to stay under `max_cost_per_review` (default $40); holdings are never dropped, and if they alone exceed the cap the review refuses to start. Only one review runs at a time: the scheduled run, the website and a terminal share a lock in the data folder, and a second start is refused rather than spending twice.
    With `TRADINGAGENTS_LLM_PROVIDER=claude_code` the agents run on your Claude plan through Claude Code, so the cap is a usage budget rather than a bill; the ACTIONS report then shows the measured tokens and what the run would have cost at API prices. The website runs reviews in its own process: restart it after changing `.env`. Inside Claude Code, `/review HRB` runs one stock and relays the agents as they finish.
 4. Saves each report to `data/reports/YYYY-MM-DD/TICKER/`. A failed run is retried once, then reported.
@@ -112,6 +112,22 @@ The intrinsic value comes from the Portfolio Manager's **Price Target** field (i
 The new-buys table shows both values (agents / formula). If the agents' value is more than 30% away from the formula's, the ticker is flagged so you can read their reasons before acting.
 
 `--dry-run` skips the agents, the memory log and the committee, uses made-up ratings and decisions (with every checklist section filled in, so the ACTIONS layout can be checked for free), writes to `data/reports/<date>-dry-run/`, and leaves `portfolio.json` untouched.
+
+## Verified sources and consensus
+
+Two filings tools give the fundamentals and news analysts the company's own words instead of a
+summary of them. `get_quarterly_report` fetches management's discussion and analysis (results of operations and
+liquidity) from the latest 10-Q on SEC EDGAR; `get_earnings_release` fetches the latest
+earnings release (exhibit 99.1 of the 8-K reporting results). They cover US filers only: for a European, UK, Canadian, Japanese or Korean
+name the tools say so and the analysts carry on with Yahoo's statements and news. The analysts
+are told to quote these over any other source and to name a number's source.
+
+The worksheet gains two blocks. `## Last eight quarters (newest first)` shows revenue, margins
+and cash flow quarter by quarter, so a turn in the trend is visible without opening the
+filings. `## Consensus (Yahoo estimates)` shows what analysts expect for growth and the price
+target. The Portfolio Manager answers it in a `**Consensus**:` line (agree, above or below
+the street, and why) and a soft check flags a decision that skips it. `results.json` keeps the
+view and the figures as `consensus_view`, `consensus_growth` and `consensus_target`.
 
 ## How a stock is judged
 
@@ -206,7 +222,10 @@ past 90 days yet`.
 
 The command fetches the closes it needs from Yahoo once and caches them in
 `data/cache/prices/`; the page reads only that cache, so it is cheap to reload and blank until
-the command (or a later run of it) has fetched the closes. A few decisions say little: read the
+the command (or a later run of it) has fetched the closes. The Saturday script runs the command
+after the watch, so the page stays current. It stays empty until a decision is a month old (the
+30-day close does not exist before then); `--horizon` picks which of the four horizons the
+scores and verdicts use. A few decisions say little: read the
 counts before the shares.
 
 ## Files
