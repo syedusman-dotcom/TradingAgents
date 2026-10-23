@@ -260,17 +260,26 @@ _INFLECTING = {"TTM EBIT vs 5y average": "2.40", "Revenue acceleration": "+21%",
 
 
 def _compounder(**overrides):
-    return _decision(**{"rating": PortfolioRating.BUY, "lane": "compounder",
+    """A compounder Buy at the worksheet's price 108 and base 100: upside/downside 4.0x."""
+    scen = Scenarios(bear=Scenario(value=90, probability=0.25, basis="multiple compresses"),
+                     base=Scenario(value=125, probability=0.5, basis="sustainable growth"),
+                     bull=Scenario(value=180, probability=0.25, basis="reinvestment holds"))
+    return _decision(**{"rating": PortfolioRating.BUY, "lane": "compounder", "scenarios": scen,
+                        "formula_value": 100.0, "price_target": 130.0,
+                        "value_bridge": [Adjustment(reason="growth the record earns", amount=30.0)],
                         "lane_evidence": ["ROIC ≥ 20% 5/5 years", "revenue 11.2%/yr 10y",
                                           "sustainable growth 14%", "implied growth 6%", "price 1.08× base"],
                         **overrides})
 
 
 def _inflection(**overrides):
-    scen = Scenarios(bear=Scenario(value=42, probability=0.30, basis="growth stops now"),
-                     base=Scenario(value=56, probability=0.45, basis="run-rate"),
-                     bull=Scenario(value=72.8, probability=0.25, basis="demand holds"))
+    """An inflection Buy at the worksheet's price 108: weighted margin of safety 26%, upside/downside 4.0x."""
+    scen = Scenarios(bear=Scenario(value=80, probability=0.30, basis="growth stops now"),
+                     base=Scenario(value=150, probability=0.45, basis="run-rate"),
+                     bull=Scenario(value=220, probability=0.25, basis="demand holds"))
     return _decision(**{"rating": PortfolioRating.BUY, "lane": "inflection", "scenarios": scen,
+                        "formula_value": 100.0, "price_target": 146.5,
+                        "value_bridge": [Adjustment(reason="run-rate growth", amount=46.5)],
                         "kill_criteria": ["ROIC below 12% two years running", "net debt above 3x EBIT",
                                           "Backlog falls two quarters running"],
                         "lane_evidence": ["TTM EBIT 2.40× the 5-year average",
@@ -337,6 +346,12 @@ def test_worksheet_record_reads_the_real_rendered_section():
     assert rec["roic_years_counted"] == 5 and rec["roic_years_above_20"] is not None
     assert set(rec) >= {"revenue_cagr", "revenue_cagr_years", "sustainable_growth"}
     assert set(inf) >= {"ttm_vs_5y_ebit", "revenue_acceleration", "incremental_roic"}
+    from tradingagents.agents.decision_math import worksheet_expected_return
+
+    er = worksheet_expected_return(worksheet_excerpt(report))
+    assert er is not None and er["yield"] + er["growth"] + er["reversion"] == pytest.approx(
+        m["expected_return"]["expected_return"], abs=0.002)
+    assert worksheet_expected_return(_SHEET) is None
 
 
 @pytest.mark.unit
@@ -384,9 +399,9 @@ def test_inflection_claim_needs_verified_demand_and_a_demand_kill_criterion():
     problems = decision_checks(unverified, None, None, worksheet=sheet)
     assert len(problems) == 2
     assert any("verified:" in p for p in problems) and any("backlog" in p for p in problems)
-    bear = Scenarios(bear=Scenario(value=42, probability=0.2, basis="b"),
-                     base=Scenario(value=56, probability=0.55, basis="m"),
-                     bull=Scenario(value=66.4, probability=0.25, basis="u"))
+    bear = Scenarios(bear=Scenario(value=80, probability=0.2, basis="b"),
+                     base=Scenario(value=150, probability=0.55, basis="m"),
+                     bull=Scenario(value=192, probability=0.25, basis="u"))
     problems = decision_checks(_inflection(scenarios=bear), None, None, worksheet=sheet)
     assert len(problems) == 1 and "30%" in problems[0]
 
@@ -404,3 +419,88 @@ def test_inflection_claim_without_the_inflection_numbers_is_sent_back():
 def test_lane_checks_skip_the_value_lane_and_a_sell():
     assert decision_checks(_good_decision(), None, None, worksheet="") == []
     assert decision_checks(_compounder(rating=PortfolioRating.SELL), None, None, worksheet="") == []
+
+
+def _scenarios(bear, base, bull, p=(0.25, 0.5, 0.25)):
+    return Scenarios(bear=Scenario(value=bear, probability=p[0], basis="b"),
+                     base=Scenario(value=base, probability=p[1], basis="m"),
+                     bull=Scenario(value=bull, probability=p[2], basis="u"))
+
+
+def _target(scen):
+    """The fields that keep the bridge and the expected value consistent with ``scen``."""
+    ev = scenario_stats(scen, None)["expected_value"]
+    return {"scenarios": scen, "price_target": ev,
+            "value_bridge": [Adjustment(reason="r", amount=round(ev - 100.0, 6))]}
+
+
+@pytest.mark.unit
+def test_a_compounder_buy_needs_an_upside_downside_of_one_and_a_half():
+    sheet = _SHEET + _record()                                  # price 108
+    thin = _scenarios(90, 125, 130)                             # (130-108)/(108-90) = 1.22x
+    problems = decision_checks(_compounder(**_target(thin)), None, None, worksheet=sheet)
+    assert problems == ["The compounder lane's Buy needs an upside/downside of at least 1.5× at today's "
+                        "price 108.00; the scenarios give 1.2×."]
+    assert decision_checks(_compounder(**_target(_scenarios(90, 125, 140))), None, None, worksheet=sheet) == []
+    below_bear = _scenarios(110, 125, 140)                      # price under the bear case: a pass
+    assert decision_checks(_compounder(**_target(below_bear)), None, None, worksheet=sheet) == []
+    above_bull = _scenarios(90, 100, 105)
+    assert len(decision_checks(_compounder(**_target(above_bull)), None, None, worksheet=sheet)) == 1
+    hold = _compounder(rating=PortfolioRating.HOLD, **_target(thin))
+    assert decision_checks(hold, None, None, worksheet=sheet) == []
+    no_price = sheet.replace("- Price today 108.00\n", "")        # only the premium check asks for it
+    assert decision_checks(_compounder(**_target(thin)), None, None, worksheet=no_price) == [
+        "The compounder lane's Buy needs today's price and the worksheet base to measure the premium; "
+        "one is missing."]
+
+
+@pytest.mark.unit
+def test_a_compounder_needs_the_worksheets_expected_return():
+    def sheet(line):
+        return _SHEET + "\n\n" + line + _record()
+
+    def er(total, y, g, r):
+        return (f"Expected return (7-year): {total}%/yr = yield {y}% + growth {g}% + multiple "
+                f"reversion {r}% (bear 1.0% / base 2.0% / bull 3.0%)")
+
+    good = sheet(er("11.0", "4.0", "10.0", "-3.0"))             # 4 + 10 - 3 = 11%
+    problems = decision_checks(_compounder(), None, None, worksheet=good)
+    assert problems == ["The compounder lane's Buy needs an expected return of at least 12%/yr with no "
+                        "multiple expansion; the worksheet gives 11.0% (yield 4.0% + growth 10.0% + "
+                        "reversion -3.0%)."]
+    assert decision_checks(_compounder(rating=PortfolioRating.OVERWEIGHT), None, None, worksheet=good) == []
+    weak = sheet(er("9.0", "3.0", "8.0", "-2.0"))
+    assert len(decision_checks(_compounder(rating=PortfolioRating.OVERWEIGHT), None, None, worksheet=weak)) == 1
+    expansion = sheet(er("14.0", "3.0", "8.0", "3.0"))          # expansion is not counted: 11%
+    assert len(decision_checks(_compounder(), None, None, worksheet=expansion)) == 1
+    strong = sheet(er("13.0", "4.0", "10.0", "-1.0"))
+    assert decision_checks(_compounder(), None, None, worksheet=strong) == []
+    assert decision_checks(_compounder(rating=PortfolioRating.HOLD), None, None, worksheet=weak) == []
+
+
+@pytest.mark.unit
+def test_an_inflection_buy_needs_a_margin_of_safety_and_an_upside_downside():
+    sheet = _SHEET + _record(**_INFLECTING)                     # price 108
+    p = (0.3, 0.45, 0.25)
+    thin = _scenarios(80, 125, 150, p)        # EV 117.75: margin of safety 8%; (150-108)/28 = 1.5x
+    problems = decision_checks(_inflection(**_target(thin)), None, None, worksheet=sheet)
+    assert len(problems) == 2
+    assert any("margin of safety of at least 20%" in p for p in problems)
+    assert any("upside/downside of at least 2.0×" in p for p in problems)
+    lopsided = _scenarios(100, 125, 160, p)   # EV 126.25: 14%; (160-108)/8 = 6.5x
+    problems = decision_checks(_inflection(**_target(lopsided)), None, None, worksheet=sheet)
+    assert len(problems) == 1 and "14%" in problems[0]
+    hold = _inflection(rating=PortfolioRating.HOLD, **_target(thin))
+    assert decision_checks(hold, None, None, worksheet=sheet) == []
+    no_price = sheet.replace("- Price today 108.00\n", "")
+    assert decision_checks(_inflection(**_target(thin)), None, None, worksheet=no_price) == []
+
+
+@pytest.mark.unit
+def test_a_free_text_lane_line_parses():
+    text = ("**Rating**: Buy\n\n**Checklist**:\nGood business — PASS: ROIC 30%\n\n"
+            "**Lane**: Compounder lane — ROIC ≥ 20% 5/5 years; sustainable growth 14%\n\n**Red Flags**: none")
+    assert parse.lane(text) == "compounder"
+    assert parse.lane_evidence(text) == ["ROIC ≥ 20% 5/5 years", "sustainable growth 14%"]
+    assert parse.lane("**Lane**: inflection lane: verified: backlog") == "inflection"
+    assert parse.lane_evidence("**Lane**: inflection lane: verified: backlog") == ["verified: backlog"]

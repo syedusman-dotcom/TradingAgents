@@ -3,7 +3,7 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 from tradingagents.agents.analysts.turn import take_turn
 from tradingagents.agents.context import get_instrument_context_from_state, get_language_instruction
-from tradingagents.agents.decision_math import record_excerpt, worksheet_excerpt, worksheet_record
+from tradingagents.agents.decision_math import record_excerpt, worksheet_excerpt
 from tradingagents.agents.tools import (
     get_annual_report,
     get_balance_sheet,
@@ -41,10 +41,6 @@ def tool_metrics(messages, ticker: str, trade_date: str) -> str:
         return route_to_vendor("get_value_metrics", ticker, trade_date) or ""
     except Exception:  # noqa: BLE001 - the report stands without it
         return ""
-
-
-def _has_record(report: str) -> bool:
-    return any(v is not None for v in worksheet_record(record_excerpt(report)).values())
 
 
 def create_fundamentals_analyst(llm):
@@ -113,15 +109,17 @@ def create_fundamentals_analyst(llm):
         prompt = prompt.partial(instrument_context=instrument_context)
 
         result, report = take_turn(prompt, llm, TOOLS, state["messages"])
-        if report and (not worksheet_excerpt(report) or not _has_record(report)):
-            # Later agents read the formula value, today's price and the lanes' numbers from the
-            # worksheet; the analyst's prose may quote them under its own headings, so the tool's
-            # sections are appended.
+        if report:
+            # Later agents read the formula value and today's price from the worksheet, appended
+            # when the analyst's prose lacks it. The lane checks gate on the tool's Record and
+            # inflection numbers, never the analyst's transcription, so that section is always
+            # appended (read back as the report's last) unless the report already ends with it.
             metrics = tool_metrics(state["messages"], state["company_of_interest"], current_date)
-            for present, piece in ((worksheet_excerpt(report), worksheet_excerpt(metrics)),
-                                   (_has_record(report), record_excerpt(metrics))):
-                if not present and piece:
-                    report = f"{report}\n\n{piece}"
+            sheet, record = worksheet_excerpt(metrics), record_excerpt(metrics)
+            if sheet and not worksheet_excerpt(report):
+                report = f"{report}\n\n{sheet}"
+            if record and record_excerpt(report) != record:
+                report = f"{report}\n\n{record}"
 
         return {
             "messages": [result],

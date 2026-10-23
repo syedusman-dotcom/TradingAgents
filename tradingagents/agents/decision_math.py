@@ -75,7 +75,7 @@ def decision_checks(decision: PortfolioDecision, formula_value: float | None,
         if decision.lane == "compounder":
             problems += _compounder_problems(decision, formula_value, price, worksheet)
         elif decision.lane == "inflection":
-            problems += _inflection_problems(decision, worksheet)
+            problems += _inflection_problems(decision, price, worksheet)
     return problems
 
 
@@ -92,11 +92,44 @@ INFLECTION_EBIT_MULTIPLE = 1.5    # TTM EBIT over its five-year average
 INFLECTION_ACCELERATION = 0.10
 INFLECTION_INCREMENTAL_ROIC = 0.20
 INFLECTION_BEAR_PROBABILITY = 0.30
+COMPOUNDER_UPSIDE_DOWNSIDE = 1.5  # for a Buy, at today's price
+COMPOUNDER_BUY_RETURN = 0.12      # yield + growth + reversion (expansion not counted), per year
+COMPOUNDER_OVERWEIGHT_RETURN = 0.10
+INFLECTION_WEIGHTED_MOS = 0.20    # for a Buy, at today's price
+INFLECTION_UPSIDE_DOWNSIDE = 2.0
+_EXPECTED_RETURN = re.compile(
+    r"Expected return \(\d+-year\):\s*[+\-−]?[\d.]+%/yr = yield ([+\-−]?[\d.]+)% \+ growth "
+    r"([+\-−]?[\d.]+)% \+ multiple reversion ([+\-−]?[\d.]+)%")
 _DEMAND = re.compile(r"\b(orders?|backlog|capex|capital spending|demand|bookings?)\b", re.I)
 
 
 def _pct(x: float) -> str:
     return f"{x:.1%}"
+
+
+def worksheet_expected_return(excerpt: str) -> dict | None:
+    """``{"yield", "growth", "reversion"}`` as fractions from the worksheet's expected-return line;
+    None when it is absent."""
+    match = _EXPECTED_RETURN.search(excerpt)
+    if not match:
+        return None
+    y, g, r = (float(x.replace("−", "-")) / 100 for x in match.groups())
+    return {"yield": y, "growth": g, "reversion": r}
+
+
+def _upside_downside_problem(decision, today, bar, lane) -> str | None:
+    """A Buy's upside/downside at today's price below ``bar``; a price at or under the bear case
+    passes, one at or over the bull case fails."""
+    if decision.scenarios is None or today is None:
+        return None
+    ratio = scenario_stats(decision.scenarios, today)["upside_downside"]
+    if ratio is None and today <= decision.scenarios.bear.value:
+        return None
+    if ratio is not None and ratio >= bar:
+        return None
+    shown = f"{ratio:.1f}×" if ratio is not None else "none (the price is above the bull case)"
+    return (f"The {lane} lane's Buy needs an upside/downside of at least {bar:.1f}× at today's price "
+            f"{today:.2f}; the scenarios give {shown}.")
 
 
 def _compounder_problems(decision, formula_value, price, worksheet) -> list[str]:
@@ -140,10 +173,23 @@ def _compounder_problems(decision, formula_value, price, worksheet) -> list[str]
             verb = "buys" if decision.rating.value == "Buy" else "adds (Overweight)"
             problems.append(f"The compounder lane {verb} at no more than {cap:.2f}× the worksheet base "
                             f"({base:.2f}); today's price {today:.2f} is {today / base:.2f}×.")
+    if decision.rating.value == "Buy":
+        problem = _upside_downside_problem(decision, today, COMPOUNDER_UPSIDE_DOWNSIDE, "compounder")
+        if problem:
+            problems.append(problem)
+    er = worksheet_expected_return(worksheet)
+    floor = {"Buy": COMPOUNDER_BUY_RETURN, "Overweight": COMPOUNDER_OVERWEIGHT_RETURN}.get(decision.rating.value)
+    if er is not None and floor is not None:
+        earned = er["yield"] + er["growth"] + min(er["reversion"], 0.0)
+        if earned < floor - 1e-9:
+            problems.append(f"The compounder lane's {decision.rating.value} needs an expected return of at "
+                            f"least {floor:.0%}/yr with no multiple expansion; the worksheet gives "
+                            f"{_pct(earned)} (yield {_pct(er['yield'])} + growth {_pct(er['growth'])} + "
+                            f"reversion {_pct(min(er['reversion'], 0.0))}).")
     return problems
 
 
-def _inflection_problems(decision, worksheet) -> list[str]:
+def _inflection_problems(decision, price, worksheet) -> list[str]:
     inf = worksheet_inflection(worksheet)
     problems = []
     for key, bar, words, fmt in (
@@ -168,6 +214,16 @@ def _inflection_problems(decision, worksheet) -> list[str]:
     if not any(item.strip().lower().startswith("verified:") for item in decision.lane_evidence):
         problems.append("The inflection lane needs verified demand evidence from the news report: add a lane "
                         "evidence item starting 'verified:' naming its source.")
+    today = price if price is not None else worksheet_price(worksheet)
+    if decision.rating.value == "Buy" and decision.scenarios is not None and today is not None:
+        mos = scenario_stats(decision.scenarios, today)["weighted_mos"]
+        if mos is not None and mos < INFLECTION_WEIGHTED_MOS - 1e-9:
+            problems.append("The inflection lane's Buy needs a probability-weighted margin of safety of at "
+                            f"least {INFLECTION_WEIGHTED_MOS:.0%} at today's price {today:.2f}; the "
+                            f"scenarios give {mos:.0%}.")
+        problem = _upside_downside_problem(decision, today, INFLECTION_UPSIDE_DOWNSIDE, "inflection")
+        if problem:
+            problems.append(problem)
     return problems
 
 

@@ -139,7 +139,7 @@ LANES = ("value", "compounder", "inflection")
 
 def _lane_parts(decision: str) -> tuple[str, str]:
     text = section(decision, "Lane").split("\n")[0].strip()
-    m = re.match(rf"({'|'.join(LANES)})\b\s*(?:[—–:-]\s*)?(.*)$", text, re.I)
+    m = re.match(rf"({'|'.join(LANES)})\b(?:\s+lane\b)?\s*(?:[—–:-]\s*)?(.*)$", text, re.I)
     return (m.group(1).lower(), m.group(2).strip()) if m else ("value", "")
 
 

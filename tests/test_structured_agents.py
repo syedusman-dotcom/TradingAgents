@@ -851,9 +851,8 @@ def test_pm_sends_back_a_compounder_claim_the_record_does_not_support():
     assert "## Record and inflection" in prompts[0] and "- ROIC years above 20% 3" in prompts[0]
     assert "3/5" in prompts[1] and "**Unresolved Checks**:" in result["final_trade_decision"]
 
-    prompts.clear()       # the bridge starts from the worksheet's base, 100.00
-    fits = _compounder(formula_value=100.0, value_bridge=[Adjustment(reason="peak margins", amount=-44.0)])
-    llm, structured = _sequenced_pm_llm(prompts, [fits])
+    prompts.clear()
+    llm, structured = _sequenced_pm_llm(prompts, [_compounder()])
     create_portfolio_manager(llm)({**state, "fundamentals_report": _SHEET + _record()})
     assert structured.invoke.call_count == 1
 
@@ -898,3 +897,16 @@ def test_fundamentals_analyst_quotes_the_record_and_appends_the_tools_record(mon
         report = fundamentals_analyst.create_fundamentals_analyst(MagicMock())(state)["fundamentals_report"]
         assert report.startswith(prose)
         assert worksheet_record(record_excerpt(report))["roic_years_above_20"] == 5
+
+    # The checks gate on the tool's numbers, never the analyst's transcription of them.
+    copied = "## Is it cheap? Yes\n" + _record(**{"ROIC years above 20%": "4"})
+    monkeypatch.setattr(fundamentals_analyst, "take_turn",
+                        lambda prompt, llm, tools, msgs: (AIMessage(content=copied), copied))
+    report = fundamentals_analyst.create_fundamentals_analyst(MagicMock())(state)["fundamentals_report"]
+    assert report.startswith(copied) and worksheet_record(record_excerpt(report))["roic_years_above_20"] == 5
+    assert report.count("## Record and inflection") == 2
+    exact = "## Is it cheap? Yes\n" + _SHEET + _record()
+    monkeypatch.setattr(fundamentals_analyst, "take_turn",
+                        lambda prompt, llm, tools, msgs: (AIMessage(content=exact), exact))
+    report = fundamentals_analyst.create_fundamentals_analyst(MagicMock())(state)["fundamentals_report"]
+    assert report == exact                                      # already the tool's: not repeated
