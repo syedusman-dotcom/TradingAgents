@@ -592,7 +592,8 @@ def test_without_a_premortem_the_pm_prompt_has_no_premortem_block():
     captured = {}
     create_portfolio_manager(_structured_pm_llm(captured))(_make_pm_state())
 
-    assert "**Pre-mortem" not in captured["prompt"]
+    assert "**Pre-mortem (the most likely way" not in captured["prompt"]
+    assert "Answer the pre-mortem explicitly" not in captured["prompt"]
 
 
 @pytest.mark.unit
@@ -612,3 +613,102 @@ def test_the_premortem_writes_the_most_likely_failure_path():
         assert context in prompt
     llm.bind_tools.assert_not_called()
     llm.with_structured_output.assert_not_called()
+
+
+def _sequenced_pm_llm(prompts: list, decisions: list):
+    """A structured LLM that records each prompt and returns the decisions in turn."""
+    structured = MagicMock()
+    answers = iter(decisions)
+    structured.invoke.side_effect = lambda prompt: prompts.append(prompt) or next(answers)
+    llm = MagicMock()
+    llm.with_structured_output.return_value = structured
+    return llm, structured
+
+
+@pytest.mark.unit
+def test_pm_retries_once_on_failed_checks_then_keeps_the_decision():
+    from tests.test_decision_math import _decision
+
+    bad = _decision(entry_price=None, kill_criteria=["a"])
+    prompts = []
+    llm, structured = _sequenced_pm_llm(prompts, [bad, bad])
+    result = create_portfolio_manager(llm)(_make_pm_state())
+
+    assert structured.invoke.call_count == 2
+    assert prompts[1].startswith(prompts[0])
+    assert "Fix these problems and return the full decision again:\n- " in prompts[1]
+    assert "**Unresolved Checks**:" in result["final_trade_decision"]
+    assert result["final_rating"] == "Overweight"
+
+
+@pytest.mark.unit
+def test_pm_keeps_a_fixed_decision_without_unresolved_checks():
+    from tests.test_decision_math import _decision, _good_decision
+
+    prompts = []
+    llm, structured = _sequenced_pm_llm(prompts, [_decision(entry_price=None), _good_decision()])
+    result = create_portfolio_manager(llm)(_make_pm_state())
+
+    assert structured.invoke.call_count == 2
+    assert "**Unresolved Checks**:" not in result["final_trade_decision"]
+    assert "**Entry Price**: 46.0" in result["final_trade_decision"]
+
+
+@pytest.mark.unit
+def test_pm_does_not_retry_a_decision_that_passes_its_checks():
+    from tests.test_decision_math import _good_decision
+
+    prompts = []
+    llm, structured = _sequenced_pm_llm(prompts, [_good_decision()])
+    create_portfolio_manager(llm)(_make_pm_state())
+    assert structured.invoke.call_count == 1
+
+
+@pytest.mark.unit
+def test_pm_prompt_carries_the_worksheet_and_the_checklist_rubric():
+    from tests.test_decision_math import _good_decision
+
+    prompts = []
+    llm, _ = _sequenced_pm_llm(prompts, [_good_decision()])
+    state = {**_make_pm_state(), "fundamentals_report":
+             "## Ratios\nx\n## Valuation worksheet (per share; 5-year averages)\n- **Range base 80.33**\n## Peers\ny"}
+    create_portfolio_manager(llm)(state)
+    prompt = prompts[0]
+
+    assert "**Valuation worksheet (formula value):**\n## Valuation worksheet (per share; 5-year averages)\n" \
+           "- **Range base 80.33**\n" in prompt
+    assert "## Peers" not in prompt
+    flat = " ".join(prompt.split())
+    for sentence in (
+        "Express entry conditions as prices and verifiable facts.",
+        "Use the earnings date only when the print is genuinely binary and say why.",
+        "If you would buy at today's price after a clean print, say so and give the entry price.",
+        "Start the value bridge from the worksheet's formula value and justify any growth above the base rate.",
+        "The bear case may not assume more than 0.8× the target multiple and zero growth unless you say why.",
+        "upside/downside of at least 3",
+    ):
+        assert sentence in flat
+    for section in ("**Checklist**", "**Red Flags**", "**Kill Criteria**", "**Entry Price**",
+                    "**Scenarios**", "**Value Bridge**", "**Pre-mortem Answer**"):
+        assert section in prompt
+    assert prompt.index("**Checklist**") < prompt.index("**Pre-mortem Answer**")
+
+
+@pytest.mark.unit
+def test_pm_prompt_without_a_worksheet_has_no_worksheet_block():
+    captured = {}
+    create_portfolio_manager(_structured_pm_llm(captured))(
+        {**_make_pm_state(), "fundamentals_report": "## Ratios\nx"})
+    assert "**Valuation worksheet (formula value):**" not in captured["prompt"]
+    assert "Answer the pre-mortem explicitly" not in captured["prompt"]
+
+
+@pytest.mark.unit
+def test_new_decision_fields_carry_their_instructions():
+    fields = PortfolioDecision.model_fields
+    assert "sum to the price target" in fields["value_bridge"].description
+    assert "formula value" in fields["value_bridge"].description
+    assert "sum to 1" in fields["scenarios"].description
+    assert "unless the rating is Sell" in fields["entry_price"].description
+    assert "3 to 6" in fields["kill_criteria"].description
+    assert "Margin of safety" in fields["cheap"].description

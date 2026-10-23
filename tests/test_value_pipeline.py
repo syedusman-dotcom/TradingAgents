@@ -808,3 +808,41 @@ def test_sector_median_ev_ebit_sets_the_reversion_target_and_reorders_er_rank():
     ranked = sorted(rows, key=lambda r: r["expected_return"], reverse=True)
     assert [r["ticker"] for r in ranked] == ["C", "B", "A"]
     assert {r["ticker"]: r["er_rank"] for r in rows} == {"C": 1, "B": 2, "A": 3}
+
+
+@pytest.mark.unit
+def test_value_gap_flag_prints_the_bridge():
+    from value_pipeline.actions import value_gap_flag
+
+    bridge = [{"reason": "peak-cycle margins", "amount": -12.0}, {"reason": "net debt", "amount": -12.33}]
+    flag = value_gap_flag(_new("Buy", intrinsic_value=56.0, formula_value=80.33, value_bridge=bridge))
+    assert flag.endswith("; bridge: 80.33 → -12.00 (peak-cycle margins) → -12.33 (net debt) = 56.00")
+    assert "bridge" not in value_gap_flag(_new("Buy", intrinsic_value=56.0, formula_value=80.33))
+
+
+@pytest.mark.unit
+def test_results_json_carries_the_checklist_fields(tmp_path, monkeypatch):
+    import json
+
+    import pandas as pd
+
+    from tests.test_decision_math import _good_decision
+    from tradingagents.agents.schemas import render_pm_decision
+    from value_pipeline import market_data, operations as ops, review
+
+    paths = Paths(tmp_path)
+    ops.init_portfolio(paths, 1000.0, on="2026-10-01")
+    text = render_pm_decision(_good_decision())
+    monkeypatch.setattr(review, "fake_run", lambda t, i, held, price: review.RunResult(t, "Overweight", text))
+    monkeypatch.setattr(review, "_screen_rows", lambda paths: {"HRB": {"ticker": "HRB", "value_base": 80.33,
+                                                                        "trend": "UPTREND", "sector": "X"}})
+    monkeypatch.setattr(market_data, "latest_price", lambda t: 50.0)
+    monkeypatch.setattr(market_data, "closes_between", lambda *a, **k: pd.Series(dtype=float))
+    out = review.run(paths, DEFAULTS, yes=True, dry_run=True, today="2026-10-23", only=["HRB"])
+
+    row = json.loads((out.parent / "results.json").read_text())[0]
+    assert row["price"] == 50.0 and row["formula_value"] == 80.33 and row["entry_price"] == 46.0
+    assert len(row["kill_criteria"]) == 3 and row["checklist"]["cheap"]["passed"] is True
+    assert row["scenarios"]["expected_value"] == pytest.approx(56.0)
+    assert row["value_bridge"][1] == {"reason": "net debt", "amount": -12.33}
+    assert row["red_flags"] == []

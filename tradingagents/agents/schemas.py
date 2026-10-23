@@ -23,6 +23,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
+from tradingagents.agents.decision_math import scenario_stats
+
 # LLMs sometimes write a placeholder string ("None", "N/A", ...) into an optional
 # numeric field instead of omitting it. Coerce those to None so the structured
 # call validates instead of erroring (#1058). Pydantic still parses real numeric
@@ -218,6 +220,32 @@ def render_trader_proposal(proposal: TraderProposal) -> str:
 # ---------------------------------------------------------------------------
 
 
+class Verdict(BaseModel):
+    """One test of the value checklist: whether it passes, and why."""
+
+    passed: bool = Field(description="True when the test passes.")
+    note: str = Field(description="One sentence of evidence for the verdict.")
+
+
+class Adjustment(BaseModel):
+    """One step of the value bridge from the formula value to the price target."""
+
+    reason: str = Field(description="Why the value moves, in a few words.")
+    amount: float = Field(description="Per-share change: negative lowers the value, positive raises it.")
+
+
+class Scenario(BaseModel):
+    value: float = Field(description="Per-share value in this scenario.")
+    probability: float = Field(description="Probability as a fraction, e.g. 0.25.")
+    basis: str = Field(description="The multiple and growth this value assumes.")
+
+
+class Scenarios(BaseModel):
+    bear: Scenario
+    base: Scenario
+    bull: Scenario
+
+
 class PortfolioDecision(BaseModel):
     """Structured output produced by the Portfolio Manager.
 
@@ -258,8 +286,67 @@ class PortfolioDecision(BaseModel):
         default=None,
         description="Optional recommended holding period, e.g. '3-6 months'.",
     )
+    # Defaults throughout: a free-text fallback and an older decision still validate.
+    good_business: Verdict | None = Field(
+        default=None, description="Good business: durable returns on capital and a moat.")
+    good_management: Verdict | None = Field(
+        default=None, description="Good management: honest, shareholder-minded capital allocation.")
+    cheap: Verdict | None = Field(
+        default=None,
+        description=(
+            "Cheap: the price is well below the price target. The note states the margin of "
+            "safety as a percentage, e.g. 'Margin of safety: 32%'."
+        ),
+    )
+    red_flags: list[str] = Field(
+        default_factory=list,
+        description="Serious distress, accounting or governance red flags; empty when there are none.",
+    )
+    kill_criteria: list[str] = Field(
+        default_factory=list,
+        description=(
+            "3 to 6 verifiable facts that would prove the thesis wrong and mean selling, "
+            "e.g. 'ROIC below 12% for two years'."
+        ),
+    )
+    entry_price: float | None = Field(
+        default=None,
+        description=(
+            "The price at or below which to buy or add, as one number. Required unless the "
+            "rating is Sell."
+        ),
+    )
+    formula_value: float | None = Field(
+        default=None,
+        description=(
+            "The formula value from the fundamentals report's valuation worksheet, copied as "
+            "given; the value bridge starts here."
+        ),
+    )
+    value_bridge: list[Adjustment] = Field(
+        default_factory=list,
+        description=(
+            "The adjustments that take the formula value to the price target: start from the "
+            "worksheet's formula value; the formula value plus the amounts must sum to the price "
+            "target. Justify any growth above the base rate."
+        ),
+    )
+    scenarios: Scenarios | None = Field(
+        default=None,
+        description=(
+            "Bear, base and bull per-share values; the probabilities must sum to 1 and the "
+            "probability-weighted value should equal the price target. The bear case may not "
+            "assume more than 0.8x the target multiple and zero growth unless the basis says why."
+        ),
+    )
+    premortem_answer: str = Field(
+        default="",
+        description=(
+            "How the thesis survives the pre-mortem's failure path, or why the risk is accepted."
+        ),
+    )
 
-    @field_validator("price_target", mode="before")
+    @field_validator("price_target", "entry_price", mode="before")
     @classmethod
     def _nullish_float_to_none(cls, v):
         return _coerce_optional_float(v)
@@ -285,7 +372,50 @@ def render_pm_decision(decision: PortfolioDecision) -> str:
     target = decision.price_target if decision.price_target is not None else "not provided"
     parts.extend(["", f"**Price Target**: {target}"])
     parts.extend(["", f"**Time Horizon**: {decision.time_horizon or 'not provided'}"])
+    parts.extend(["", "**Checklist**:"])
+    for label, verdict in (("Good business", decision.good_business),
+                           ("Good management", decision.good_management),
+                           ("Cheap", decision.cheap)):
+        if verdict is None:
+            parts.append(f"{label} — not provided")
+        else:
+            parts.append(f"{label} — {'PASS' if verdict.passed else 'FAIL'}: {verdict.note}")
+    flags = [f"- {flag}" for flag in decision.red_flags]
+    parts.extend(["", "**Red Flags**:" + ("\n" + "\n".join(flags) if flags else " none")])
+    kills = [f"{i}. {k}" for i, k in enumerate(decision.kill_criteria, 1)]
+    parts.extend(["", "**Kill Criteria**:" + ("\n" + "\n".join(kills) if kills else " not provided")])
+    entry = decision.entry_price if decision.entry_price is not None else "not provided"
+    parts.extend(["", f"**Entry Price**: {entry}"])
+    parts.extend(["", "**Scenarios**:" + ("\n" + _render_scenarios(decision) if decision.scenarios
+                                          else " not provided")])
+    parts.extend(["", "**Value Bridge**:\n" + _render_bridge(decision)])
+    parts.extend(["", f"**Pre-mortem Answer**: {decision.premortem_answer or 'not provided'}"])
     return "\n".join(parts)
+
+
+def _money(value: float | None) -> str:
+    return f"{value:.2f}" if value is not None else "not provided"
+
+
+def _render_scenarios(decision: PortfolioDecision) -> str:
+    s = decision.scenarios
+    lines = [f"{name} {sc.probability * 100:.0f}%: {sc.value:.2f} — {sc.basis}"
+             for name, sc in (("Bear", s.bear), ("Base", s.base), ("Bull", s.bull))]
+    # No market price reaches the Portfolio Manager, so the ratio is measured at its entry price.
+    stats = scenario_stats(s, decision.entry_price)
+    ratio = (f"{stats['upside_downside']:.1f}x at entry {decision.entry_price:.2f}"
+             if stats["upside_downside"] is not None else "n/a")
+    ev = _money(stats["expected_value"])
+    lines.append(f"Expected value: {ev}; upside/downside {ratio}")
+    return "\n".join(lines)
+
+
+def _render_bridge(decision: PortfolioDecision) -> str:
+    """ASCII signs throughout; the pipeline's parser also accepts a Unicode minus."""
+    lines = [f"Formula value {_money(decision.formula_value)}"]
+    lines += [f"{a.amount:+.2f} {a.reason}" for a in decision.value_bridge]
+    lines.append(f"= Price Target {_money(decision.price_target)}")
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------

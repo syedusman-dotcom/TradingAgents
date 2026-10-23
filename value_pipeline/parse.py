@@ -68,3 +68,65 @@ def margin_of_safety(decision: str) -> float | None:
 def thesis_summary(decision: str, limit: int = 300) -> str:
     text = " ".join(section(decision, "Investment Thesis").split())
     return text if len(text) <= limit else text[: limit - 1].rsplit(" ", 1)[0] + "…"
+
+
+# --- the checklist, scenarios and value bridge (absent from older decisions) --------
+
+_DASH = r"\s*[—–-]\s*"
+_SIGNED = r"([+\-−])\s*(\d[\d,]*(?:\.\d+)?)"
+
+
+def entry_price(decision: str) -> float | None:
+    """The Entry Price field as a number; None when absent or 'not provided'."""
+    return _dollar_amount(section(decision, "Entry Price").split("\n")[0])
+
+
+def red_flags(decision: str) -> list[str]:
+    """The Red Flags bullets; empty for 'none' or an older decision."""
+    return [m.group(1).strip() for m in re.finditer(r"^\s*[-*]\s+(.+)$", section(decision, "Red Flags"), re.M)]
+
+
+def kill_criteria(decision: str) -> list[str]:
+    """The numbered Kill Criteria."""
+    return [m.group(1).strip() for m in re.finditer(r"^\s*\d+[.)]\s+(.+)$", section(decision, "Kill Criteria"), re.M)]
+
+
+_CHECKS = {"good business": "good_business", "good management": "good_management", "cheap": "cheap"}
+
+
+def checklist(decision: str) -> dict[str, dict]:
+    """{"good_business": {"passed": True, "note": "..."}, ...} for each test that has a verdict."""
+    out = {}
+    pattern = rf"^\s*(Good business|Good management|Cheap){_DASH}(PASS|FAIL)\s*:?\s*(.*)$"
+    for m in re.finditer(pattern, section(decision, "Checklist"), re.M | re.I):
+        out[_CHECKS[m.group(1).lower()]] = {"passed": m.group(2).upper() == "PASS", "note": m.group(3).strip()}
+    return out
+
+
+def scenarios(decision: str) -> dict | None:
+    """Bear/base/bull values and probabilities, the expected value and upside/downside; None when
+    the decision has no scenarios."""
+    text = section(decision, "Scenarios")
+    out: dict = {}
+    pattern = rf"^\s*(Bear|Base|Bull)\s+(\d+(?:\.\d+)?)\s*%\s*:\s*\$?(-?[\d,]+(?:\.\d+)?)(?:{_DASH}(.*))?$"
+    for m in re.finditer(pattern, text, re.M | re.I):
+        out[m.group(1).lower()] = {"value": _float(m.group(3)), "probability": float(m.group(2)) / 100,
+                                   "basis": (m.group(4) or "").strip()}
+    if not out:
+        return None
+    ev = re.search(r"Expected value\s*:\s*\$?(-?[\d,]+(?:\.\d+)?)", text, re.I)
+    ratio = re.search(r"upside/downside\s+(\d+(?:\.\d+)?)\s*x", text, re.I)
+    out["expected_value"] = _float(ev.group(1)) if ev else None
+    out["upside_downside"] = float(ratio.group(1)) if ratio else None
+    return out
+
+
+def value_bridge(decision: str) -> list[dict]:
+    """The bridge's adjustments, [{"reason", "amount"}], between the formula value and the target.
+    A leading ASCII hyphen-minus or a Unicode minus both read as negative."""
+    out = []
+    for m in re.finditer(rf"^\s*{_SIGNED}\s+(.+)$", section(decision, "Value Bridge"), re.M):
+        amount = _float(m.group(2))
+        if amount is not None:
+            out.append({"reason": m.group(3).strip(), "amount": -amount if m.group(1) != "+" else amount})
+    return out

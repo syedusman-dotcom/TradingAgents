@@ -291,6 +291,9 @@ def _run(paths: Paths, cfg: dict, *, yes: bool, dry_run: bool, today: str | None
             sector=_sector(paths, r.ticker, row),
             expected_return=_float(row.get("expected_return")) if row else None,
             days_since_last_review=_days_between(held.last_review_date, today) if held else None,
+            entry_price=parse.entry_price(r.decision),
+            kill_criteria=parse.kill_criteria(r.decision),
+            value_bridge=parse.value_bridge(r.decision),
         ))
     reviewed = {d.ticker for d in decisions}
     others = [(p.ticker, p.shares * (prices.get(p.ticker) or p.avg_price), _sector(paths, p.ticker, screen.get(p.ticker)))
@@ -315,7 +318,11 @@ def _run(paths: Paths, cfg: dict, *, yes: bool, dry_run: bool, today: str | None
         {"ticker": r.ticker, "name": r.name, "rating": r.rating, "error": r.error, "report": r.report,
          "tokens_in": r.tokens_in, "tokens_out": r.tokens_out, "nominal_cost_usd": round(r.nominal_cost_usd, 4),
          "intrinsic_value": parse.intrinsic_value(r.decision), "margin_of_safety": parse.margin_of_safety(r.decision),
-         "thesis": parse.thesis_summary(r.decision)}
+         "thesis": parse.thesis_summary(r.decision), "price": prices.get(r.ticker),
+         "formula_value": _float(screen[r.ticker].get("value_base")) if r.ticker in screen else None,
+         "entry_price": parse.entry_price(r.decision), "kill_criteria": parse.kill_criteria(r.decision),
+         "checklist": parse.checklist(r.decision), "scenarios": parse.scenarios(r.decision),
+         "value_bridge": parse.value_bridge(r.decision), "red_flags": parse.red_flags(r.decision)}
         for r in results
     ], indent=2), encoding="utf-8")
     tmp.replace(out_dir / "results.json")

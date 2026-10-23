@@ -27,6 +27,9 @@ class Decision:
     sector: str | None = None
     expected_return: float | None = None    # per year over seven years, from the screen
     days_since_last_review: int | None = None
+    entry_price: float | None = None        # the Portfolio Manager's buy-below price
+    kill_criteria: list[str] = field(default_factory=list)
+    value_bridge: list[dict] = field(default_factory=list)   # [{"reason", "amount"}] from formula to target
 
     @property
     def held(self) -> bool:
@@ -61,7 +64,11 @@ def value_gap_flag(d: Decision) -> str | None:
     gap = d.intrinsic_value / d.formula_value - 1
     if abs(gap) <= VALUE_GAP:
         return None
-    return f"agents' value {d.intrinsic_value:,.2f} is {gap:+.0%} vs formula {d.formula_value:,.2f}: check their reasons"
+    flag = f"agents' value {d.intrinsic_value:,.2f} is {gap:+.0%} vs formula {d.formula_value:,.2f}: check their reasons"
+    if d.value_bridge:
+        steps = " → ".join(f"{b['amount']:+,.2f} ({b['reason']})" for b in d.value_bridge)
+        flag += f"; bridge: {d.formula_value:,.2f} → {steps} = {d.intrinsic_value:,.2f}"
+    return flag
 
 
 def base_action(d: Decision) -> Action:
