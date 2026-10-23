@@ -78,7 +78,7 @@ def yf_retry(func, max_retries=3, base_delay=2.0):
 
 # Quote currencies Yahoo gives in a minor unit, and the major unit each is 1/100 of.
 MINOR_UNITS = {"GBp": "GBP", "GBX": "GBP", "ZAc": "ZAR", "ILA": "ILS"}
-_RATES: dict[str, float | None] = {}
+_RATES: dict[str, float] = {}
 
 
 def usd_rate(currency: str | None) -> float | None:
@@ -86,7 +86,8 @@ def usd_rate(currency: str | None) -> float | None:
 
     A minor-unit code (pence) answers with its major unit's rate: the caller divides a
     minor-unit *price* by 100, while Yahoo's market cap is already in the major unit.
-    Cached for the process, failures included.
+    Successful rates are cached for the process; a failure is not, so a transient one
+    does not switch off conversion for a whole batch run.
     """
     if not currency:
         return None
@@ -95,8 +96,11 @@ def usd_rate(currency: str | None) -> float | None:
         return 1.0
     if code not in _RATES:
         try:
-            close = yf.Ticker(f"{code}USD=X").history(period="5d")["Close"].dropna()
-            _RATES[code] = float(close.iloc[-1]) if len(close) else None
+            history = yf_retry(lambda: yf.Ticker(f"{code}USD=X").history(period="5d"))
+            close = history["Close"].dropna()
+            if not len(close):
+                return None
+            _RATES[code] = float(close.iloc[-1])
         except Exception:
-            _RATES[code] = None
+            return None
     return _RATES[code]

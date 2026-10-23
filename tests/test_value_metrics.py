@@ -429,3 +429,19 @@ def test_reinvestment_uses_the_same_years_for_payouts_and_owner_earnings():
     er = vm.expected_return(years, price=20.0, market_cap=2000, shares=100)
     # two computable years: payout 160 of owner earnings 320 -> reinvest 0.5 (not dragged down by year 3)
     assert er["sustainable_growth"] == pytest.approx(0.5 * min(200 / 700, 1.0))
+
+
+@pytest.mark.unit
+def test_report_places_yen_revenue_in_the_dollar_cohort():
+    years = [_year(revenue=1.5e12), _year(revenue=1.4e12)]
+    m = vm.company_metrics(years, price=20, market_cap=2000, shares=100, revenue_usd=1.5e12 * 0.0064)
+    text = vm.render_report("7203.T", "2026-10-23", m, currency="JPY")
+    assert "companies with revenue $5–25B" in text  # 1.5e12 yen is $9.6B; raw it would be >$25B
+
+
+@pytest.mark.unit
+def test_report_skips_the_base_rate_note_for_foreign_revenue_without_a_rate():
+    years = [_year(revenue=1.5e12), _year(revenue=1.4e12)]
+    m = vm.company_metrics(years, price=20, market_cap=2000, shares=100, revenue_usd=None)
+    text = vm.render_report("7203.T", "2026-10-23", m, currency="JPY")
+    assert "## Valuation worksheet" in text and "companies with revenue" not in text

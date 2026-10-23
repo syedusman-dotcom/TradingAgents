@@ -107,6 +107,8 @@ def _industry_peers(symbol: str, info: dict, limit: int) -> tuple[list[str], str
         table = None
     if table is None or len(table) == 0:
         return [], f"Yahoo lists no peer companies for the {key} industry, so there is no peer table."
+    if "market weight" in table.columns:
+        table = table.sort_values("market weight", ascending=False)
     names = [str(s) for s in table.index if str(s).upper() != symbol.upper()]
     return names[:limit], None
 
@@ -120,8 +122,11 @@ def peer_comparison(symbol: str, limit: int = 6, as_of: str | None = None) -> st
     except Exception:
         pass  # no usable cache entry: build the table
 
-    subject = _fetch(symbol)
-    if not subject["years"]:
+    try:
+        subject = _fetch(symbol)
+    except ValueError:
+        # No profile or statements: an ETF, a fund, an unknown ticker. Raised as the typed
+        # absence (or outage) the tool layer turns into text instead of ending the run.
         raise_for_empty(symbol, symbol, "annual statements")
     names, reason = _industry_peers(symbol, subject["info"], limit)
     title = f"# Peer comparison for {symbol} ({day})"
