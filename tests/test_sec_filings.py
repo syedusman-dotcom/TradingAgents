@@ -218,3 +218,44 @@ def test_an_earnings_exhibit_named_without_99_is_found_by_its_type(edgar):
     docs["000002134426000019/q1pr.htm"] = _html("Acme first-quarter results.")
     out = sec_filings.latest_earnings_release("KO", "2026-07-20")
     assert "Acme first-quarter results." in out
+
+
+def _release(edgar, paragraphs):
+    docs, _ = edgar
+    docs["000002134426000040/index.json"] = b'{"directory": {"item": [{"name": "ex99-1.htm"}]}}'
+    docs["000002134426000040/ex99-1.htm"] = _html("\n".join(paragraphs))
+    return sec_filings.latest_earnings_release("KO", "2026-07-25")
+
+
+@pytest.mark.unit
+def test_an_outlook_paragraph_inside_the_cut_is_not_repeated(edgar):
+    shown = "We expect demand to stay firm in the second half."
+    out = _release(edgar, [shown] + RELEASE[1:])
+    head, outlook = out.split("## Outlook and demand lines")
+    assert shown in head and shown not in outlook
+    assert "Backlog reached a record $4.1 billion" in outlook
+
+
+@pytest.mark.unit
+def test_safe_harbor_paragraphs_are_left_out_of_the_outlook(edgar):
+    boilerplate = [
+        "This release contains forward-looking statements; words such as expect identify them.",
+        "These statements are made under the safe harbor; actual demand may differ.",
+        "Statements under the private securities litigation reform act of 1995 about our outlook.",
+    ]
+    out = _release(edgar, RELEASE[:-1] + boilerplate)
+    outlook = out.split("## Outlook and demand lines")[1]
+    assert "Backlog reached a record $4.1 billion" in outlook
+    for paragraph in boilerplate:
+        assert paragraph not in outlook
+
+
+@pytest.mark.unit
+def test_the_outlook_section_is_capped(edgar):
+    assert sec_filings.OUTLOOK_CHARS == 4_000
+    many = [f"Guidance item {i}: we expect bookings to grow. " + "Detail. " * 60 for i in range(20)]
+    out = _release(edgar, RELEASE[:-4] + many)
+    outlook = out.split("## Outlook and demand lines")[1]
+    assert "Guidance item 0:" in outlook and "Guidance item 19:" not in outlook
+    assert outlook.rstrip().endswith("more characters not shown]")
+    assert len(outlook) < sec_filings.OUTLOOK_CHARS + 200

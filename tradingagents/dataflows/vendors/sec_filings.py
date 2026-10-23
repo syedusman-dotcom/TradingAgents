@@ -264,6 +264,22 @@ RELEASE_CHARS = 10_000
 OUTLOOK_WORDS = ("outlook", "guidance", "expect", "backlog", "bookings", "book-to-bill",
                  "remaining performance obligations", "RPO", "demand")
 _OUTLOOK = re.compile(r"\b(" + "|".join(re.escape(w) for w in OUTLOOK_WORDS) + ")", re.I)
+# Legal boilerplate that names the outlook words without giving any guidance.
+_SAFE_HARBOR = re.compile(r"forward[\s-]looking|safe\s+harbor|"
+                          r"private\s+securities\s+litigation\s+reform\s+act", re.I)
+# The outlook and demand paragraphs past the cut are capped at this many characters.
+OUTLOOK_CHARS = 4_000
+
+
+def _outlook_beyond_cut(text: str) -> list[str]:
+    """Outlook and demand paragraphs that end past ``RELEASE_CHARS``, without safe-harbor text."""
+    found, end = [], -1
+    for paragraph in text.split("\n"):
+        end += len(paragraph) + 1
+        if (end > RELEASE_CHARS and _OUTLOOK.search(paragraph)
+                and not _SAFE_HARBOR.search(paragraph) and paragraph not in found):
+            found.append(paragraph)
+    return found
 _EXHIBIT_99 = re.compile(r"ex.?99.*\.(htm|html|txt)$", re.I)
 
 
@@ -310,12 +326,12 @@ def latest_earnings_release(ticker: str, as_of_date: str | None = None) -> str:
     text = _cached_text(f"8k_{cik}_{filing['accession']}.txt", lambda: _release_text(cik, filing))
     lines = [f"# Earnings release (8-K exhibit 99.1) for {ticker.upper()}, filed {filing['filed']}",
              "The company's own results announcement, as filed; cut to its first "
-             f"{RELEASE_CHARS:,} characters, with every outlook and demand paragraph kept whole "
-             "below. Quote it with the filing date.", ""]
+             f"{RELEASE_CHARS:,} characters; outlook and demand paragraphs past the cut follow, "
+             "kept whole. Quote it with the filing date.", ""]
     if not text:
         lines.append("The filing's exhibit 99 press release could not be located.")
         return "\n".join(lines)
     lines += [_cut(text, RELEASE_CHARS), "", "## Outlook and demand lines", ""]
-    outlook = [p for p in dict.fromkeys(text.splitlines()) if _OUTLOOK.search(p)]
-    lines += outlook or ["None found."]
+    outlook = _outlook_beyond_cut(text)
+    lines.append(_cut("\n".join(outlook), OUTLOOK_CHARS) if outlook else "None found.")
     return "\n".join(lines)
