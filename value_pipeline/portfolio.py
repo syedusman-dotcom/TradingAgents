@@ -35,6 +35,7 @@ class Position:
     kill_criteria: list[str] = field(default_factory=list)   # verifiable facts that would void the thesis
     entry_price: float | None = None                          # the agents' buy-below price at the last review
     next_earnings_date: str | None = None                      # ISO date, looked up at the last review
+    lane: str = "value"                                        # value / compounder / inflection
 
 
 @dataclass
@@ -88,7 +89,8 @@ def _finite(**values: float) -> None:
 
 def apply_buy(pf: Portfolio, ticker: str, shares: float, price: float, fees: float = 0.0,
               on: str | None = None, thesis: str = "", intrinsic_value: float | None = None,
-              kill_criteria: list[str] | None = None, entry_price: float | None = None) -> Position:
+              kill_criteria: list[str] | None = None, entry_price: float | None = None,
+              lane: str = "value") -> Position:
     ticker = ticker.upper()
     _finite(shares=shares, price=price, fees=fees)
     if shares <= 0 or price <= 0 or fees < 0:
@@ -104,7 +106,8 @@ def apply_buy(pf: Portfolio, ticker: str, shares: float, price: float, fees: flo
         held = Position(ticker=ticker, shares=shares, avg_price=cost / shares,
                         first_bought=on or date.today().isoformat(), thesis=thesis,
                         intrinsic_value_estimate=intrinsic_value,
-                        kill_criteria=list(kill_criteria or []), entry_price=entry_price)
+                        kill_criteria=list(kill_criteria or []), entry_price=entry_price,
+                        lane=lane or "value")
         pf.positions.append(held)
     else:
         held.avg_price = (held.shares * held.avg_price + cost) / (held.shares + shares)

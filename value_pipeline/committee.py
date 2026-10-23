@@ -22,7 +22,9 @@ PROMPT = (
     "Nothing is traded automatically; this is advice for a human. "
     "Prices are in each stock's quote currency (its \"currency\" field); held weights and cash are in "
     "US dollars. A null field is unknown. Never estimate an expected return, downside or sector yourself; "
-    "say it is unknown and rank that stock on what is known."
+    "say it is unknown and rank that stock on what is known. "
+    "Lanes: value is the core; compounder positions are capped at 30% and inflection at 20% of the "
+    "portfolio, each bought at half size; cut inflection positions first when demand evidence fades."
 )
 
 _BUYS = {"BUY", "ADD"}
@@ -86,6 +88,7 @@ def build_payload(decisions: list[Decision], results: list[dict], portfolio, sum
             "checklist": row.get("checklist"), "scenarios": row.get("scenarios"),
             "red_flags": row.get("red_flags") or [], "kill_criteria": list(d.kill_criteria),
             "thesis": row.get("thesis"),
+            "lane": d.lane, "lane_evidence": row.get("lane_evidence") or [],
         })
     others = [{"ticker": p.ticker, "shares": p.shares, "avg_price": p.avg_price}
               for p in portfolio.positions if p.ticker not in reviewed]

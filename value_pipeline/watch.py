@@ -17,7 +17,7 @@ from pathlib import Path
 from value_pipeline import market_data, metrics, portfolio as pfmod
 from value_pipeline.actions import BUY_RATINGS
 from value_pipeline.config import Paths
-from value_pipeline.render import numbered
+from value_pipeline.render import demand_first, numbered
 
 log = logging.getLogger(__name__)
 
@@ -113,7 +113,7 @@ def run(paths: Paths, cfg: dict, notify: bool = True) -> tuple[list[Alert], Path
     lines = [f"# Weekly watch {today}", "",
              "Prices only, no agent runs. Nothing changes until you act and record a trade.", ""]
     lines += [f"- **{a.kind}**: {a.message}" for a in found] or ["Nothing needs attention this week."]
-    criteria = [(p.ticker, p.kill_criteria) for p in pf.positions if p.kill_criteria]
+    criteria = [(p.ticker, demand_first(p.kill_criteria, p.lane)) for p in pf.positions if p.kill_criteria]
     if criteria:
         lines += ["", "## Kill criteria to check", "",
                   "Shown for you to check against the news; nothing here is evaluated."]

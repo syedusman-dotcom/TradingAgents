@@ -322,3 +322,14 @@ def test_web_daily_job_fails_when_the_review_failed(tmp_path, monkeypatch):
         job(Paths(tmp_path), RUN_CFG)
     monkeypatch.setattr(daily, "run", lambda paths, cfg, notify: ([], tmp_path / "d.md", 0))
     job(Paths(tmp_path), RUN_CFG)
+
+
+def test_daily_lists_an_inflection_holdings_demand_criteria_first(tmp_path, monkeypatch):
+    paths = _data(tmp_path, monkeypatch, {"HRB": 56.0, "DNLM.L": 740.0, "SELLME": 5.0})
+    pf = pfmod.load(paths)
+    pf.position("HRB").lane = "inflection"
+    pf.position("HRB").kill_criteria = ["Net debt above 3x EBITDA", "Backlog falls year on year"]
+    pfmod.save(paths, pf)
+    monkeypatch.setattr(review, "run", _no_review)
+    _, out, _ = daily.run(paths, RUN_CFG, dry_run=True, notify=False, today=TODAY)
+    assert "- HRB: 1. Backlog falls year on year; 2. Net debt above 3x EBITDA" in out.read_text()

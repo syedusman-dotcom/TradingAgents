@@ -43,6 +43,16 @@ sizing:
   overweight_size_factor: 0.5 # Overweight gets half the target size
   min_trade_amount: 25        # don't suggest buys smaller than this (USD)
   max_sector_weight: 0.30     # buys and adds stop at 30% of the portfolio in one sector
+  lane_caps: {compounder: 0.30, inflection: 0.20}       # buys and adds stop at these shares per lane
+  lane_size_factor: {compounder: 0.5, inflection: 0.5}  # a lane buy is this fraction of the target size
+
+# Investment lanes beyond value (compounder, inflection): where discovery looks, and how many
+# candidates of each it adds to a review.
+# lanes:
+#   themes: []                 # e.g. ["AI infrastructure", "grid equipment"]
+#   tickers: []                # names to always consider
+#   inflection_candidates: 3
+#   compounder_candidates: 2
 
 watch:
   # The weekly check flags a stock the agents rated Buy/Overweight once its price

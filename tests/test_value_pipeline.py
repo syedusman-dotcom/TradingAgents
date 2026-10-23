@@ -1146,7 +1146,7 @@ def test_results_and_position_carry_the_earnings_date_or_none(tmp_path, monkeypa
 
     pf = pfmod.load(paths)
     assert pf.position("HRB").next_earnings_date is None
-    act = SimpleNamespace(ticker="HRB", rating="Hold", consecutive_underweight=0,
+    act = SimpleNamespace(ticker="HRB", rating="Hold", consecutive_underweight=0, lane="value",
                           decision=SimpleNamespace(intrinsic_value=None, kill_criteria=[], entry_price=None))
     review._record_ratings(paths, pf, [act], "2026-10-23", {"HRB": "2026-11-05"})
     assert pfmod.load(paths).position("HRB").next_earnings_date == "2026-11-05"
@@ -1280,3 +1280,93 @@ def test_results_json_and_the_decision_carry_the_lane(tmp_path, monkeypatch):
     row, d = _review_one(tmp_path / "old", monkeypatch, _good_decision(), 50.0)
     assert row["lane"] == "value" and row["lane_evidence"] == [] and d.lane == "value"
     assert Decision("X", "Hold", 10.0).lane == "value"
+
+
+@pytest.mark.unit
+def test_lane_buy_is_sized_at_half_and_capped_by_the_lane_cap():
+    sizing = {**SIZING, "max_sector_weight": 1.0}
+    # No holdings in the lane: a Buy gets half the 10% target.
+    actions, _ = plan([Decision("INF", "Buy", price=10.0, lane="inflection")], cash=10_000.0, sizing=SIZING)
+    assert actions[0].amount == pytest.approx(500.0) and actions[0].lane == "inflection"
+    actions, _ = plan([Decision("INF", "Overweight", price=10.0, lane="inflection")], cash=10_000.0, sizing=SIZING)
+    assert actions[0].amount == pytest.approx(250.0)
+    # Two inflection holdings at 18% of the portfolio: the new buy is cut to fit the 20% cap.
+    held = [Decision("A", "Hold", price=100.0, held_shares=9, lane="inflection"),
+            Decision("B", "Hold", price=100.0, held_shares=9, lane="inflection")]
+    new = Decision("C", "Buy", price=10.0, lane="inflection")
+    actions, _ = plan([*held, new], cash=8_200.0, sizing=sizing)
+    c = {a.ticker: a for a in actions}["C"]
+    assert c.amount == pytest.approx(200.0) and "inflection lane at its 20% cap" in c.reason
+    # Unreviewed holdings count too, as the 4th element; at the cap the buy is skipped.
+    actions, _ = plan([new], cash=8_000.0, sizing=sizing, others=[("X", 2_000.0, None, "inflection")])
+    assert actions[0].action == "SKIP" and "inflection lane at its 20% cap" in actions[0].reason
+    # Value positions are not counted against the lane.
+    actions, _ = plan([new], cash=8_000.0, sizing=sizing, others=[("X", 2_000.0, None)])
+    assert actions[0].amount == pytest.approx(500.0)
+
+
+@pytest.mark.unit
+def test_unresolved_lane_claim_sizes_as_hold():
+    new = Decision("INF", "Buy", price=10.0, lane="inflection", lane_unresolved=True)
+    held = Decision("OWN", "Overweight", price=10.0, held_shares=1, lane="compounder", lane_unresolved=True)
+    value = Decision("VAL", "Buy", price=10.0, lane_unresolved=True)
+    actions, _ = plan([new, held, value], cash=10_000.0, sizing=SIZING)
+    by = {a.ticker: a for a in actions}
+    assert by["INF"].action == "SKIP" and by["INF"].amount is None and by["INF"].rating == "Buy"
+    assert by["INF"].reason == "lane claim unresolved: sized as Hold"
+    assert by["OWN"].action == "KEEP" and by["OWN"].reason == "lane claim unresolved: sized as Hold"
+    assert by["VAL"].action == "BUY"
+
+
+@pytest.mark.unit
+def test_position_and_results_carry_the_lane(tmp_path):
+    from value_pipeline import operations as ops, review
+
+    paths = Paths(tmp_path)
+    ops.init_portfolio(paths, 1000.0, on="2026-10-01")
+    folder = paths.reports / "2026-10-11"
+    folder.mkdir(parents=True)
+    (folder / "results.json").write_text(json.dumps([
+        {"ticker": "INF", "rating": "Buy", "error": None, "thesis": "t", "lane": "inflection",
+         "lane_evidence": ["backlog +40%"]}]))
+    held, _ = ops.record_buy(paths, "INF", 1, 10.0, on="2026-10-12")
+    assert held.lane == "inflection" and pfmod.load(paths).position("INF").lane == "inflection"
+    # a review stores the lane on a holding
+    d = Decision(ticker="INF", rating="Hold", price=10.0, held_shares=1, lane="compounder")
+    review._record_ratings(paths, pfmod.load(paths), plan([d], cash=990.0, sizing=SIZING)[0], "2026-11-07")
+    assert pfmod.load(paths).position("INF").lane == "compounder"
+    # old files load as value
+    paths.portfolio.write_text('{"cash": 5.0, "positions": [{"ticker": "OLD", "shares": 1, '
+                               '"avg_price": 2.0, "first_bought": "2026-01-01"}]}')
+    assert pfmod.load(paths).position("OLD").lane == "value"
+    # the rendered tables show the lane
+    inf = Decision("NEW", "Buy", price=10.0, lane="inflection")
+    own = Decision("OWN", "Hold", price=10.0, held_shares=1, lane="compounder")
+    skip = Decision("SK", "Buy", price=10.0, lane="compounder", lane_unresolved=True)
+    actions, summary = plan([inf, own, skip], cash=1000.0, sizing=SIZING)
+    md = render.actions_markdown("2026-11-07", actions, summary, reports={}, comparison=None, cost=0.0,
+                                 failures=[], dry_run=False)
+    assert "| Ticker | Rating | Lane | Amount |" in md
+    assert "| NEW | Buy | inflection |" in md and "| OWN | Hold (compounder) |" in md
+    assert "lane claim unresolved: sized as Hold — lane compounder" in md
+
+
+@pytest.mark.unit
+def test_watch_lists_demand_criteria_first(tmp_path, monkeypatch):
+    from value_pipeline import watch
+
+    paths = Paths(tmp_path)
+    pf = pfmod.Portfolio(cash=0.0)
+    pfmod.apply_deposit(pf, 1000.0, on="2026-10-01")
+    pfmod.apply_buy(pf, "INF", 1, 40.0, on="2026-10-02", lane="inflection",
+                    kill_criteria=["Net debt above 3x EBITDA", "Book-to-bill below 1 for two quarters",
+                                   "Backlog falls year on year"])
+    pfmod.apply_buy(pf, "HRB", 1, 40.0, on="2026-10-02", kill_criteria=["Dividend cut", "Demand drops"])
+    pfmod.save(paths, pf)
+    monkeypatch.setattr(watch.market_data, "latest_price", lambda t: 40.0)
+    monkeypatch.setattr(watch.market_data, "closes", lambda t: [])
+    _, out = watch.run(paths, DEFAULTS, notify=False)
+    text = out.read_text()
+    assert ("- INF: 1. Backlog falls year on year; 2. Net debt above 3x EBITDA; "
+            "3. Book-to-bill below 1 for two quarters") in text
+    assert "- HRB: 1. Dividend cut; 2. Demand drops" in text

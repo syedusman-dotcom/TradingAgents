@@ -401,10 +401,11 @@ def _run(paths: Paths, cfg: dict, *, yes: bool, dry_run: bool, today: str | None
             currency=fx[r.ticker][0],
             fx_to_usd=fx[r.ticker][1],
             lane=parse.lane(r.decision),
+            lane_unresolved=bool(parse.section(r.decision, "Unresolved Checks")),
         ))
     reviewed = {d.ticker for d in decisions}
     others = [(p.ticker, _holding_value(p, prices.get(p.ticker), fx[p.ticker]),
-               _sector(paths, p.ticker, screen.get(p.ticker)))
+               _sector(paths, p.ticker, screen.get(p.ticker)), p.lane)
               for p in pf.positions if p.ticker not in reviewed]
     actions, summary = plan(decisions, pf.cash, cfg["sizing"], others)
     failures = [f"{r.ticker}: {r.error}" for r in results if r.error]
@@ -505,6 +506,7 @@ def _record_ratings(paths: Paths, pf: pfmod.Portfolio, actions, today: str,
         held.last_rating = a.rating
         held.last_review_date = today
         held.consecutive_underweight = a.consecutive_underweight
+        held.lane = a.lane
         if a.decision.intrinsic_value is not None:
             held.intrinsic_value_estimate = a.decision.intrinsic_value
         if a.decision.kill_criteria:

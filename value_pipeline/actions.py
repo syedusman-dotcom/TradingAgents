@@ -35,6 +35,7 @@ class Decision:
     currency: str | None = None             # the quote currency; None is taken as US dollars
     fx_to_usd: float | None = 1.0           # US dollars per quoted unit; None when the rate is unknown
     lane: str = "value"                     # value / compounder / inflection, from the decision
+    lane_unresolved: bool = False           # the lane claim failed the checks twice: size it as Hold
 
     @property
     def held(self) -> bool:
@@ -65,6 +66,7 @@ class Action:
     consecutive_underweight: int = 0
     flags: list[str] = field(default_factory=list)
     decision: Decision | None = None
+    lane: str = "value"
 
 
 # The agents' value may differ from the formula's for stated reasons; past this
@@ -88,9 +90,18 @@ def value_gap_flag(d: Decision) -> str | None:
     return flag
 
 
+UNRESOLVED_REASON = "lane claim unresolved: sized as Hold"
+
+
+def unresolved(d: Decision) -> bool:
+    """A buy rating resting on a lane claim that failed the checks twice: sized as Hold."""
+    return d.lane != "value" and d.lane_unresolved and d.rating in BUY_RATINGS
+
+
 def base_action(d: Decision) -> Action:
     """The rating rule for one ticker, before sizing."""
-    a = Action(ticker=d.ticker, held=d.held, rating=d.rating, action="KEEP", reason="", decision=d)
+    a = Action(ticker=d.ticker, held=d.held, rating=d.rating, action="KEEP", reason="", decision=d,
+               lane=d.lane)
     gap = value_gap_flag(d)
     if gap:
         a.flags.append(gap)
@@ -109,6 +120,8 @@ def base_action(d: Decision) -> Action:
                 a.action, a.reason = "SELL", "Underweight twice in a row: exit"
             else:
                 a.action, a.reason = "TRIM", "Underweight (first time): trim half; sell if it repeats"
+        elif unresolved(d):
+            a.reason = UNRESOLVED_REASON
         elif d.rating in BUY_RATINGS:
             a.reason = f"Rated {d.rating}: thesis intact"
         elif d.rating == "Hold":
@@ -121,7 +134,9 @@ def base_action(d: Decision) -> Action:
     else:
         above = (d.price is not None and d.intrinsic_value is not None and d.price > d.intrinsic_value) or \
             (d.margin_of_safety is not None and d.margin_of_safety < 0)
-        if d.trend == "FREEFALL":
+        if unresolved(d):
+            a.action, a.reason = "SKIP", UNRESOLVED_REASON
+        elif d.trend == "FREEFALL":
             a.action, a.reason = "SKIP", f"Rated {d.rating} but in FREEFALL: wait for BASING"
         elif d.rating in BUY_RATINGS and above:
             a.action, a.reason = "SKIP", f"Rated {d.rating} but the price is above the agents' own value: no margin of safety"
@@ -138,20 +153,21 @@ def target_weight(n_positions: int, sizing: dict) -> float:
 
 
 def plan(decisions: list[Decision], cash: float, sizing: dict,
-         others: list[tuple[str, float, str | None]] = ()) -> tuple[list[Action], dict]:
+         others: list[tuple] = ()) -> tuple[list[Action], dict]:
     """Apply the rules, then size buys and adds against cash.
 
     Cash for buys includes the estimated proceeds of the sells and trims in the
     same list, so place those first. Buys never exceed that cash. ``others`` are
-    the holdings not on this list, as (ticker, value, sector): they count toward
-    the total and the sector cap even though they were not reviewed.
+    the holdings not on this list, as (ticker, value, sector[, lane]): they count toward
+    the total, the sector cap and the lane cap even though they were not reviewed.
+    A lane buy is sized at ``lane_size_factor`` of a value buy and stops at ``lane_caps``.
     """
     actions = [base_action(d) for d in decisions]
     for a in actions:
         if a.decision.unsizable:
             a.flags.append(f"quoted in {a.decision.currency}: size by hand")
     held_value = sum(d.held_shares * (d.price_usd or 0.0) for d in decisions if d.held) + \
-        sum(v for _, v, _ in others)
+        sum(o[1] for o in others)
     total_value = cash + held_value
     cap_value = sizing["max_position_weight"] * total_value
 
@@ -171,23 +187,31 @@ def plan(decisions: list[Decision], cash: float, sizing: dict,
 
     # Money per sector after the sells and trims on this list, for the sector cap.
     sector_value: dict[str, float] = {}
-    for _, value, sector in others:
+    lane_value: dict[str, float] = {}
+    for o in others:
+        value, sector, lane = o[1], o[2], (o[3] if len(o) > 3 else "value")
         if sector:
             sector_value[sector] = sector_value.get(sector, 0.0) + value
+        lane_value[lane] = lane_value.get(lane, 0.0) + value
     for a in actions:
         d = a.decision
-        if d.held and d.sector and d.price_usd is not None:
-            sector_value[d.sector] = sector_value.get(d.sector, 0.0) + d.held_shares * d.price_usd - (
-                a.amount or 0.0 if a.action in ("SELL", "TRIM") else 0.0)
+        if d.held and d.price_usd is not None:
+            left = d.held_shares * d.price_usd - (a.amount or 0.0 if a.action in ("SELL", "TRIM") else 0.0)
+            if d.sector:
+                sector_value[d.sector] = sector_value.get(d.sector, 0.0) + left
+            lane_value[d.lane] = lane_value.get(d.lane, 0.0) + left
     sector_cap = sizing.get("max_sector_weight", 1.0) * total_value
+    lane_caps = sizing.get("lane_caps", {})
+    lane_factors = sizing.get("lane_size_factor", {})
 
     n_positions = sum(1 for a in actions if a.held and a.action != "SELL") + \
         sum(1 for a in actions if a.action == "BUY") + len(others)
     weight = target_weight(n_positions, sizing)
     target_value = weight * total_value
 
-    def size_factor(rating: str) -> float:
-        return 1.0 if rating == "Buy" else sizing["overweight_size_factor"]
+    def size_factor(d: Decision) -> float:
+        base = 1.0 if d.rating == "Buy" else sizing["overweight_size_factor"]
+        return base * (lane_factors.get(d.lane, 1.0) if d.lane != "value" else 1.0)
 
     # New Buys first, then adds to Buy-rated holdings, then the half-size Overweights;
     # within a group, the widest margin of safety first.
@@ -195,19 +219,22 @@ def plan(decisions: list[Decision], cash: float, sizing: dict,
     for a in actions:
         d = a.decision
         if a.action == "BUY":
-            wants.append((0 if d.rating == "Buy" else 2, a, target_value * size_factor(d.rating)))
-        elif a.held and a.action == "KEEP" and d.rating in BUY_RATINGS:
+            wants.append((0 if d.rating == "Buy" else 2, a, target_value * size_factor(d)))
+        elif a.held and a.action == "KEEP" and d.rating in BUY_RATINGS and not unresolved(d):
             if d.trend == "FREEFALL":
                 a.reason += "; no adding in FREEFALL"
                 continue
-            gap = target_value * size_factor(d.rating) - d.held_shares * (d.price_usd or 0.0)
+            gap = target_value * size_factor(d) - d.held_shares * (d.price_usd or 0.0)
             if gap > 0:
                 wants.append((1 if d.rating == "Buy" else 3, a, gap))
     wants.sort(key=lambda w: (w[0], -(w[1].decision.margin_of_safety if w[1].decision.margin_of_safety is not None else -1.0)))
 
     for _, a, wanted in wants:
         d = a.decision
-        room = sector_cap - sector_value.get(d.sector, 0.0) if d.sector else float("inf")
+        sector_room = sector_cap - sector_value.get(d.sector, 0.0) if d.sector else float("inf")
+        lane_room = lane_caps[d.lane] * total_value - lane_value.get(d.lane, 0.0) \
+            if d.lane != "value" and d.lane in lane_caps else float("inf")
+        room = min(sector_room, lane_room)
         amount = round(min(wanted, available, max(room, 0.0)), 2)
         capped = room < min(wanted, available)
         if d.unsizable:
@@ -218,8 +245,12 @@ def plan(decisions: list[Decision], cash: float, sizing: dict,
                 a.amount = amount
                 available -= amount
             continue
-        limit = f"{d.sector} at the {sizing.get('max_sector_weight', 1.0):.0%} sector cap" if capped \
-            else f"not enough cash (have {available:,.2f})"
+        if capped and lane_room <= sector_room:
+            limit = f"{d.lane} lane at its {lane_caps[d.lane]:.0%} cap"
+        elif capped:
+            limit = f"{d.sector} at the {sizing.get('max_sector_weight', 1.0):.0%} sector cap"
+        else:
+            limit = f"not enough cash (have {available:,.2f})"
         if amount < sizing["min_trade_amount"]:
             if a.action == "BUY":
                 a.action = "SKIP"
@@ -232,6 +263,7 @@ def plan(decisions: list[Decision], cash: float, sizing: dict,
         available -= amount
         if d.sector:
             sector_value[d.sector] = sector_value.get(d.sector, 0.0) + amount
+        lane_value[d.lane] = lane_value.get(d.lane, 0.0) + amount
         if capped:
             a.reason += f"; reduced, {limit}"
         if a.action == "KEEP":
@@ -246,7 +278,7 @@ def plan(decisions: list[Decision], cash: float, sizing: dict,
         "target_weight": weight,
         "cash_after": available,
         # Holdings not on this list that sit above the cap: nothing trims them here, so say so.
-        "over_cap": [(t, round(v / total_value, 4)) for t, v, _ in others
+        "over_cap": [(t, round(v / total_value, 4)) for t, v, *_ in others
                      if total_value > 0 and v - cap_value >= sizing["min_trade_amount"]],
     }
     return actions, summary

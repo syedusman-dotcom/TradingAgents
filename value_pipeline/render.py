@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+import re
 
 from markdown_it import MarkdownIt
 
@@ -75,12 +76,13 @@ def actions_markdown(date: str, actions: list[Action], summary: dict, *, reports
             elif a.action == "ADD" and a.amount:
                 what += f" {_money(a.amount)} ({a.shares:g} sh)"
             reason = a.reason + "".join(f" **⚑ {f}**" for f in a.flags)
-            lines.append(f"| {who(a.ticker)} | {a.rating} | {_cell(what)} | {_cell(reason)} | {_link(reports, a.ticker)} |")
+            rating = a.rating if a.lane == "value" else f"{a.rating} ({a.lane})"
+            lines.append(f"| {who(a.ticker)} | {rating} | {_cell(what)} | {_cell(reason)} | {_link(reports, a.ticker)} |")
     else:
         lines.append("No holdings yet.")
     lines.append("")
 
-    criteria = [(a.ticker, a.decision.kill_criteria) for a in held if a.decision and a.decision.kill_criteria]
+    criteria = [(a.ticker, demand_first(a.decision.kill_criteria, a.lane)) for a in held if a.decision and a.decision.kill_criteria]
     if criteria:
         lines += ["### Kill criteria", ""]
         lines += [f"- {t}: {numbered(c)}" for t, c in criteria]
@@ -88,14 +90,14 @@ def actions_markdown(date: str, actions: list[Action], summary: dict, *, reports
 
     lines += ["## New buys", ""]
     if new:
-        lines += ["| Ticker | Rating | Amount | Shares | Value (agents / formula) | Margin of safety | Expected return | F-Score | Trend | Report |",
-                  "|---|---|---|---|---|---|---|---|---|---|"]
+        lines += ["| Ticker | Rating | Lane | Amount | Shares | Value (agents / formula) | Margin of safety | Expected return | F-Score | Trend | Report |",
+                  "|---|---|---|---|---|---|---|---|---|---|---|"]
         for a in new:
             d = a.decision
             shares = "–" if a.shares is None else f"{a.shares:g}"
             values = f"{_money(d.intrinsic_value)} / {_money(d.formula_value)}"
             flags = "".join(f" **⚑ {f}**" for f in a.flags)
-            lines.append(f"| {who(a.ticker)}{flags} | {a.rating} | {_money(a.amount)} | {shares} | {values} | {_pct(d.margin_of_safety)} | {_er(d.expected_return, '–')} | "
+            lines.append(f"| {who(a.ticker)}{flags} | {a.rating} | {a.lane} | {_money(a.amount)} | {shares} | {values} | {_pct(d.margin_of_safety)} | {_er(d.expected_return, '–')} | "
                          f"{d.fscore if d.fscore is not None else '–'} | {d.trend or '–'} | {_link(reports, a.ticker)} |")
     else:
         lines.append("No new buys this month.")
@@ -103,7 +105,7 @@ def actions_markdown(date: str, actions: list[Action], summary: dict, *, reports
 
     if skipped:
         lines += ["## Candidates not bought", ""]
-        lines += [f"- {who(a.ticker)}: {a.reason}{_entry_note(a.decision)}{_er_note(a.decision)} "
+        lines += [f"- {who(a.ticker)}: {a.reason}{_lane_note(a)}{_entry_note(a.decision)}{_er_note(a.decision)} "
                   f"({_link(reports, a.ticker)})" for a in skipped]
         lines.append("")
     if knives:
@@ -120,6 +122,20 @@ def _er(x: float | None, missing: str = "") -> str:
 def numbered(items: list[str]) -> str:
     """Criteria on one line: ``1. first; 2. second``."""
     return "; ".join(f"{i}. {c}" for i, c in enumerate(items, 1))
+
+
+_DEMAND = re.compile(r"orders|backlog|capex|demand|bookings", re.I)
+
+
+def demand_first(items: list[str], lane: str) -> list[str]:
+    """An inflection holding's kill criteria with the demand ones first (the rest keep their order)."""
+    if lane != "inflection":
+        return list(items)
+    return [c for c in items if _DEMAND.search(c)] + [c for c in items if not _DEMAND.search(c)]
+
+
+def _lane_note(a) -> str:
+    return "" if a.lane == "value" else f" — lane {a.lane}"
 
 
 def _entry_note(d) -> str:

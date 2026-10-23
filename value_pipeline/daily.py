@@ -14,7 +14,7 @@ from pathlib import Path
 
 from value_pipeline import lock, market_data, metrics, portfolio as pfmod, review, watch
 from value_pipeline.config import Paths
-from value_pipeline.render import numbered
+from value_pipeline.render import demand_first, numbered
 
 log = logging.getLogger(__name__)
 
@@ -122,7 +122,7 @@ def _inputs(paths: Paths, cfg: dict, today: date):
                          "entry_price": p.entry_price, "next_earnings_date": p.next_earnings_date,
                          "last_review_date": p.last_review_date, "last_price": row.get("price"),
                          "last_trend": row.get("trend")})
-        criteria[p.ticker] = p.kill_criteria
+        criteria[p.ticker] = demand_first(p.kill_criteria, p.lane)
         if _iso(p.last_review_date):
             last_review[p.ticker] = p.last_review_date
     max_age = cfg["watch"].get("max_rating_age_days", 120)
