@@ -128,3 +128,13 @@ class GetInstrumentContextFromStateTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@pytest.mark.unit
+def test_instrument_context_carries_the_pipeline_note():
+    from tradingagents.agents.context import build_instrument_context
+
+    note = "lane hint dislocation; 3-month move -43%"
+    context = build_instrument_context("ADBE", identity={"company_name": "Adobe Inc."}, note=note)
+    assert context.endswith(f" Pipeline note: {note}")
+    assert "Pipeline note" not in build_instrument_context("ADBE")

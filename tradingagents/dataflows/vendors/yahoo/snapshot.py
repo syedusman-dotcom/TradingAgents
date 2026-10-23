@@ -85,6 +85,34 @@ def _earnings_line(symbol: str, as_of_date: str) -> str:
     return f"- Next earnings: {found} ({days} days)"
 
 
+def _signed_pct(x: float) -> str:
+    return f"{x:+.1%}".replace("-", "−")
+
+
+def _move_lines(df: pd.DataFrame) -> list[str]:
+    """The 3-month move (on the last close at least three calendar months before the latest row)
+    and the distance from the 52-week closing high, from the whole frame (not the look-back
+    window), so a dislocation reads the same in every report."""
+    latest_date, price = df["Date"].iloc[-1], float(df["Close"].iloc[-1])
+    closes = df.dropna(subset=["Close"])
+    before = closes[closes["Date"] <= latest_date - pd.DateOffset(months=3)]
+    if before.empty or not float(before["Close"].iloc[-1]) > 0:
+        move = "- 3-month move: n/a (under three months of prices)"
+    else:
+        then = before.iloc[-1]
+        move = (f"- 3-month move: {_signed_pct(price / float(then['Close']) - 1)} "
+                f"(close {float(then['Close']):.2f} on {_fmt(then['Date'])})")
+    start = latest_date - pd.DateOffset(weeks=52)
+    if closes["Date"].iloc[0] > start:
+        high = "- From 52-week high: n/a (under a year of prices)"
+    else:
+        year = closes[closes["Date"] > start]
+        top = year.loc[year["Close"].idxmax()]
+        high = (f"- From 52-week high: {_signed_pct(price / float(top['Close']) - 1)} "
+                f"(high {float(top['Close']):.2f} on {_fmt(top['Date'])})")
+    return [move, high]
+
+
 def build_verified_market_snapshot(
     symbol: str,
     as_of_date: str,
@@ -118,6 +146,7 @@ def build_verified_market_snapshot(
         f"- Requested analysis date: {as_of_date}",
         f"- Latest trading row used: {latest_date}",
         _earnings_line(symbol, as_of_date),
+        *_move_lines(df),
         "- Rows after the requested analysis date are excluded before verification.",
         "",
         "### Latest verified OHLCV row",

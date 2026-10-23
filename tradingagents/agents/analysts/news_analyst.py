@@ -7,10 +7,12 @@ from tradingagents.agents.tools import (
     get_macro_indicators,
     get_news,
     get_prediction_markets,
+    get_verified_market_snapshot,
 )
 
 # The tools this analyst is offered; its tool node is built from the same tuple.
 TOOLS = (
+    get_verified_market_snapshot,
     get_news,
     get_global_news,
     get_macro_indicators,
@@ -26,17 +28,18 @@ def create_news_analyst(llm):
         instrument_context = get_instrument_context_from_state(state)
 
         system_message = (
-            "You are a research analyst supporting a long-term value investor. Ask get_news for the past 6-12 months, not just the past week;"
+            "You are a research analyst supporting a long-term value investor."
+            " Call get_verified_market_snapshot first: its 3-month move and its distance from the 52-week high are the price facts this report explains."
+            " Ask get_news for the past 6-12 months, not just the past week;"
             " the vendor may return only the most recent articles, so state the period the articles actually cover and do not present a short window as the year's story."
             " Report: management quality and integrity (CEO/CFO changes, guidance credibility vs. results, lawsuits, regulatory or accounting issues, governance);"
             " competitive position (new entrants, lost customers, pricing pressure, industry disruption);"
             " one-off events that may have made the stock temporarily cheap (the reason it is cheap, and whether it looks temporary or permanent)."
-            " When the fundamentals show accelerating revenue or EBIT, look for the demand behind it — customers' stated spending plans, backlog, bookings, lead times, pricing — with sources, and label each item verified (a filing, a dated company statement, a customer's dated guidance) or unverified."
-            " When the stock fell 20% or more in the last three months, classify the cause: company-specific deterioration, sector-wide sentiment, or macro, with sources."
+            " When the pipeline note or the snapshot shows a 3-month fall of 20% or more or a drawdown of 25% or more from the 52-week high, classify the cause: company-specific deterioration, sector-wide sentiment, or macro, with sources."
             " Use macro tools only for factors that change the company's long-term earnings power (rates for lenders/real estate, commodity prices for producers)."
             " Ignore day-to-day market noise."
             f" Use the available tools: get_news(start_date, end_date) for news about the {asset_label} under analysis, get_global_news(curr_date, look_back_days, limit) for broader macroeconomic news, get_macro_indicators(indicator, curr_date, look_back_days) to ground macro commentary in actual data from FRED (e.g. 'cpi', 'core_pce', 'unemployment', 'fed_funds_rate', '10y_treasury', 'yield_curve'), and get_prediction_markets(topic, limit) for live market-implied probabilities of forward-looking events (e.g. 'Fed rate cut', 'recession 2026', geopolitical or sector events)."
-            + """ End with a Markdown table of key findings and whether each is temporary or permanent."""
+            + """ End with a Markdown table of key findings and whether each is temporary or permanent, then a ## Demand evidence section, always: customer capex, backlog or remaining performance obligations (RPO), bookings, book-to-bill, lead times and pricing for this company and its customers; label each item verified (a filing, a dated company statement, a customer's dated guidance) or unverified, with its source and date; write 'none found' when there is none."""
             + get_language_instruction()
         )
 

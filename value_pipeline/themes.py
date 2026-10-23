@@ -105,7 +105,10 @@ def candidates(paths: Paths, cfg: dict, ideas: list[ThemeIdea],
     cap = int(cfg.get("lanes", {}).get("inflection_candidates", 3))
     screen = review._screen_rows(paths)
     passing, skipped = [], []
-    for ticker in dict.fromkeys(i.ticker for i in ideas):
+    theme_of = {}
+    for idea in ideas:
+        theme_of.setdefault(idea.ticker, idea.theme)
+    for ticker in theme_of:
         if ticker in owned:
             continue
         try:
@@ -118,7 +121,9 @@ def candidates(paths: Paths, cfg: dict, ideas: list[ThemeIdea],
         elif not _inflecting(row):
             skipped.append(f"{ticker}: not inflecting ({_figures(row)})")
         else:
-            passing.append({**row, "lane_hint": "inflection"})
+            others = row.get("hints") if isinstance(row.get("hints"), str) else ""
+            hints = ";".join(dict.fromkeys(["inflection", *(h for h in others.split(";") if h)]))
+            passing.append({**row, "lane_hint": "inflection", "hints": hints, "theme": theme_of[ticker]})
     passing.sort(key=lambda r: (_num(r, "expected_return") is None, -(_num(r, "expected_return") or 0.0)))
     kept = passing[:cap]
     skipped += [f"{r['ticker']}: over the cap of {cap} inflection candidates" for r in passing[cap:]]

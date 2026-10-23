@@ -92,17 +92,46 @@ def _company_name(ticker: str) -> str | None:
         return None
 
 
-def run_agents(ta, ticker: str, day: str, portfolio_ctx, out_dir: Path, tally=None) -> RunResult:
-    """One TradingAgents run, retried once; a second failure is reported, not raised."""
+def _present(row: dict, key: str) -> float | None:
+    v = row.get(key)
+    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and v == v else None
+
+
+def pipeline_note(row: dict | None) -> str:
+    """The screen's figures for a ticker, for every agent's instrument context: its lane hints
+    (and theme), the 3-month move, the drawdown from the 52-week high, TTM EBIT on the 5-year
+    average and the revenue acceleration; the missing ones left out, "" when none is known.
+    Analysts run in parallel, so the news analyst learns of a hint or a fall only here."""
+    if not row:
+        return ""
+    hints = row.get("hints") if isinstance(row.get("hints"), str) and row.get("hints") else _hint(row)
+    parts = []
+    if hints:
+        theme = row.get("theme")
+        parts.append(f"lane hint {', '.join(hints.split(';'))}"
+                     + (f" (theme: {theme})" if isinstance(theme, str) and theme else ""))
+    figures = (("move_3m", lambda x: f"3-month move {x:+.0%}"),
+               ("drawdown_from_high", lambda x: f"drawdown from the 52-week high {x:+.0%}"),
+               ("ttm_vs_5y_ebit", lambda x: f"TTM EBIT {x:.2f}× the 5-year average"),
+               ("revenue_acceleration", lambda x: f"revenue acceleration {x * 100:+.0f} points"))
+    parts += [fmt(v) for key, fmt in figures if (v := _present(row, key)) is not None]
+    return "; ".join(parts) + "." if parts else ""
+
+
+def run_agents(ta, ticker: str, day: str, portfolio_ctx, out_dir: Path, tally=None,
+               note: str = "") -> RunResult:
+    """One TradingAgents run, retried once; a second failure is reported, not raised. ``note``
+    (``pipeline_note``) is appended to the instrument context every agent reads."""
     from tradingagents.agents.rating import is_review
 
     error = None
     if tally:
         tally.reset()  # once: a failed attempt's tokens were still spent
     name = _company_name(ticker)
+    extra = {"context_note": note} if note else {}
     for attempt in (1, 2):
         try:
-            final_state, rating = ta.propagate(ticker, day, portfolio=portfolio_ctx)
+            final_state, rating = ta.propagate(ticker, day, portfolio=portfolio_ctx, **extra)
             ta.save_reports(final_state, ticker, save_path=out_dir / ticker, html=True)
             used = tally.snapshot() if tally else {}
             return RunResult(ticker, "REVIEW" if is_review(rating) else rating,
@@ -425,7 +454,7 @@ def _run(paths: Paths, cfg: dict, *, yes: bool, dry_run: bool, today: str | None
         ctx = pf.to_context()
         for i, t in enumerate(tickers, 1):
             print(f"[{i}/{len(tickers)}] {t}...", flush=True)
-            results.append(run_agents(ta, t, today, ctx, out_dir, tally))
+            results.append(run_agents(ta, t, today, ctx, out_dir, tally, note=pipeline_note(screen_row.get(t))))
         usage = {key: sum(getattr(r, key) for r in results) + scan_usage.get(key, 0)
                  for key in ("tokens_in", "tokens_out", "nominal_cost_usd")}
         usage = {**usage,

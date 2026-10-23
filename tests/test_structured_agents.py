@@ -837,6 +837,8 @@ def test_pm_prompt_describes_the_three_lanes():
         "no more than 1.15× the worksheet base",
         "TTM EBIT at least 1.5× its five-year average",
         "a bear case (growth stops now) of at least 30%",
+        "When the instrument context's pipeline note names a dislocation hint, the Investment Thesis "
+        "states the news report's cause classification of the fall",
         "Do not propose position sizes, starter positions or tranches",
     ):
         assert sentence in flat
@@ -869,14 +871,18 @@ def test_news_analyst_briefs_the_demand_evidence_and_the_cause_of_a_fall():
     source = " ".join(inspect.getsource(news_analyst).replace('"', " ").split())
     source = " ".join(source.split())
     for sentence in (
-        "When the fundamentals show accelerating revenue or EBIT, look for the demand behind it",
-        "customers' stated spending plans, backlog, bookings, lead times, pricing",
+        "Call get_verified_market_snapshot first",
+        "a ## Demand evidence section, always",
+        "customer capex, backlog or remaining performance obligations (RPO), bookings, book-to-bill, "
+        "lead times and pricing",
         "label each item verified (a filing, a dated company statement, a customer's dated guidance) "
-        "or unverified.",
-        "When the stock fell 20% or more in the last three months, classify the cause: "
-        "company-specific deterioration, sector-wide sentiment, or macro, with sources.",
+        "or unverified, with its source and date; write 'none found' when there is none.",
+        "When the pipeline note or the snapshot shows a 3-month fall of 20% or more or a drawdown of "
+        "25% or more from the 52-week high, classify the cause: company-specific deterioration, "
+        "sector-wide sentiment, or macro, with sources.",
     ):
         assert sentence in source
+    assert "get_verified_market_snapshot" in [t.name for t in news_analyst.TOOLS]
 
 
 @pytest.mark.unit

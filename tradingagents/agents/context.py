@@ -120,8 +120,13 @@ def build_instrument_context(
     identity: Mapping[str, str] | None = None,
     trade_date: str | None = None,
     earnings_date: str | None = None,
+    note: str = "",
 ) -> str:
     """Describe the exact instrument so agents preserve identity and ticker.
+
+    ``note`` (the value pipeline's screen figures for this ticker: its lane hint, price moves and
+    inflection numbers) is appended as ``Pipeline note: …`` for every agent, the analysts running
+    in parallel included.
 
     When ``identity`` is provided (resolved deterministically via
     :func:`resolve_instrument_identity`), the company name and business
@@ -182,6 +187,8 @@ def build_instrument_context(
             " Treat it as a crypto asset rather than a company, and do not "
             "assume company fundamentals are available."
         )
+    if note:
+        context += f" Pipeline note: {note}"
     return context
 
 

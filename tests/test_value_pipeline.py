@@ -639,6 +639,41 @@ class _FlakyGraph:
 
 
 @pytest.mark.unit
+def test_run_agents_passes_the_pipeline_note(tmp_path):
+    from value_pipeline import review
+
+    notes = []
+
+    class Graph:
+        def propagate(self, ticker, day, portfolio=None, context_note=""):
+            notes.append(context_note)
+            return {"final_trade_decision": "**Rating**: Hold"}, "Hold"
+
+        def save_reports(self, state, ticker, save_path, html):
+            pass
+
+    review.run_agents(Graph(), "ADBE", "2026-10-23", None, tmp_path, note="lane hint dislocation")
+    review.run_agents(Graph(), "ADBE", "2026-10-23", None, tmp_path)
+    assert notes == ["lane hint dislocation", ""]
+
+
+@pytest.mark.unit
+def test_pipeline_note_from_the_screen_row():
+    from value_pipeline import review
+
+    row = {"lane_hint": "dislocation", "hints": "compounder;dislocation", "move_3m": -0.432,
+           "drawdown_from_high": -0.451, "ttm_vs_5y_ebit": 1.314, "revenue_acceleration": 0.123}
+    assert review.pipeline_note(row) == (
+        "lane hint compounder, dislocation; 3-month move -43%; drawdown from the 52-week high -45%; "
+        "TTM EBIT 1.31× the 5-year average; revenue acceleration +12 points.")
+    theme = {"lane_hint": "inflection", "theme": "AI infrastructure", "move_3m": float("nan"),
+             "revenue_acceleration": None}
+    assert review.pipeline_note(theme) == "lane hint inflection (theme: AI infrastructure)."
+    assert review.pipeline_note({"lane_hint": "", "hints": float("nan")}) == ""
+    assert review.pipeline_note(None) == ""
+
+
+@pytest.mark.unit
 def test_run_agents_usage_counts_a_failed_first_attempt(tmp_path):
     from value_pipeline import review
 
