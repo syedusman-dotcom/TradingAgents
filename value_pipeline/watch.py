@@ -143,17 +143,20 @@ def new_ideas(paths: Paths, owned: set[str], today: str) -> tuple[list[str], dic
         return lines + ["No screen yet; run `screen` for new ideas."], None
     hinted = {t: r["lane_hint"] for t, r in rows.items()}
     previous = _previous_hinted(paths, today)
-    if previous is None:
-        lines.append("Every hinted name in the latest screen (first watch).")
     fresh = [r for t, r in rows.items()
              if t not in owned and (previous is None or t not in previous)]
+    if previous is None and fresh:
+        lines.append("Every hinted name in the latest screen (first watch).")
     for r in fresh:
         name = r.get("name") if isinstance(r.get("name"), str) else ""
         hints = r.get("hints") if isinstance(r.get("hints"), str) and r["hints"] else r["lane_hint"]
         lines.append(f"- {r['ticker']}{f' ({name})' if name else ''}: {hints.replace(';', ', ')} — "
                      f"drawdown {_pct(r.get('drawdown_from_high'))} / 1m {_pct(r.get('move_1m'))} — "
                      f"expected return {_pct(r.get('expected_return'))}/yr")
-    if not fresh:
+    if not fresh and previous is None:
+        lines.append("No name in the latest screen carries a lane hint (a screen from before the "
+                     "lane hints has none: run `screen` again).")
+    elif not fresh:
         lines.append("No new ideas since the last watch.")
     return lines, hinted
 

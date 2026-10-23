@@ -1572,6 +1572,24 @@ def test_watch_new_ideas_lists_only_new_hints(tmp_path, monkeypatch):
 
 
 @pytest.mark.unit
+def test_first_watch_on_a_screen_without_hints_says_so(tmp_path, monkeypatch):
+    from value_pipeline import watch
+
+    paths = Paths(tmp_path)
+    pf = pfmod.Portfolio(cash=0.0)
+    pfmod.apply_deposit(pf, 1000.0, on="2026-10-01")
+    pfmod.save(paths, pf)
+    monkeypatch.setattr(watch.market_data, "latest_price", lambda t: 40.0)
+    monkeypatch.setattr(watch.market_data, "closes", lambda t: [])
+    paths.screens.mkdir(parents=True, exist_ok=True)
+    (paths.screens / "screen_2026-10-20.csv").write_text("ticker,name\nAAA,AAA Corp\n")   # pre-lane screen
+    _, out = watch.run(paths, DEFAULTS, notify=False, today="2026-10-24")
+    section = out.read_text().split("## New ideas")[1]
+    assert "(first watch)" not in section and "No new ideas since" not in section
+    assert "No name in the latest screen carries a lane hint" in section
+
+
+@pytest.mark.unit
 def test_dislocation_at_the_high_gives_no_hint():
     d = metrics.dislocation([100.0] * 300, 110.0, 22.0, 100.0, 20.0, [])
     assert d["drawdown_from_high"] == pytest.approx(0.0) and d["move_1m"] == pytest.approx(0.0)
