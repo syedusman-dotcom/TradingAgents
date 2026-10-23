@@ -13,6 +13,7 @@ from tradingagents.agents.rating import run_rating
 from tradingagents.dataflows.config import run_config, run_config_context, set_config
 from tradingagents.dataflows.date_window import get_current_date, is_historical
 from tradingagents.dataflows.symbols import safe_ticker_component
+from tradingagents.dataflows.vendors.yahoo.fundamentals import next_earnings_date
 from tradingagents.default_config import DEFAULT_CONFIG
 from tradingagents.llm_clients import create_tier_client, tier_provider
 from tradingagents.memory import TradingMemoryLog, settlement
@@ -125,7 +126,13 @@ class TradingAgentsGraph:
         graph regardless of entry point.
         """
         identity = resolve_instrument_identity(ticker)
-        return build_instrument_context(ticker, asset_type, identity, trade_date)
+        earnings = None
+        if asset_type != "crypto":
+            try:
+                earnings = next_earnings_date(ticker)
+            except Exception:  # noqa: BLE001 - a missing date must never break a run
+                earnings = None
+        return build_instrument_context(ticker, asset_type, identity, trade_date, earnings)
 
     def _memory_as_of(self, trade_date) -> str | None:
         """Point-in-time cutoff for past-context lessons (#1251).

@@ -3,6 +3,7 @@
 import functools
 import logging
 from collections.abc import Mapping
+from datetime import date
 from typing import Any
 
 from tradingagents.dataflows.date_window import is_historical
@@ -104,11 +105,21 @@ def _identity(ticker: str) -> dict:
     return identity
 
 
+def _days_until(day: str, trade_date: str | None) -> int | None:
+    """Whole days from ``trade_date`` (default today) to ``day``, or None when unparseable."""
+    try:
+        start = date.fromisoformat(trade_date) if trade_date else date.today()
+        return (date.fromisoformat(day) - start).days
+    except ValueError:
+        return None
+
+
 def build_instrument_context(
     ticker: str,
     asset_type: str = "stock",
     identity: Mapping[str, str] | None = None,
     trade_date: str | None = None,
+    earnings_date: str | None = None,
 ) -> str:
     """Describe the exact instrument so agents preserve identity and ticker.
 
@@ -160,6 +171,11 @@ def build_instrument_context(
             "Do not substitute a different company or ticker unless a tool "
             "result explicitly disproves this resolved identity."
         )
+
+    if earnings_date and not is_crypto:
+        days = _days_until(earnings_date, trade_date)
+        if days is not None and days >= 0:
+            context += f" Next earnings report: {earnings_date} ({days} days away)."
 
     if is_crypto:
         context += (

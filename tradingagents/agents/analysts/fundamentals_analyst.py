@@ -44,6 +44,7 @@ def create_fundamentals_analyst(llm):
             " and `get_insider_transactions`. Call `get_financial_history` for up to 20 years of revenue, margins and"
             " cash flow, to judge the business across a full cycle, and `get_annual_report` for management's own account"
             " of its risks and results; cite it for events such as lawsuits, tax disputes or acquisitions."
+            " `get_financial_history` and `get_annual_report` answer only for US SEC filers; if they say so, do not retry them."
             " Never state a figure or event from memory as fact; if you rely on background knowledge, label it as unverified."
             "\n\nAnswer three questions with numbers:"
             "\n1. GOOD BUSINESS? Return on invested capital (EBIT / (net working capital + net fixed assets)) and ROE for each year;"

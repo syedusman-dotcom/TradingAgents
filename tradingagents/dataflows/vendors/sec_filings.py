@@ -24,6 +24,11 @@ from tradingagents.dataflows.vendors import sec_edgar
 _SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik}.json"
 _DOCUMENT_URL = "https://www.sec.gov/Archives/edgar/data/{cik}/{accession}/{document}"
 
+NOT_A_US_FILER = (
+    "Not a US SEC filer: use get_fundamentals, get_income_statement, get_balance_sheet and "
+    "get_cashflow (Yahoo) and the annual report on the company's investor site."
+)
+
 # Each section is cut to this many characters (~3,000 tokens) so the report
 # informs the analyst without crowding out the numbers.
 SECTION_CHARS = 12_000
@@ -46,6 +51,8 @@ SECTIONS = (
 
 def get_financial_history(ticker: str, as_of_date: str | None = None) -> str:
     """Every annual income, balance-sheet and cash-flow figure EDGAR has, as filed."""
+    if sec_edgar.cik_for(ticker) is None:
+        return NOT_A_US_FILER
     parts = [
         sec_edgar.get_income_statement(ticker, "annual", as_of_date),
         sec_edgar.get_balance_sheet(ticker, "annual", as_of_date),
@@ -121,7 +128,7 @@ def get_annual_report(ticker: str, as_of_date: str | None = None) -> str:
     as_of_date = as_of_date or datetime.now().strftime("%Y-%m-%d")
     cik = sec_edgar.cik_for(ticker)
     if cik is None:
-        raise NoMarketDataError(ticker, ticker, "not a US SEC filer")
+        return NOT_A_US_FILER
     filing = _latest_annual_filing(cik, as_of_date)
     if filing is None:
         raise NoMarketDataError(ticker, ticker, f"no 10-K filed by {as_of_date}")

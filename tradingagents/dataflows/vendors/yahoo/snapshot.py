@@ -11,12 +11,14 @@ claim. Deterministic, no LLM involved.
 from __future__ import annotations
 
 from collections.abc import Iterable
+from datetime import date
 
 import pandas as pd
 from stockstats import wrap
 
 from tradingagents.dataflows.errors import NoMarketDataError
 from tradingagents.dataflows.symbols import normalize_symbol
+from tradingagents.dataflows.vendors.yahoo.fundamentals import next_earnings_date
 from tradingagents.dataflows.vendors.yahoo.ohlcv import load_ohlcv
 
 # A fixed, common indicator set so the snapshot is the same shape every run.
@@ -63,6 +65,18 @@ def _fmt(value) -> str:
     return str(value)
 
 
+def _earnings_line(symbol: str, as_of_date: str) -> str:
+    """The next earnings date and days to it; a date before ``as_of_date`` is stale, so unknown."""
+    try:
+        found = next_earnings_date(symbol)
+        days = (date.fromisoformat(found) - date.fromisoformat(as_of_date)).days if found else -1
+    except Exception:  # noqa: BLE001
+        found, days = None, -1
+    if found is None or days < 0:
+        return "- Next earnings: unknown"
+    return f"- Next earnings: {found} ({days} days)"
+
+
 def build_verified_market_snapshot(
     symbol: str,
     as_of_date: str,
@@ -95,6 +109,7 @@ def build_verified_market_snapshot(
         "",
         f"- Requested analysis date: {as_of_date}",
         f"- Latest trading row used: {latest_date}",
+        _earnings_line(symbol, as_of_date),
         "- Rows after the requested analysis date are excluded before verification.",
         "",
         "### Latest verified OHLCV row",

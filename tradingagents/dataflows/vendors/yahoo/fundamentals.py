@@ -166,6 +166,16 @@ def get_insider_transactions(
     return f"# Insider Transactions data for {canonical}\n" + data.to_csv()
 
 
+def next_earnings_date(symbol: str) -> str | None:
+    """The next earnings date Yahoo lists for ``symbol`` as YYYY-MM-DD, or None when unknown."""
+    try:
+        calendar = yf_retry(lambda: yf.Ticker(normalize_symbol(symbol)).calendar) or {}
+        dates = calendar.get("Earnings Date") or []
+        return dates[0].isoformat()[:10] if dates else None
+    except Exception:  # noqa: BLE001 - a missing date must never break a run
+        return None
+
+
 def get_company_profile(ticker: str) -> dict:
     """Yahoo's current profile for ``ticker``: name, sector, industry and the like."""
     return yf_retry(lambda: yf.Ticker(normalize_symbol(ticker)).info) or {}

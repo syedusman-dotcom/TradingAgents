@@ -23,7 +23,11 @@ def _cell(text) -> str:
 
 def actions_markdown(date: str, actions: list[Action], summary: dict, *, reports: dict[str, str],
                      comparison: dict | None, cost: float, failures: list[str], dry_run: bool,
-                     knives: list[str] | None = None, usage: dict | None = None) -> str:
+                     knives: list[str] | None = None, usage: dict | None = None,
+                     names: dict[str, str] | None = None) -> str:
+    def who(ticker: str) -> str:
+        return f"{names[ticker]} ({ticker})" if names and names.get(ticker) else ticker
+
     held = [a for a in actions if a.held]
     new = [a for a in actions if not a.held and a.action == "BUY"]
     skipped = [a for a in actions if not a.held and a.action != "BUY"]
@@ -63,7 +67,7 @@ def actions_markdown(date: str, actions: list[Action], summary: dict, *, reports
             elif a.action == "ADD" and a.amount:
                 what += f" {_money(a.amount)} ({a.shares:g} sh)"
             reason = a.reason + "".join(f" **⚑ {f}**" for f in a.flags)
-            lines.append(f"| {a.ticker} | {a.rating} | {_cell(what)} | {_cell(reason)} | {_link(reports, a.ticker)} |")
+            lines.append(f"| {who(a.ticker)} | {a.rating} | {_cell(what)} | {_cell(reason)} | {_link(reports, a.ticker)} |")
     else:
         lines.append("No holdings yet.")
     lines.append("")
@@ -77,7 +81,7 @@ def actions_markdown(date: str, actions: list[Action], summary: dict, *, reports
             shares = "–" if a.shares is None else f"{a.shares:g}"
             values = f"{_money(d.intrinsic_value)} / {_money(d.formula_value)}"
             flags = "".join(f" **⚑ {f}**" for f in a.flags)
-            lines.append(f"| {a.ticker}{flags} | {a.rating} | {_money(a.amount)} | {shares} | {values} | {_pct(d.margin_of_safety)} | {_er(d.expected_return, '–')} | "
+            lines.append(f"| {who(a.ticker)}{flags} | {a.rating} | {_money(a.amount)} | {shares} | {values} | {_pct(d.margin_of_safety)} | {_er(d.expected_return, '–')} | "
                          f"{d.fscore if d.fscore is not None else '–'} | {d.trend or '–'} | {_link(reports, a.ticker)} |")
     else:
         lines.append("No new buys this month.")
@@ -85,7 +89,7 @@ def actions_markdown(date: str, actions: list[Action], summary: dict, *, reports
 
     if skipped:
         lines += ["## Candidates not bought", ""]
-        lines += [f"- {a.ticker}: {a.reason}{_er_note(a.decision)} ({_link(reports, a.ticker)})" for a in skipped]
+        lines += [f"- {who(a.ticker)}: {a.reason}{_er_note(a.decision)} ({_link(reports, a.ticker)})" for a in skipped]
         lines.append("")
     if knives:
         lines += ["## Watch: falling knives", "", "Ranked well in the screen but in FREEFALL: " + ", ".join(knives), ""]

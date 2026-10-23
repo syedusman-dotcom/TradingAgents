@@ -11,6 +11,7 @@ from tradingagents.dataflows.date_window import coverage_gap, in_window
 from tradingagents.dataflows.errors import VendorUnavailableError
 from tradingagents.dataflows.symbols import normalize_symbol
 from tradingagents.dataflows.vendors.yahoo.common import yf_retry
+from tradingagents.dataflows.vendors.yahoo.fundamentals import get_company_profile
 
 
 def _extract_article_data(article: dict) -> dict:
@@ -72,6 +73,21 @@ def _search_news(canonical: str, limit: int) -> tuple[list, bool]:
     return tagged, knows or bool(search.news)
 
 
+def _search_news_by_name(canonical: str, limit: int) -> tuple[str, list]:
+    """The company's name and Yahoo search's articles for it, for a listing Yahoo tags nothing with.
+
+    Fail-open: no name, or a failed search, is ([name or ""], []).
+    """
+    try:
+        name = (get_company_profile(canonical).get("longName") or "").strip()
+        if not name:
+            return "", []
+        search = yf_retry(lambda: yf.Search(name, news_count=limit))
+        return name, list(search.news or []) if search is not None else []
+    except Exception:  # noqa: BLE001 - the fallback must not turn "no news" into a crash
+        return "", []
+
+
 def _format_articles(articles: list[dict]) -> str:
     out = ""
     for data in articles:
@@ -104,6 +120,7 @@ def get_news_yfinance(
     canonical = normalize_symbol(ticker)
     resolved = "" if canonical == ticker else f" (resolved to {canonical})"
     subject = f"news for {ticker}{resolved}"
+    by_name = ""
     feed = yf_retry(lambda: yf.Ticker(canonical).get_news(count=article_limit)) or []
     articles = [_extract_article_data(a) for a in feed]
     if not feed:
@@ -113,7 +130,12 @@ def get_news_yfinance(
         if not found:
             # With the quote feed empty, no tagged article says nothing about the
             # company's news (Yahoo tags no article with most non-US listings).
-            raise VendorUnavailableError(f"Yahoo Finance has no news articles tagged {canonical}")
+            # Its name still finds articles, which the analyst must check.
+            name, found = _search_news_by_name(canonical, article_limit)
+            if not found:
+                raise VendorUnavailableError(f"Yahoo Finance has no news articles tagged {canonical}")
+            by_name = (f'Matched by company name "{name}" (Yahoo tags no articles with this '
+                       "listing): verify each item is about the company.\n\n")
         articles = [_extract_article_data(a) for a in found]
 
     start_dt = datetime.strptime(start_date, "%Y-%m-%d")
@@ -121,7 +143,7 @@ def get_news_yfinance(
     # Keep only articles within the requested window (look-ahead safe).
     in_range = [a for a in articles if in_window(a["pub_date"], start_dt, end_dt)]
     if in_range:
-        return f"## {ticker}{resolved} News, from {start_date} to {end_date}:\n\n{_format_articles(in_range)}"
+        return f"## {ticker}{resolved} News, from {start_date} to {end_date}:\n\n{by_name}{_format_articles(in_range)}"
 
     if not feed:
         return (f"<Yahoo Finance news unavailable for {start_date}..{end_date}: Yahoo search "

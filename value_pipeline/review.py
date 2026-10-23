@@ -44,6 +44,7 @@ class RunResult:
     error: str | None = None
     tokens_in: int = 0
     tokens_out: int = 0
+    name: str | None = None         # the company's name, for ACTIONS
     nominal_cost_usd: float = 0.0   # what the calls would have cost at API prices (measured, not the estimate)
 
 
@@ -77,6 +78,16 @@ def make_graph(analysts: list[str], statement_vendor: str | None = None, tally=N
                               callbacks=[tally] if tally else None)
 
 
+def _company_name(ticker: str) -> str | None:
+    """The company's name (cached by the graph's own lookup); None when Yahoo has none."""
+    from tradingagents.agents.context import resolve_instrument_identity
+
+    try:
+        return resolve_instrument_identity(ticker).get("company_name")
+    except Exception:  # noqa: BLE001 - a name is a nicety, never a reason to fail a run
+        return None
+
+
 def run_agents(ta, ticker: str, day: str, portfolio_ctx, out_dir: Path, tally=None) -> RunResult:
     """One TradingAgents run, retried once; a second failure is reported, not raised."""
     from tradingagents.agents.rating import is_review
@@ -84,6 +95,7 @@ def run_agents(ta, ticker: str, day: str, portfolio_ctx, out_dir: Path, tally=No
     error = None
     if tally:
         tally.reset()  # once: a failed attempt's tokens were still spent
+    name = _company_name(ticker)
     for attempt in (1, 2):
         try:
             final_state, rating = ta.propagate(ticker, day, portfolio=portfolio_ctx)
@@ -92,13 +104,13 @@ def run_agents(ta, ticker: str, day: str, portfolio_ctx, out_dir: Path, tally=No
             return RunResult(ticker, "REVIEW" if is_review(rating) else rating,
                              final_state.get("final_trade_decision", ""), f"{ticker}/complete_report.html",
                              tokens_in=used.get("tokens_in", 0), tokens_out=used.get("tokens_out", 0),
-                             nominal_cost_usd=used.get("nominal_cost_usd", 0.0))
+                             nominal_cost_usd=used.get("nominal_cost_usd", 0.0), name=name)
         except Exception as exc:  # noqa: BLE001 - one failed ticker must not stop the review
             error = f"{type(exc).__name__}: {exc}"
             log.warning("%s run %d failed: %s", ticker, attempt, error)
     used = tally.snapshot() if tally else {}
     return RunResult(ticker, "REVIEW", error=error, tokens_in=used.get("tokens_in", 0),
-                     tokens_out=used.get("tokens_out", 0), nominal_cost_usd=used.get("nominal_cost_usd", 0.0))
+                     tokens_out=used.get("tokens_out", 0), nominal_cost_usd=used.get("nominal_cost_usd", 0.0), name=name)
 
 
 _FAKE_HELD = ("Buy", "Hold", "Underweight", "Sell", "Overweight")
@@ -294,13 +306,13 @@ def _run(paths: Paths, cfg: dict, *, yes: bool, dry_run: bool, today: str | None
 
     md = render.actions_markdown(today, actions, summary, reports={r.ticker: r.report for r in results if r.report},
                                  comparison=comparison, cost=cost, failures=failures, dry_run=dry_run, knives=knives,
-                                 usage=usage)
+                                 usage=usage, names={r.ticker: r.name for r in results if r.name})
     (out_dir / "ACTIONS.md").write_text(md, encoding="utf-8")
     (out_dir / "ACTIONS.html").write_text(render.actions_html(md, f"Value review {today}"), encoding="utf-8")
     # Written whole: the website reads this file while a review may be finishing.
     tmp = out_dir / "results.json.tmp"
     tmp.write_text(json.dumps([
-        {"ticker": r.ticker, "rating": r.rating, "error": r.error, "report": r.report,
+        {"ticker": r.ticker, "name": r.name, "rating": r.rating, "error": r.error, "report": r.report,
          "tokens_in": r.tokens_in, "tokens_out": r.tokens_out, "nominal_cost_usd": round(r.nominal_cost_usd, 4),
          "intrinsic_value": parse.intrinsic_value(r.decision), "margin_of_safety": parse.margin_of_safety(r.decision),
          "thesis": parse.thesis_summary(r.decision)}
