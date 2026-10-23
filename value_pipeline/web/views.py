@@ -14,16 +14,8 @@ from value_pipeline.config import Paths
 
 
 def next_review_date(today: date) -> date:
-    """The first Saturday of this month if it is still ahead (or today), else next month's."""
-    def first_saturday(year: int, month: int) -> date:
-        d = date(year, month, 1)
-        return d + timedelta(days=(5 - d.weekday()) % 7)
-
-    this = first_saturday(today.year, today.month)
-    if today <= this:
-        return this
-    year, month = (today.year + 1, 1) if today.month == 12 else (today.year, today.month + 1)
-    return first_saturday(year, month)
+    """The next Saturday (today, if today is a Saturday): the full review runs weekly."""
+    return today + timedelta(days=(5 - today.weekday()) % 7)
 
 
 def latest_watch(paths: Paths) -> tuple[str, str] | None:

@@ -1,6 +1,6 @@
 # Value pipeline
 
-A monthly routine on top of the value-investing TradingAgents agents (see `VALUE_INVESTING.md`):
+A weekly routine on top of the value-investing TradingAgents agents (see `VALUE_INVESTING.md`):
 
 1. **Screen** the S&P 500 + S&P 400 for good, cheap, financially healthy businesses (Magic Formula ranked).
 2. **Review**: run the agents on every stock you own and on the top new candidates.
@@ -14,7 +14,7 @@ All commands run from the repo root:
 uv run python -m value_pipeline <command>
 ```
 
-## Monthly routine
+## Weekly routine
 
 ```bash
 uv run python -m value_pipeline run-all                 # screen + theme scan + review (asks before spending)
@@ -215,9 +215,9 @@ At most 3 names are re-reviewed per day (`daily.max_reviews`); the rest wait unt
 
 To run it by hand without spending anything: `uv run python -m value_pipeline daily --dry-run` (it fetches prices and lists which triggers fired, but re-runs no agents). Add `--no-notify` to skip the macOS notification, or `--max N` to change the cap for one run.
 
-## Scheduling (macOS: review on the first Saturday, watch on the others, daily check on weekdays)
+## Scheduling (macOS: full review every Saturday, daily check on weekdays)
 
-`scripts/monthly.sh` is started by launchd every Saturday and logs to `value_pipeline/data/logs/`. On the first Saturday of the month (the 1st to the 7th) it runs `run-all --yes`. On the other Saturdays it runs the free `watch`. launchd can't express "first Saturday", so the script checks the date. To run the full review by hand on any day: `scripts/monthly.sh --now`.
+`scripts/monthly.sh` (the name is historical) is started by launchd every Saturday and logs to `value_pipeline/data/logs/`. It runs `run-all --yes`: the screen, the theme and dislocation scans, and the agents on holdings and candidates, about 10 to 12 runs. The free `watch` is no longer scheduled; `scripts/monthly.sh --watch` runs it by hand, and the weekday daily check covers the days between. To run the full review by hand on any day: `scripts/monthly.sh`.
 
 1. Save this as `~/Library/LaunchAgents/local.value-pipeline.plist`, with your repo path:
 
@@ -239,7 +239,7 @@ To run it by hand without spending anything: `uv run python -m value_pipeline da
 
 2. Load it: `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.value-pipeline.plist`
    (remove with `launchctl bootout gui/$(id -u)/local.value-pipeline`).
-3. Test it now: `launchctl kickstart gui/$(id -u)/local.value-pipeline` (on a day after the 7th, edit the script or run `scripts/monthly.sh --now` instead).
+3. Test it now: `launchctl kickstart gui/$(id -u)/local.value-pipeline` (it will spend a full review; `scripts/monthly.sh --check` only tests access).
 
 **The Mac must be awake.** launchd runs a missed job when the Mac wakes from sleep, but not if it was shut down. To wake it automatically for the Saturday job alone: `sudo pmset repeat wakeorpoweron S 08:55:00` (the daily-check line below replaces it; `pmset repeat` holds only one schedule). Keep the repo out of `~/Desktop`, `~/Documents` and `~/Downloads`: macOS blocks launchd jobs from those folders ("Operation not permitted", exit 126). `scripts/monthly.sh --check` tests access without spending anything.
 

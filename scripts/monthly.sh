@@ -1,19 +1,19 @@
 #!/bin/bash
 # Value pipeline, started by launchd every Saturday. Never trades.
 #
-# First Saturday of the month (day 1-7): the full review. Screen the S&P 500 + 400,
-# run the agents on holdings and the top candidates, and write
-# value_pipeline/data/reports/<date>/ACTIONS.md. launchd cannot say "first
-# Saturday", so the date decides here.
-# Other Saturdays: the free weekly watch (prices only, no agents).
-#   --now    run the full review today, whatever the date
+# Every Saturday: the full review. Screen the S&P 500 + 400, run the agents on
+# holdings and the top candidates (plus lane hints and themes), and write
+# value_pipeline/data/reports/<date>/ACTIONS.md. Weekly since 2026-10-24; the
+# weekday daily check (scripts/daily.sh) covers the days between.
+#   --watch  run the free weekly watch instead (prices only, no agents)
+#   --now    kept for old habits: the same as no flag
 #   --check  only prove uv and the repo are reachable (spends nothing)
 set -euo pipefail
 
 mode=review
 if [ "${1:-}" = "--check" ]; then
   mode=check
-elif [ "${1:-}" != "--now" ] && [ "$(date +%d)" -gt 7 ]; then
+elif [ "${1:-}" = "--watch" ]; then
   mode=watch
 fi
 
@@ -38,6 +38,8 @@ case "$mode" in
     fi ;;
   review)
     if uv run python -m value_pipeline run-all --yes >> "$log" 2>&1; then
+      # The free watch after the review keeps the weekly "New ideas" list and its sidecar current.
+      uv run python -m value_pipeline watch --no-notify >> "$log" 2>&1 || true
       notify "Value review done" "Open the website or value_pipeline/data/reports for ACTIONS.md"
     else
       notify "Value review failed" "Nothing to act on. See $log"

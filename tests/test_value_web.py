@@ -53,12 +53,12 @@ def test_post_without_the_token_is_refused(tmp_path):
 
 @pytest.mark.unit
 @pytest.mark.parametrize("today, expected", [
-    (date(2026, 10, 11), date(2026, 11, 7)),    # after this month's first Saturday
-    (date(2026, 11, 2), date(2026, 11, 7)),
-    (date(2026, 11, 7), date(2026, 11, 7)),     # on the day itself
-    (date(2026, 12, 20), date(2027, 1, 2)),     # across the year end
+    (date(2026, 10, 24), date(2026, 10, 24)),   # a Saturday: today
+    (date(2026, 10, 25), date(2026, 10, 31)),   # Sunday: next Saturday
+    (date(2026, 10, 28), date(2026, 10, 31)),   # midweek
+    (date(2026, 12, 30), date(2027, 1, 2)),     # across the year end
 ])
-def test_next_review_is_the_first_saturday(today, expected):
+def test_next_review_is_the_next_saturday(today, expected):
     assert views.next_review_date(today) == expected
 
 
