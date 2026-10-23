@@ -3,6 +3,7 @@ its structured decision must pass. Pure functions, no I/O."""
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -79,3 +80,12 @@ def worksheet_excerpt(report: str) -> str:
         return ""
     end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith("## ")), len(lines))
     return "\n".join(lines[start:end]).strip()
+
+
+_BASE = re.compile(r"base \(3% growth\)\s*([\d,]+(?:\.\d+)?)")
+
+
+def worksheet_base(excerpt: str) -> float | None:
+    """The formula's base value from the worksheet's range line; None when it is absent."""
+    match = _BASE.search(excerpt)
+    return float(match.group(1).replace(",", "")) if match else None

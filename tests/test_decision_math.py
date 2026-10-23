@@ -3,7 +3,12 @@ rendered text the pipeline reads back."""
 
 import pytest
 
-from tradingagents.agents.decision_math import decision_checks, scenario_stats, worksheet_excerpt
+from tradingagents.agents.decision_math import (
+    decision_checks,
+    scenario_stats,
+    worksheet_base,
+    worksheet_excerpt,
+)
 from tradingagents.agents.schemas import (
     Adjustment,
     PortfolioDecision,
@@ -179,3 +184,12 @@ def test_decision_checks_flag_missing_scenarios_and_verdicts_except_on_a_sell():
     assert len(problems) == 2 and any("Cheap" in p for p in problems)
     assert decision_checks(_decision(rating=PortfolioRating.SELL, scenarios=None, good_business=None,
                                      entry_price=None), None, None) == []
+
+
+@pytest.mark.unit
+def test_worksheet_base_reads_the_base_value_or_none():
+    excerpt = ("## Valuation worksheet (per share; 5-year averages)\n"
+               "- **Range 60.00 to 95.00, base (3% growth) 1,080.33; margin of safety at base 30%**")
+    assert worksheet_base(excerpt) == pytest.approx(1080.33)
+    assert worksheet_base("## Valuation worksheet\nnothing here") is None
+    assert worksheet_base("") is None

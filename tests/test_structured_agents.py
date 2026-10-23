@@ -712,3 +712,19 @@ def test_new_decision_fields_carry_their_instructions():
     assert "unless the rating is Sell" in fields["entry_price"].description
     assert "3 to 6" in fields["kill_criteria"].description
     assert "Margin of safety" in fields["cheap"].description
+
+
+@pytest.mark.unit
+def test_pm_checks_the_bridge_against_the_worksheet_when_the_decision_omits_its_base():
+    from tests.test_decision_math import _decision
+
+    prompts = []
+    llm, structured = _sequenced_pm_llm(prompts, [_decision(formula_value=None)] * 2)
+    state = {**_make_pm_state(), "fundamentals_report":
+             "## Valuation worksheet (per share)\n- **Range 60.00 to 95.00, base (3% growth) 90.00; "
+             "margin of safety at base 30%**"}
+    result = create_portfolio_manager(llm)(state)
+
+    assert structured.invoke.call_count == 2
+    assert "sums to 65.67, not the price target 56.00" in prompts[1]
+    assert "**Unresolved Checks**:" in result["final_trade_decision"]

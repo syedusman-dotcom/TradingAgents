@@ -61,7 +61,9 @@ def record_buy(paths: Paths, ticker: str, shares: float, price: float, fees: flo
     found = review.latest_result(paths, ticker) if pf.position(ticker) is None else None
     held = pfmod.apply_buy(pf, ticker, shares, price, fees, on=on,
                            thesis=(found or {}).get("thesis", ""),
-                           intrinsic_value=(found or {}).get("intrinsic_value"))
+                           intrinsic_value=(found or {}).get("intrinsic_value"),
+                           kill_criteria=(found or {}).get("kill_criteria"),
+                           entry_price=(found or {}).get("entry_price"))
     before = pfmod.save(paths, pf)
     pfmod.append_trade(paths, {"date": on, "ticker": ticker, "action": "BUY", "shares": shares,
                                "price": price, "fees": fees, "note": note})

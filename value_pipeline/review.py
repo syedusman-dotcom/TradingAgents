@@ -369,6 +369,10 @@ def _record_ratings(paths: Paths, pf: pfmod.Portfolio, actions, today: str) -> N
         held.consecutive_underweight = a.consecutive_underweight
         if a.decision.intrinsic_value is not None:
             held.intrinsic_value_estimate = a.decision.intrinsic_value
+        if a.decision.kill_criteria:
+            held.kill_criteria = list(a.decision.kill_criteria)
+        if a.decision.entry_price is not None:
+            held.entry_price = a.decision.entry_price
     pfmod.save(paths, pf)
 
 

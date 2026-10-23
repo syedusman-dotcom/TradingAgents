@@ -65,7 +65,8 @@ def stock_history(paths: Paths, ticker: str) -> dict:
         if not match.empty:
             screen = {k: (None if pd.isna(v) else v) for k, v in match.iloc[0].to_dict().items()}
     trades = [t for t in pfmod.read_trades(paths) if t["ticker"] == ticker]
-    return {"ticker": ticker, "reviews": reviews, "screen": screen, "trades": trades}
+    return {"ticker": ticker, "reviews": reviews, "latest": reviews[0] if reviews else None,
+            "screen": screen, "trades": trades}
 
 
 def safe_report_path(paths: Paths, rel: str) -> Path | None:

@@ -1,5 +1,6 @@
 """The value pipeline's arithmetic and rules on fixed sample data (no network)."""
 
+import json
 import math
 from datetime import date
 
@@ -885,3 +886,120 @@ def test_without_a_review_price_the_scenarios_keep_the_entry_price_figures(tmp_p
     sc = row["scenarios"]
     assert sc["price_basis"] == "entry price" and sc["upside_downside"] == pytest.approx(6.0)
     assert sc["weighted_mos"] is None and d.upside_downside == pytest.approx(6.0)
+
+
+@pytest.mark.unit
+def test_actions_list_entry_price_for_candidates_and_kill_criteria_for_holdings():
+    held = _held("Hold", kill_criteria=["Revenue falls two years running", "Net debt above 3x EBITDA"])
+    cand = Decision(ticker="000270.KS", rating="Hold", price=130_000.0, entry_price=115_000.0,
+                    expected_return=0.11)
+    bare = Decision(ticker="BARE", rating="Hold", price=10.0)
+    actions, summary = plan([held, cand, bare], cash=50_000.0, sizing=SIZING)
+    md = render.actions_markdown("2026-11-07", actions, summary, reports={"000270.KS": "x.html"},
+                                 comparison=None, cost=0.0, failures=[], dry_run=False)
+    assert "- 000270.KS: " in md and " — buy below 115,000.00; expected return 11%/yr ([report](x.html))" in md
+    bare_line = next(line for line in md.splitlines() if line.startswith("- BARE:"))
+    assert "buy below" not in bare_line and "expected return" not in bare_line
+    assert "### Kill criteria" in md
+    assert "- HLD: 1. Revenue falls two years running; 2. Net debt above 3x EBITDA" in md
+    md = render.actions_markdown("2026-11-07", plan([_held("Hold")], cash=1.0, sizing=SIZING)[0], summary,
+                                 reports={}, comparison=None, cost=0.0, failures=[], dry_run=False)
+    assert "Kill criteria" not in md
+
+
+@pytest.mark.unit
+def test_watch_alerts_on_entry_price():
+    from value_pipeline.watch import alerts
+
+    ideas = [{"ticker": "AT", "rating": "Hold", "intrinsic_value": 100.0, "entry_price": 60.0, "date": "2026-10-01"},
+             {"ticker": "ABOVE", "rating": "Buy", "intrinsic_value": 100.0, "entry_price": 50.0, "date": "2026-10-01"},
+             {"ticker": "SELL", "rating": "Sell", "intrinsic_value": 100.0, "entry_price": 60.0, "date": "2026-10-01"},
+             {"ticker": "KNIFE", "rating": "Hold", "intrinsic_value": 100.0, "entry_price": 60.0, "date": "2026-10-01"},
+             {"ticker": "OLD", "rating": "Hold", "intrinsic_value": 100.0, "entry_price": 60.0, "date": "2026-01-01"}]
+    prices = {"AT": 60.0, "ABOVE": 55.0, "SELL": 40.0, "KNIFE": 40.0, "OLD": 40.0}
+    got = [a for a in alerts([], ideas, prices, {"KNIFE": "FREEFALL"}, buy_mos=0.90,
+                             today=date(2026, 10, 17), max_age_days=120) if a.kind == "ENTRY PRICE"]
+    assert [(a.ticker, a.message) for a in got] == [
+        ("AT", "AT at 60.00 is at or below the agents' entry price 60.00 (rated Hold on 2026-10-01)")]
+
+
+@pytest.mark.unit
+def test_watch_handles_results_without_entry_price():
+    from value_pipeline.watch import alerts
+
+    ideas = [{"ticker": "OLDROW", "rating": "Hold", "intrinsic_value": 100.0, "date": "2026-10-01"},
+             {"ticker": "NONE", "rating": "Hold", "intrinsic_value": 100.0, "entry_price": None}]
+    got = alerts([], ideas, {"OLDROW": 10.0, "NONE": 10.0}, {}, buy_mos=0.99, today=date(2026, 10, 17))
+    assert [a for a in got if a.kind == "ENTRY PRICE"] == []
+
+
+@pytest.mark.unit
+def test_watch_markdown_lists_the_holdings_kill_criteria(tmp_path, monkeypatch):
+    from value_pipeline import watch
+
+    paths = Paths(tmp_path)
+    pf = pfmod.Portfolio(cash=0.0)
+    pfmod.apply_deposit(pf, 1000.0, on="2026-10-01")
+    pfmod.apply_buy(pf, "HRB", 1, 40.0, on="2026-10-02")
+    pf.position("HRB").kill_criteria = ["Revenue falls two years running", "Dividend cut"]
+    pfmod.save(paths, pf)
+    monkeypatch.setattr(watch.market_data, "latest_price", lambda t: 40.0)
+    monkeypatch.setattr(watch.market_data, "closes", lambda t: [])
+    _, out = watch.run(paths, DEFAULTS, notify=False)
+    text = out.read_text()
+    assert "Kill criteria to check" in text
+    assert "- HRB: 1. Revenue falls two years running; 2. Dividend cut" in text
+
+
+@pytest.mark.unit
+def test_old_portfolio_file_loads_with_empty_kill_criteria(tmp_path):
+    paths = Paths(tmp_path)
+    paths.root.mkdir(parents=True, exist_ok=True)
+    paths.portfolio.write_text('{"cash": 5.0, "positions": [{"ticker": "OLD", "shares": 1, '
+                               '"avg_price": 2.0, "first_bought": "2026-01-01"}]}')
+    pf = pfmod.load(paths)
+    assert pf.position("OLD").kill_criteria == [] and pf.position("OLD").entry_price is None
+    pfmod.save(paths, pf)
+    saved = json.loads(paths.portfolio.read_text())["positions"][0]
+    assert saved["kill_criteria"] == [] and saved["entry_price"] is None
+
+
+@pytest.mark.unit
+def test_recording_a_buy_stores_kill_criteria_and_entry_price(tmp_path):
+    from value_pipeline import operations as ops
+
+    paths = Paths(tmp_path)
+    ops.init_portfolio(paths, 1000.0, on="2026-10-01")
+    folder = paths.reports / "2026-10-11"
+    folder.mkdir(parents=True)
+    (folder / "results.json").write_text(json.dumps([
+        {"ticker": "HRB", "rating": "Overweight", "error": None, "thesis": "t", "intrinsic_value": 55.0,
+         "entry_price": 46.0, "kill_criteria": ["Revenue falls", "Dividend cut", "Debt up"]},
+        {"ticker": "OLD", "rating": "Overweight", "error": None, "thesis": "t", "intrinsic_value": 5.0}]))
+    held, _ = ops.record_buy(paths, "HRB", 1, 44.0, on="2026-10-12")
+    assert held.kill_criteria == ["Revenue falls", "Dividend cut", "Debt up"] and held.entry_price == 46.0
+    assert pfmod.load(paths).position("HRB").entry_price == 46.0
+    old, _ = ops.record_buy(paths, "OLD", 1, 4.0, on="2026-10-12")
+    assert old.kill_criteria == [] and old.entry_price is None
+
+
+@pytest.mark.unit
+def test_a_review_stores_a_holdings_kill_criteria_and_entry_price(tmp_path):
+    from value_pipeline import operations as ops, review
+
+    paths = Paths(tmp_path)
+    ops.init_portfolio(paths, 1000.0, on="2026-10-01")
+    ops.record_buy(paths, "HRB", 1, 40.0, on="2026-10-02")
+    pf = pfmod.load(paths)
+    pf.position("HRB").kill_criteria = ["stale"]
+    pfmod.save(paths, pf)
+    d = Decision(ticker="HRB", rating="Hold", price=44.0, held_shares=1, entry_price=41.0,
+                 kill_criteria=["Revenue falls", "Dividend cut", "Debt up"])
+    actions, _ = plan([d], cash=960.0, sizing=SIZING)
+    review._record_ratings(paths, pf, actions, "2026-11-07")
+    held = pfmod.load(paths).position("HRB")
+    assert held.kill_criteria == ["Revenue falls", "Dividend cut", "Debt up"] and held.entry_price == 41.0
+    # a review that returned none keeps the earlier list
+    bare = Decision(ticker="HRB", rating="Hold", price=44.0, held_shares=1)
+    review._record_ratings(paths, pf, plan([bare], cash=960.0, sizing=SIZING)[0], "2026-12-05")
+    assert pfmod.load(paths).position("HRB").kill_criteria == ["Revenue falls", "Dividend cut", "Debt up"]

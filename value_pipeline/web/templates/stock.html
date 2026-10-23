@@ -13,6 +13,19 @@
 <td>{% if r.report %}<a href="/reports/{{ r.folder }}/{{ r.report }}">report</a>{% endif %}</td></tr>
 {% else %}<tr><td colspan="5" class="muted">Not analysed by the agents yet.</td></tr>{% endfor %}
 </table></div>
+{% set l = data.latest %}{% if l %}
+{% if l.checklist %}<h2>Checklist</h2>
+<ul>{% for key, label in (("good_business", "Good business"), ("good_management", "Good management"), ("cheap", "Cheap")) %}{% set c = l.checklist.get(key) %}{% if c %}
+<li><b>{{ label }}</b>: {{ "PASS" if c.passed else "FAIL" }}{% if c.note %} · {{ c.note }}{% endif %}</li>{% endif %}{% endfor %}</ul>{% endif %}
+{% if l.kill_criteria %}<h2>Kill criteria</h2>
+<ol>{% for k in l.kill_criteria %}<li>{{ k }}</li>{% endfor %}</ol>{% endif %}
+{% if l.entry_price %}<h2>Entry price</h2>
+<p>Buy at or below {{ "{:,.2f}".format(l.entry_price) }} (agents, {{ l.folder }}).</p>{% endif %}
+{% if l.scenarios %}{% set sc = l.scenarios %}<h2>Scenarios</h2>
+<ul>{% for key, label in (("bear", "Bear"), ("base", "Base"), ("bull", "Bull")) %}{% if sc.get(key) %}
+<li><b>{{ label }}</b> {{ "{:.0%}".format(sc[key].probability) }}: {{ "{:,.2f}".format(sc[key].value) }}{% if sc[key].basis %} · {{ sc[key].basis }}{% endif %}</li>{% endif %}{% endfor %}</ul>
+<p>{% if sc.expected_value is not none %}Expected value {{ "{:,.2f}".format(sc.expected_value) }}{% endif %}{% if sc.upside_downside is not none %} · upside/downside {{ sc.upside_downside }}x{% endif %}</p>{% endif %}
+{% endif %}
 {% if data.screen %}{% set s = data.screen %}
 <h2>Latest screen</h2>
 <p>Rank {{ s.mf_position | int if s.mf_position is not none else "–" }} ·

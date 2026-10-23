@@ -72,6 +72,12 @@ def actions_markdown(date: str, actions: list[Action], summary: dict, *, reports
         lines.append("No holdings yet.")
     lines.append("")
 
+    criteria = [(a.ticker, a.decision.kill_criteria) for a in held if a.decision and a.decision.kill_criteria]
+    if criteria:
+        lines += ["### Kill criteria", ""]
+        lines += [f"- {t}: {numbered(c)}" for t, c in criteria]
+        lines.append("")
+
     lines += ["## New buys", ""]
     if new:
         lines += ["| Ticker | Rating | Amount | Shares | Value (agents / formula) | Margin of safety | Expected return | F-Score | Trend | Report |",
@@ -89,7 +95,8 @@ def actions_markdown(date: str, actions: list[Action], summary: dict, *, reports
 
     if skipped:
         lines += ["## Candidates not bought", ""]
-        lines += [f"- {who(a.ticker)}: {a.reason}{_er_note(a.decision)} ({_link(reports, a.ticker)})" for a in skipped]
+        lines += [f"- {who(a.ticker)}: {a.reason}{_entry_note(a.decision)}{_er_note(a.decision)} "
+                  f"({_link(reports, a.ticker)})" for a in skipped]
         lines.append("")
     if knives:
         lines += ["## Watch: falling knives", "", "Ranked well in the screen but in FREEFALL: " + ", ".join(knives), ""]
@@ -100,6 +107,15 @@ def actions_markdown(date: str, actions: list[Action], summary: dict, *, reports
 
 def _er(x: float | None, missing: str = "") -> str:
     return missing if x is None else f"{x:.0%}/yr"
+
+
+def numbered(items: list[str]) -> str:
+    """Criteria on one line: ``1. first; 2. second``."""
+    return "; ".join(f"{i}. {c}" for i, c in enumerate(items, 1))
+
+
+def _entry_note(d) -> str:
+    return "" if d is None or d.entry_price is None else f" — buy below {d.entry_price:,.2f}"
 
 
 def _er_note(d) -> str:

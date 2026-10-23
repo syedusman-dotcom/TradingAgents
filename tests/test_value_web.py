@@ -427,3 +427,28 @@ def test_screen_page_lists_the_latest_other_markets_screen(tmp_path):
         assert text in r.text, text
     assert "OLD.L" not in r.text                                        # only the newest file
     assert r.text.index("000270.KS") < r.text.index("DGE.L")           # ranked first, unranked last
+
+
+@pytest.mark.unit
+def test_stock_page_shows_checklist_and_kill_criteria(tmp_path):
+    client, app, paths = _client(tmp_path)
+    row = dict(ROW, entry_price=46.0, kill_criteria=["Revenue falls two years running", "Dividend cut"],
+               checklist={"good_business": {"passed": True, "note": "ROIC above 20%"},
+                          "good_management": {"passed": False, "note": "serial acquirer"},
+                          "cheap": {"passed": True, "note": "Margin of safety: 18%"}},
+               scenarios={"bear": {"value": 42.0, "probability": 0.25, "basis": "b"},
+                          "base": {"value": 56.0, "probability": 0.5, "basis": "m"},
+                          "bull": {"value": 70.0, "probability": 0.25, "basis": "u"},
+                          "expected_value": 56.0, "upside_downside": 2.5})
+    _review(paths, "2026-10-11", [dict(ROW, rating="Hold")])
+    _review(paths, "2026-11-07", [row])
+    text = client.get("/stock/HRB").text
+    for want in ("Checklist", "Good business", "PASS", "ROIC above 20%", "Good management", "FAIL",
+                 "serial acquirer", "Kill criteria", "Dividend cut", "Entry price", "46.00", "Scenarios",
+                 "Bear", "25%", "42.00", "Expected value", "56.00", "2.5"):
+        assert want in text, want
+    # the newest row lacks nothing; an old row without the keys renders none of the sections
+    old = _client(tmp_path / "other")
+    _review(old[2], "2026-10-11", [ROW])
+    page = old[0].get("/stock/HRB").text
+    assert "Kill criteria" not in page and "Checklist" not in page and "Scenarios" not in page

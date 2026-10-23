@@ -15,7 +15,11 @@ from tradingagents.agents.context import (
     get_language_instruction,
     get_portfolio_context_from_state,
 )
-from tradingagents.agents.decision_math import decision_checks, worksheet_excerpt
+from tradingagents.agents.decision_math import (
+    decision_checks,
+    worksheet_base,
+    worksheet_excerpt,
+)
 from tradingagents.agents.rating import parse_rating
 from tradingagents.agents.schemas import PortfolioDecision, render_pm_decision
 from tradingagents.agents.structured import NO_EXTERNAL_TOOLS, bind_structured, invoke_structured
@@ -52,6 +56,7 @@ def create_portfolio_manager(llm):
             else ""
         )
         excerpt = worksheet_excerpt(state.get("fundamentals_report", ""))
+        base = worksheet_base(excerpt)
         worksheet_block = (
             f"**Valuation worksheet (formula value):**\n{excerpt}\n" if excerpt else ""
         )
@@ -112,14 +117,15 @@ Write these sections, in this order, starting with the rating on its own line:
         # Read back from text, a rating the thesis quotes could replace it.
         decision = invoke_structured(structured_llm, prompt, "Portfolio Manager")
         if decision is not None:
-            # No market price reaches this node, so the checks that need one skip.
-            problems = decision_checks(decision, None, None)
+            # No market price reaches this node, so the checks that need one skip; the worksheet
+            # supplies the bridge's starting value when the decision omits its own.
+            problems = decision_checks(decision, base, None)
             if problems:
                 retry_prompt = (prompt + "\n\nFix these problems and return the full decision again:\n"
                                 + "\n".join(f"- {p}" for p in problems))
                 retried = invoke_structured(structured_llm, retry_prompt, "Portfolio Manager")
                 if retried is not None:
-                    decision, problems = retried, decision_checks(retried, None, None)
+                    decision, problems = retried, decision_checks(retried, base, None)
             final_trade_decision = render_pm_decision(decision)
             if problems:
                 final_trade_decision += "\n\n**Unresolved Checks**:\n" + "\n".join(
