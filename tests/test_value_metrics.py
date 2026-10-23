@@ -402,3 +402,30 @@ def test_company_metrics_carries_the_expected_return_line():
     m = vm.company_metrics([_year()] * 5, price=20.0, market_cap=2000, shares=100)
     assert m["expected_return"] is not None
     assert "Expected return (7-year):" in vm.render_report("X", "2026-01-01", m)
+
+
+def _dated_years(n, **kw):
+    return [_year(fiscal_year_end=f"{2025 - i}-12-31", **kw) for i in range(n)]
+
+
+@pytest.mark.unit
+def test_ev_ebit_target_is_the_median_of_priced_years_needs_three_and_can_be_overridden():
+    years = _dated_years(5)
+    prices = {"2025": 20, "2024": 30, "2023": 40}            # keys as yearly_average_closes emits
+    er = vm.expected_return(years, price=20.0, market_cap=2000, shares=100, avg_prices=prices)
+    by_hand = sorted((p * 100 + 500 - 100) / 200 for p in prices.values())[1]
+    assert er["ev_ebit_target"] == pytest.approx(by_hand) and by_hand != 12.0
+    two = vm.expected_return(years, price=20.0, market_cap=2000, shares=100,
+                             avg_prices={"2025": 20, "2024": 30})
+    assert two["ev_ebit_target"] == 12.0
+    for ap in (prices, None):
+        over = vm.expected_return(years, 20.0, 2000, 100, avg_prices=ap, target_multiple=15.0)
+        assert over["ev_ebit_target"] == 15.0
+
+
+@pytest.mark.unit
+def test_reinvestment_uses_the_same_years_for_payouts_and_owner_earnings():
+    years = [_year(), _year(), _year(free_cash_flow=None, dividends_paid=-1000)]
+    er = vm.expected_return(years, price=20.0, market_cap=2000, shares=100)
+    # two computable years: payout 160 of owner earnings 320 -> reinvest 0.5 (not dragged down by year 3)
+    assert er["sustainable_growth"] == pytest.approx(0.5 * min(200 / 700, 1.0))

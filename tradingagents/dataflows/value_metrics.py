@@ -528,7 +528,7 @@ def _ev_ebit_target(years: list[dict], avg_prices: dict | None, shares) -> float
 
 
 def expected_return(years: list[dict], price, market_cap, shares, avg_prices: dict | None = None,
-                    horizon: int = ER_HORIZON) -> dict | None:
+                    horizon: int = ER_HORIZON, target_multiple: float | None = None) -> dict | None:
     """Annual return if held ``horizon`` years: shareholder yield + growth + EV/EBIT reversion
     to the company's own history. None when owner earnings or EV/EBIT cannot be computed."""
     market_cap = num(market_cap)
@@ -537,18 +537,23 @@ def expected_return(years: list[dict], price, market_cap, shares, avg_prices: di
     ebit = num(years[0].get("ebit"))
     ev = enterprise_value(market_cap, years[0].get("total_debt"), years[0].get("cash"))
     recent = years[:3]
-    oe = [o for o in (owner_earnings(y) for y in recent) if o is not None]
+    priced = [(y, owner_earnings(y)) for y in recent]
+    priced = [(y, o) for y, o in priced if o is not None]
+    oe = [o for _, o in priced]
     if not oe or sum(oe) <= 0 or ebit is None or ebit <= 0 or ev is None or ev <= 0:
         return None
-    paid = [abs(num(y.get("dividends_paid")) or 0.0) + abs(num(y.get("buybacks")) or 0.0) for y in recent]
-    shareholder_yield = mean(p / market_cap for p in paid)       # no issuance field exists: counted as 0
-    reinvestment = _clamp(1 - sum(paid) / sum(oe), 0.0, 1.0)
+    def payout(y: dict) -> float:
+        return abs(num(y.get("dividends_paid")) or 0.0) + abs(num(y.get("buybacks")) or 0.0)
+
+    shareholder_yield = mean(payout(y) / market_cap for y in recent)   # no issuance field: counted as 0
+    reinvestment = _clamp(1 - sum(payout(y) for y, _ in priced) / sum(oe), 0.0, 1.0)
     roics = [min(r, 1.0) for r in (roic(y) for y in years[:5]) if r is not None]
     sustainable = (mean(roics) if roics else 0.0) * reinvestment
     br = growth_base_rates(years[0].get("revenue"))
     cap = br["cap"] if br else ER_MAX_GROWTH
     growth = max(0.0, min(sustainable, cap, ER_MAX_GROWTH))
-    now, target = ev / ebit, _ev_ebit_target(years, avg_prices, shares)
+    now = ev / ebit
+    target = num(target_multiple) or _ev_ebit_target(years, avg_prices, shares)
 
     def reversion(t: float) -> float:
         return _clamp((t / now) ** (1 / horizon) - 1, -ER_MAX_REVERSION, ER_MAX_REVERSION)

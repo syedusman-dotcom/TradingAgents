@@ -11,6 +11,7 @@ from collections.abc import Sequence
 
 from tradingagents.dataflows.value_metrics import (  # noqa: F401 - re-exported for the screen
     DISCOUNT_RATE,
+    ER_DEFAULT_TARGET,
     FSCORE_POINTS,
     YEAR_FIELDS,
     accounting_checks,

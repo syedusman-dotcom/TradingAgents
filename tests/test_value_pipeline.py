@@ -775,3 +775,28 @@ def test_actions_show_expected_return_for_candidates():
     md = render.actions_markdown("2026-11-07", buy, summary, reports={}, comparison=None,
                                  cost=0.0, failures=[], dry_run=False)
     assert "| Expected return |" in md and "9%/yr" in md
+
+
+@pytest.mark.unit
+def test_sector_median_ev_ebit_sets_the_reversion_target_and_reorders_er_rank():
+    def yr(ebit):
+        return {"fiscal_year_end": "2025-12-31", "ebit": ebit, "free_cash_flow": 150, "stock_based_comp": 0, "current_assets": 400,
+                "cash": 0, "current_liabilities": 200, "net_ppe": 300, "shares": 100, "total_debt": 0,
+                "revenue": 1000}
+    inputs, rows = {}, []
+    for t, ebit in (("A", 100), ("B", 200), ("C", 400)):         # EV/EBIT 20, 10, 5 at EV 2000
+        inputs[t] = ([yr(ebit)] * 5, 20.0, 2000, 100)
+        row = {"ticker": t, "sector": "Tech", "fail_reasons": []}
+        row.update(screener.evaluate({"ticker": t, "years": [yr(ebit)] * 5, "market_cap": 2000,
+                                      "enterprise_value": 2000, "price": 20.0, "closes": []}))
+        row["sector"] = "Tech"
+        rows.append(row)
+    assert {r["er_target_multiple"] for r in rows} == {12.0}
+    screener.apply_sector_targets(rows, inputs)
+    assert {r["er_target_multiple"] for r in rows} == {10.0}      # median of 20, 10, 5
+    assert [r["ev_ebit"] for r in rows] == pytest.approx([20.0, 10.0, 5.0])
+    screener.rank(rows, DEFAULTS["filters"], owned=set(), top_n=10)
+    # C trades at 5x against a 10x sector median, so reversion lifts it most
+    ranked = sorted(rows, key=lambda r: r["expected_return"], reverse=True)
+    assert [r["ticker"] for r in ranked] == ["C", "B", "A"]
+    assert {r["ticker"]: r["er_rank"] for r in rows} == {"C": 1, "B": 2, "A": 3}

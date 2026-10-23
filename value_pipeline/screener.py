@@ -6,6 +6,7 @@ import csv
 import logging
 from datetime import date
 from pathlib import Path
+from statistics import median
 
 import pandas as pd
 
@@ -72,12 +73,35 @@ def evaluate(data: dict, normalize_years: int = 5, roic_cap: float = 1.0,
         "er_yield": er.get("yield"),
         "er_growth": er.get("growth"),
         "er_reversion": er.get("reversion"),
+        "ev_ebit": er.get("ev_ebit_now"),
+        "er_target_multiple": er.get("ev_ebit_target"),
         "trend": tr.get("trend"),
         "vs_sma200": tr.get("vs_sma200"),
         "momentum_12_1": tr.get("momentum_12_1"),
     }
     row.update({f"f_{k}": v for k, v in fs["points"].items()})
     return row
+
+
+SECTOR_MIN_ROWS = 3
+
+
+def apply_sector_targets(rows: list[dict], inputs: dict[str, tuple]) -> None:
+    """Re-run each row's expected return with its sector's median EV/EBIT as the reversion target
+    (12x when the sector has fewer than three companies with a positive multiple).
+    ``inputs`` maps ticker -> (years, price, market_cap, shares)."""
+    by_sector: dict = {}
+    for r in rows:
+        if (r.get("ev_ebit") or 0) > 0:
+            by_sector.setdefault(r.get("sector"), []).append(r["ev_ebit"])
+    for r in rows:
+        peers = by_sector.get(r.get("sector"), [])
+        target = median(peers) if len(peers) >= SECTOR_MIN_ROWS else metrics.ER_DEFAULT_TARGET
+        years, price, mcap, shares = inputs[r["ticker"]]
+        er = metrics.expected_return(years, price, mcap, shares, target_multiple=target) or {}
+        r.update(expected_return=er.get("expected_return"), er_yield=er.get("yield"),
+                 er_growth=er.get("growth"), er_reversion=er.get("reversion"),
+                 ev_ebit=er.get("ev_ebit_now"), er_target_multiple=er.get("ev_ebit_target"))
 
 
 def failed_filters(row: dict, filters: dict) -> list[str]:
@@ -157,7 +181,7 @@ def run(paths: Paths, cfg: dict, owned: set[str], today: str | None = None) -> d
     rate = metrics.current_discount_rate()
     log.info("valuing at a %.1f%% discount rate (10-year Treasury %s)", rate["rate"] * 100,
              "unavailable" if rate["treasury_10y"] is None else f"{rate['treasury_10y']:.2%}")
-    rows, skipped = [], []
+    rows, skipped, inputs = [], [], {}
     total = len(candidates)
     for i, rec in enumerate(candidates.itertuples(index=False), 1):
         if i % 50 == 0 or i == total:
@@ -175,10 +199,12 @@ def run(paths: Paths, cfg: dict, owned: set[str], today: str | None = None) -> d
             log.info("skip %s: %s", rec.ticker, exc)
             skipped.append({"ticker": rec.ticker, "reason": f"{type(exc).__name__}: {exc}"})
             continue
+        inputs[rec.ticker] = (data["years"], data.get("price"), row["market_cap"], row["shares"])
         row.update(name=rec.name, sector=rec.sector, index=rec.index)
         row["fail_reasons"] = failed_filters(row, cfg["filters"])
         rows.append(row)
 
+    apply_sector_targets(rows, inputs)
     try:
         overlap = superinvestors.refresh_if_stale(paths, cfg["superinvestors"])["holdings"]
     except Exception as exc:  # noqa: BLE001 - a second opinion; the screen stands without it
