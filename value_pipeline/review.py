@@ -119,14 +119,46 @@ _FAKE_NEW = ("Buy", "Overweight", "Hold")
 
 
 def fake_run(ticker: str, index: int, held: bool, price: float | None) -> RunResult:
-    """A made-up rating and decision for --dry-run, cycling through every rule."""
+    """A made-up rating and decision for --dry-run, cycling through every rule. The decision is
+    rendered by the Portfolio Manager's own renderer, so the dry run exercises the checklist,
+    kill criteria, entry price, scenarios, value bridge and pre-mortem sections."""
+    from tradingagents.agents.schemas import (
+        Adjustment,
+        PortfolioDecision,
+        Scenario,
+        Scenarios,
+        Verdict,
+        render_pm_decision,
+    )
+
     rating = (_FAKE_HELD if held else _FAKE_NEW)[index % len(_FAKE_HELD if held else _FAKE_NEW)]
     value = round(price * (0.9 if held and index % 2 else 1.45), 2) if price else None
     mos = None if not value or not price else (value - price) / value
-    text = (f"**Rating**: {rating}\n\n**Executive Summary**: Dry run.\n\n"
-            f"**Investment Thesis**: Fake thesis for {ticker}. Margin of safety: {mos * 100 if mos is not None else 0:.0f}%\n\n"
-            f"**Price Target**: {value if value else 'not provided'}")
-    return RunResult(ticker, rating, text)
+    mos_text = f"Margin of safety: {mos * 100 if mos is not None else 0:.0f}%"
+    formula = round(value * 0.9, 2) if value else None
+    decision = PortfolioDecision(
+        rating=rating,
+        executive_summary="Dry run.",
+        investment_thesis=f"Fake thesis for {ticker}. {mos_text}",
+        price_target=value,
+        time_horizon="1-3 years",
+        good_business=Verdict(passed=True, note="Fake: returns on capital above 15% for a decade."),
+        good_management=Verdict(passed=index % 2 == 0, note="Fake: buybacks below the formula value."),
+        cheap=Verdict(passed=bool(mos and mos >= 0.3), note=f"Fake: {mos_text}"),
+        red_flags=["Fake: receivables growing faster than revenue"] if index % 3 == 2 else [],
+        kill_criteria=["Fake: ROIC below 12% for two years", "Fake: net debt above 3x EBITDA",
+                       "Fake: revenue falls two years running"],
+        entry_price=round(value * 0.7, 2) if value else None,
+        formula_value=formula,
+        value_bridge=[Adjustment(reason="Fake: normalised margins", amount=round(value - formula, 2))]
+        if value else [],
+        scenarios=Scenarios(bear=Scenario(value=round(value * 0.6, 2), probability=0.25, basis="Fake: 0.8x, no growth"),
+                            base=Scenario(value=value, probability=0.5, basis="Fake: target multiple, 3% growth"),
+                            bull=Scenario(value=round(value * 1.4, 2), probability=0.25, basis="Fake: 1.2x, 6% growth"))
+        if value else None,
+        premortem_answer="Fake: the failure path needs a price war, and the moat survived the last one.",
+    )
+    return RunResult(ticker, rating, render_pm_decision(decision))
 
 
 # --- the review -------------------------------------------------------------------

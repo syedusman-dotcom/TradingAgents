@@ -9,7 +9,7 @@ This fork turns TradingAgents from a short-term trading desk into a long-term **
 - **GARP (PEG)**: for growing companies, price relative to growth.
 - **Momentum as a timing filter only**: avoid buying in a steep downtrend; never buy because of momentum.
 
-Only prompt text changed. The graph, tools, state keys, output section labels (Rating / Recommendation / Action / Executive Summary / Investment Thesis / Rationale / Strategic Actions / Entry Price / Stop Loss / Position Sizing) and the five rating words are untouched, so parsers, schemas and reports work as before.
+Originally only prompt text changed; since then the graph gained a Pre-mortem node before the Portfolio Manager and the Portfolio Manager's decision gained the checklist sections below; the verified metrics gained the valuation worksheet, accounting checks and capital allocation, and the fundamentals analyst gained a peer-comparison tool (see `value_pipeline/README.md`, "How a stock is judged"). The existing output section labels (Rating / Recommendation / Action / Executive Summary / Investment Thesis / Rationale / Strategic Actions / Entry Price / Stop Loss / Position Sizing) and the five rating words are untouched, so parsers, schemas and reports work as before.
 
 ## What each agent now does
 
@@ -23,7 +23,8 @@ Only prompt text changed. The graph, tools, state keys, output section labels (R
 | Research Manager | Weighs the stronger side | Three tests (business, management, cheap). Buy needs all three plus ≥~30% margin of safety and no distress or accounting flag; Overweight at ~15-30% or in a DOWNTREND; never Buy in FREEFALL. 1-3 year horizon. Strategic Actions = target size, add-below price, thesis breakers. |
 | Trader | Entry/stop from ATR and support/resistance | Low-turnover executor. Entry = price that still leaves a margin of safety; stop loss only at a thesis-breaking price; size ≤ ~10% per stock; no tranches or options. Uses the market report only for current price and trend status. |
 | Risk analysts (×3) | Personalities unchanged | Each also judges risk as **permanent loss of capital** (business deterioration, overpaying, leverage) over a 1-3 year hold, not short-term volatility. |
-| Portfolio Manager | Weighs the risk debate | Same three-test rules; prefers doing nothing, and changes a previous rating only when facts change, not price. The Investment Thesis lists business and management quality, intrinsic value and margin of safety, F/Z-Scores, trend status, main risk, and the sell trigger. |
+| Pre-mortem (new) | – | After the risk debate, one quick call: three years on the position has lost 40%; the most likely cause, the evidence visible today, and the metric that would show it first. |
+| Portfolio Manager | Weighs the risk debate | Same three-test rules; prefers doing nothing, and changes a previous rating only when facts change, not price. The Investment Thesis lists business and management quality, intrinsic value and margin of safety, F/Z-Scores, trend status, main risk, and the sell trigger. The decision adds a checklist (PASS/FAIL per test), red flags, 3-6 kill criteria, an entry price, bear/base/bull scenarios with probabilities summing to 1, a value bridge from the worksheet's formula value to the price target, and an answer to the pre-mortem. Checked in code, with one corrective retry. |
 
 Both managers keep the rule that conflicting arguments alone are not a reason to Hold (#1321); otherwise every debate would end in Hold.
 

@@ -52,7 +52,7 @@ uv run python -m value_pipeline status
 | `screen [--top N]` | Rank the universe; writes `data/screens/screen_YYYY-MM-DD.csv`. |
 | `review [--yes] [--dry-run] [--candidates N]` | Run the agents and write the action list. |
 | `run-all [--yes] [--dry-run]` | `screen`, then `review`. |
-| `watch [--no-notify]` | The free weekly check (prices only, no agents): a holding above its intrinsic value or in FREEFALL, or a stock last rated Buy/Overweight now at least 30% below its value. Writes `reports/watch_<date>.md` and shows a macOS notification when something needs a look. |
+| `watch [--no-notify]` | The free weekly check (prices only, no agents): a holding above its intrinsic value or in FREEFALL, a stock last rated Buy/Overweight now at least 30% below its value, or a stock now at or below the entry price its last review gave (ENTRY PRICE). Lists each holding's kill criteria for you to check against the news. Writes `reports/watch_<date>.md` and shows a macOS notification when something needs a look. |
 
 Use `--data-dir PATH` before the command (or `VALUE_PIPELINE_DATA`) to keep data somewhere else, and `-v` to log every skipped ticker.
 
@@ -67,6 +67,7 @@ Use `--data-dir PATH` before the command (or `VALUE_PIPELINE_DATA`) to keep data
   - Altman Z-Score (original formula), debt/equity, interest coverage. No reported interest expense counts as unlimited coverage.
   - Trend: price vs the 200-day SMA and the 12-month return excluding the last month, classified as UPTREND / BASING / DOWNTREND / FREEFALL.
   - Formula value (`value_base`, `value_low`, `value_high`), its margin of safety (`mos_formula`) and the growth today's price implies (`implied_growth`). These are the same figures the agents see; see `VALUE_INVESTING.md`.
+  - Accounting checks (accruals ratio, cash conversion, receivables vs revenue, Beneish M-score, and their flags) and the 7-year expected return with its rank (`expected_return`, `er_rank`); see below.
 - **Hard filters** (`config.yaml`): market cap > $2B, F-Score ≥ 6, Altman Z > 1.8, positive FCF, interest coverage > 4, ROIC ≥ 8% in every year (stable quality), share count growing ≤ 3% a year (no heavy dilution).
 - **Rank**: Magic Formula on the multi-year averages (rank by average earnings yield + rank by average ROIC, lower is better), ties broken by FCF yield. Averages keep a cyclical peak from ranking as a bargain, and ROIC is capped at 100% so asset-light outliers can't take the top on one ratio. FREEFALL stocks are kept out of the top list and shown as "watch: falling knives".
 - Tickers with missing data are skipped and listed with the reason in `screen_<date>_skipped.csv`.
@@ -97,8 +98,9 @@ The first screen of a week fetches every ticker (roughly 20-40 minutes); later r
    | FREEFALL | never buy or add, whatever the rating |
 
 6. Sizing: equal weight, `1 / max(min_holdings, positions)`, capped at `max_position_weight` (10%); Overweight gets half. Buys and adds also stop at `max_sector_weight` (30%) in one sector (GICS, from the screen, else from the fundamentals cache), counting the sells on the same list and the holdings not on it. Buys never exceed cash. Cash includes the proceeds of the sells and trims on the same list, so place those first. Amounts are in dollars plus share counts at the latest price.
-7. Writes `ACTIONS.md` and `ACTIONS.html` (one self-contained page that works on a phone) and prints the list.
-8. Updates each holding's `last_rating`, `last_review_date`, `consecutive_underweight` and `intrinsic_value_estimate` in `portfolio.json`. It does not touch positions or cash.
+7. Once every stock is done, the investment committee looks at all of them together (below).
+8. Writes `ACTIONS.md` and `ACTIONS.html` (one self-contained page that works on a phone) and prints the list.
+9. Updates each holding's `last_rating`, `last_review_date`, `consecutive_underweight`, `intrinsic_value_estimate` and kill criteria in `portfolio.json`. It does not touch positions or cash.
 
 The agents read financial statements from Yahoo (`review.statement_vendor`): about 5 years with every line (debt, interest, PP&E, buybacks, dividends). The repo's default, SEC EDGAR, has about 20 years but only top-line rows, and stays the default for the `tradingagents` CLI.
 
@@ -106,7 +108,41 @@ The intrinsic value comes from the Portfolio Manager's **Price Target** field (i
 
 The new-buys table shows both values (agents / formula). If the agents' value is more than 30% away from the formula's, the ticker is flagged so you can read their reasons before acting.
 
-`--dry-run` skips the agents and the memory log, uses made-up ratings, writes to `data/reports/<date>-dry-run/`, and leaves `portfolio.json` untouched.
+`--dry-run` skips the agents, the memory log and the committee, uses made-up ratings and decisions (with every checklist section filled in, so the ACTIONS layout can be checked for free), writes to `data/reports/<date>-dry-run/`, and leaves `portfolio.json` untouched.
+
+## How a stock is judged
+
+### Valuation worksheet
+
+The fundamentals report starts from a worksheet computed in code, not from a guess: the formula value at 0%, 3% and 5% growth, the earnings-power value (today's after-tax EBIT with no growth at all, less net debt), a small grid of values at the discount rate ±1 point, and the growth the price already assumes. That last number comes with a base rate: how many companies of the same size actually sustained that growth for ten years. If the price needs growth only one company in ten has managed, the report says so.
+
+### Accounting checks
+
+Four checks look for profits that are not backed by cash: the accruals ratio (net income minus operating cash flow, over assets), cash conversion (operating cash flow over net income for three years), receivables growing faster than revenue, and the Beneish M-score, a classic test for earnings manipulation. Capex below half of depreciation for two years is flagged too, since a business that stops reinvesting looks more profitable than it is. A breach is a named flag in the report and in the screen columns; it is a reason to read closely, not an automatic no.
+
+### Capital allocation
+
+The report shows where five years of free cash went (dividends, buybacks, acquisitions, debt paid down) and what the company paid per share it bought back, next to the average share price that year. Management that buys back stock below its value is creating wealth for you; buying back near the top is not.
+
+### Expected return
+
+Each stock gets a 7-year expected annual return: what it pays out (dividends and buybacks as a yield), plus the growth its returns on capital can fund (capped by the base rate and at 10%), plus or minus the multiple moving back to a normal EV/EBIT (at most ±5 points a year). The normal multiple is the sector's median in the screen and the company's own history in the agents' report, so the two figures can differ. The screen still picks candidates by Magic Formula rank; `er_rank` sits next to it, ACTIONS shows each stock's expected return, and the investment committee ranks the reviewed stocks by it.
+
+### Pre-mortem
+
+After the risk debate, one extra step imagines it is three years later and the position has lost 40%, and writes down the most likely cause, the evidence visible today, and the one metric that would show it first. The Portfolio Manager has to answer it before deciding.
+
+### The decision checklist
+
+The Portfolio Manager's decision is no longer just a rating and a thesis. It gives a PASS or FAIL with a reason for each test (good business, good management, cheap), any serious red flags, 3 to 6 kill criteria (verifiable facts that would prove the thesis wrong and mean selling), an entry price to buy at or below, bear/base/bull scenarios whose probabilities add up to 100% with the expected value and the upside against the downside, a value bridge that starts at the worksheet's formula value and shows every adjustment that takes it to the price target, and its answer to the pre-mortem. The decision is checked in code (the bridge adds up, the probabilities sum to 1, an entry price is there unless it is a Sell); if something is off, the Portfolio Manager gets one chance to fix it, and anything still wrong is printed under **Unresolved Checks**.
+
+### Investment committee
+
+Each stock is reviewed on its own, so after the last one a committee looks at all of them together: it ranks them by expected return adjusted for the downside and the red flags, proposes weights under the 10% per stock and 30% per sector caps, proposes swaps only when a candidate beats a holding by at least 5 points a year, and names concentration risks (same sector, same customers, same macro bet). It can never buy a stock its own review rated Sell. Its answer is shown above Holdings, next to the rules' actions; wherever the two disagree, the difference is listed so you can decide. The rules still produce the amounts. It is skipped on a dry run and when fewer than two reviews succeeded (ACTIONS says so), can be turned off with `review.committee: false`, and is saved as `committee.json`.
+
+### What changed in ACTIONS and the watch
+
+ACTIONS now shows company names next to tickers, the expected return of each new buy, "buy below X" for candidates not bought, and each holding's kill criteria under Holdings, with the committee section on top. The stock page shows the latest entry price and kill criteria. The weekly watch adds an ENTRY PRICE alert when a stock reaches the price its review said to buy at, and lists the kill criteria of each holding so you can check them against the week's news; it does not evaluate them for you.
 
 ## Files
 
@@ -118,7 +154,7 @@ value_pipeline/data/            (gitignored: your holdings)
   cache/<TICKER>.json           Yahoo data, refreshed after 7 days
   universe.csv                  last index membership fetched
   screens/screen_<date>.csv     every screened ticker with all metrics
-  reports/<date>/ACTIONS.md|html, results.json, <TICKER>/complete_report.html
+  reports/<date>/ACTIONS.md|html, results.json, committee.json, <TICKER>/complete_report.html
   logs/monthly_<date>.log       output of scheduled runs
 ```
 

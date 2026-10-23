@@ -1003,3 +1003,16 @@ def test_a_review_stores_a_holdings_kill_criteria_and_entry_price(tmp_path):
     bare = Decision(ticker="HRB", rating="Hold", price=44.0, held_shares=1)
     review._record_ratings(paths, pf, plan([bare], cash=960.0, sizing=SIZING)[0], "2026-12-05")
     assert pfmod.load(paths).position("HRB").kill_criteria == ["Revenue falls", "Dividend cut", "Debt up"]
+
+
+@pytest.mark.unit
+def test_fake_decision_carries_the_checklist_sections():
+    from value_pipeline import parse, review
+
+    text = review.fake_run("HRB", 0, False, 50.0).decision
+    assert parse.entry_price(text) == pytest.approx(50.75)
+    assert len(parse.kill_criteria(text)) == 3
+    assert set(parse.checklist(text)) == {"good_business", "good_management", "cheap"}
+    legs = parse.scenarios(text)
+    assert sum(legs[leg]["probability"] for leg in ("bear", "base", "bull")) == pytest.approx(1.0)
+    assert parse.value_bridge(text) is not None and "**Pre-mortem Answer**: Fake" in text
