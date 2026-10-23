@@ -395,8 +395,66 @@ def formula_value(years: list[dict], price, shares, net_debt, rate: float = DISC
 
 # --- the analyst's verified report ----------------------------------------------------
 
+def capital_allocation(years: list[dict], avg_prices: dict[str, float] | None = None,
+                       price: float | None = None, n: int = NORMALIZE_YEARS) -> dict:
+    """Where the free cash went over the last n years, and what buybacks cost per share."""
+    avg_prices = avg_prices or {}
+    window = years[:n]
+
+    def out(y, key):
+        v = num(y.get(key))
+        return abs(v) if v is not None else None
+
+    rows = []
+    for i, y in enumerate(window):
+        prev = years[i + 1] if i + 1 < len(years) else None
+        net_debt_change = shares_retired = shares_change = None
+        if prev:
+            nd = (num(y.get("total_debt")) or 0.0) - (num(y.get("cash")) or 0.0)
+            nd_prev = (num(prev.get("total_debt")) or 0.0) - (num(prev.get("cash")) or 0.0)
+            net_debt_change = nd - nd_prev
+            s, s_prev = num(y.get("shares")), num(prev.get("shares"))
+            if s is not None and s_prev:
+                shares_retired = s_prev - s
+                shares_change = s / s_prev - 1.0
+        buybacks = out(y, "buybacks")
+        fye = y.get("fiscal_year_end")
+        rows.append({
+            "fiscal_year_end": fye,
+            "free_cash_flow": num(y.get("free_cash_flow")),
+            "dividends": out(y, "dividends_paid"),
+            "buybacks": buybacks,
+            "acquisitions": out(y, "acquisitions"),
+            "net_debt_change": net_debt_change,
+            "shares_change": shares_change,
+            "shares_retired": shares_retired,
+            "buyback_price": div(buybacks, shares_retired)
+            if buybacks and shares_retired and buybacks > 0 and shares_retired > 0 else None,
+            "avg_price": avg_prices.get(str(fye)[:4]) if fye else None,
+        })
+
+    def total(key):
+        return sum(r[key] or 0.0 for r in rows)
+
+    priced = [r for r in rows if r["buyback_price"] is not None]
+    retired = sum(r["shares_retired"] for r in priced)
+    totals = {
+        "generated": total("free_cash_flow"),
+        "dividends": total("dividends"),
+        "buybacks": total("buybacks"),
+        "acquisitions": total("acquisitions"),
+        "net_debt_change": total("net_debt_change"),
+        "avg_buyback_price": sum(r["buybacks"] for r in priced) / retired if retired else None,
+    }
+    totals["returned"] = totals["dividends"] + totals["buybacks"]
+    totals["unexplained"] = (totals["generated"] - totals["returned"] - totals["acquisitions"]
+                             + totals["net_debt_change"])
+    return {"per_year": rows, "totals": totals, "price": num(price)}
+
+
 def company_metrics(years: list[dict], price, market_cap, shares,
-                    rate: float = DISCOUNT_RATE, treasury_10y: float | None = None) -> dict:
+                    rate: float = DISCOUNT_RATE, treasury_10y: float | None = None,
+                    avg_prices: dict | None = None) -> dict:
     """Everything the fundamentals analyst needs, computed once from the statements."""
     cur = years[0]
     net_debt = (num(cur.get("total_debt")) or 0.0) - (num(cur.get("cash")) or 0.0)
@@ -441,6 +499,7 @@ def company_metrics(years: list[dict], price, market_cap, shares,
         "current_ratio": div(cur.get("current_assets"), cur.get("current_liabilities")),
         "valuation": formula_value(years, price, shares, net_debt, rate),
         "treasury_10y": treasury_10y,
+        "capital_allocation": capital_allocation(years, avg_prices, price),
     }
 
 
@@ -456,6 +515,10 @@ def _x(x) -> str:
 
 def _x2(x, suffix: str = "x") -> str:
     return "n/a" if x is None else f"{x:.2f}{suffix}"
+
+
+def _price(x) -> str:
+    return "n/a" if x is None else f"{x:,.2f}"
 
 
 def _money(x, scale: float = 1e6) -> str:
@@ -502,6 +565,33 @@ def render_report(symbol: str, as_of: str, m: dict, currency: str | None = None)
             f"{_money(y['buybacks'])} | {_money(y['dividends'])} | {_x(y['debt_to_equity'])} | "
             f"{_x(y['interest_coverage'])} |"
         )
+    ca = m.get("capital_allocation")
+    if ca and ca["per_year"]:
+        t = ca["totals"]
+        lines += [
+            "## Capital allocation",
+            "",
+            "| FY end | FCF | Dividends | Buybacks | Acquisitions | Net debt chg | Shares retired "
+            "| Buyback price | Avg price |",
+            "|---|---|---|---|---|---|---|---|---|",
+        ]
+        for r in ca["per_year"]:
+            lines.append(
+                f"| {r['fiscal_year_end']} | {_money(r['free_cash_flow'])} | {_money(r['dividends'])} | "
+                f"{_money(r['buybacks'])} | {_money(r['acquisitions'])} | {_money(r['net_debt_change'])} | "
+                f"{_money(r['shares_retired'])} | {_price(r['buyback_price'])} | {_price(r['avg_price'])} |"
+            )
+        at = ""
+        if t["avg_buyback_price"] is not None and ca["price"] is not None:
+            at = f" at an average of {t['avg_buyback_price']:.2f} per share vs {ca['price']:.2f} today"
+        lines += [
+            "",
+            f"Over {len(ca['per_year'])} years: generated {_money(t['generated'])}, returned "
+            f"{_money(t['returned'])} (dividends {_money(t['dividends'])}, buybacks "
+            f"{_money(t['buybacks'])}{at}), acquisitions {_money(t['acquisitions'])}, "
+            f"net debt {t['net_debt_change'] / 1e6:+,.0f}, unexplained {_money(t['unexplained'])}.",
+            "",
+        ]
     lines += [
         "",
         "## Price today",

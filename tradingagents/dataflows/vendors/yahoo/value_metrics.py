@@ -83,6 +83,15 @@ def statement_years(*frames: pd.DataFrame) -> list[dict]:
     return years
 
 
+def yearly_average_closes(history: pd.DataFrame) -> dict[str, float]:
+    """Mean closing price per calendar year, keyed "YYYY"; {} when there is no usable history."""
+    try:
+        close = history["Close"].dropna()
+        return {str(k): float(v) for k, v in close.groupby(close.index.year).mean().items()}
+    except Exception:
+        return {}
+
+
 def get_value_metrics(
     ticker: Annotated[str, "ticker symbol of the company"],
     as_of_date: Annotated[str, "analysis date in YYYY-MM-DD format"] = None,
@@ -117,6 +126,10 @@ def get_value_metrics(
         note = (f"\n\nThe quote is in {quote} but the statements are in {reported}, so price-based "
                 "figures and the formula valuation are left out rather than mixed.")
     rate = current_discount_rate()
+    try:
+        avg_prices = yearly_average_closes(yf_retry(lambda: t.history(period="10y", auto_adjust=True)))
+    except Exception:
+        avg_prices = {}  # fail-open: the report renders without average prices
     metrics = company_metrics(years, price, info.get("marketCap") if price else None, shares,
-                              rate=rate["rate"], treasury_10y=rate["treasury_10y"])
+                              rate=rate["rate"], treasury_10y=rate["treasury_10y"], avg_prices=avg_prices)
     return render_report(canonical, as_of_date or "today", metrics, currency=reported or quote) + note

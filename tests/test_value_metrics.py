@@ -282,3 +282,47 @@ def test_yahoo_rows_map_the_accounting_fields():
     frame = pd.DataFrame({pd.Timestamp("2025-12-31"): list(rows.values())}, index=list(rows))
     (year,) = yahoo_vm.statement_years(frame)
     assert (year["receivables"], year["depreciation"], year["sga"], year["acquisitions"]) == (120.0, 40.0, 150.0, -7.0)
+
+
+@pytest.mark.unit
+def test_capital_allocation_totals_and_buyback_price():
+    y1 = _year(free_cash_flow=180, dividends_paid=-50, buybacks=-30, shares=100, total_debt=500, cash=100,
+               acquisitions=-20, fiscal_year_end="2025-12-31")
+    y0 = _year(shares=102, total_debt=520, cash=90)
+    ca = vm.capital_allocation([y1, y0], avg_prices={"2025": 16.0}, price=20.0)
+    row = ca["per_year"][0]
+    assert row["shares_retired"] == 2 and row["buyback_price"] == pytest.approx(15.0)
+    assert row["avg_price"] == 16.0
+    assert row["net_debt_change"] == pytest.approx((500 - 100) - (520 - 90))
+    t = ca["totals"]
+    assert t["returned"] == 160 and t["generated"] == 360 and t["acquisitions"] == 20
+    assert t["unexplained"] == pytest.approx(360 - 160 - 20 + t["net_debt_change"])
+    assert t["avg_buyback_price"] == pytest.approx(15.0)
+
+
+@pytest.mark.unit
+def test_capital_allocation_with_no_returns_reports_zero_returned():
+    ca = vm.capital_allocation([_year(dividends_paid=None, buybacks=None, free_cash_flow=-10)])
+    assert ca["per_year"][0]["buyback_price"] is None
+    assert ca["per_year"][0]["avg_price"] is None
+    assert ca["totals"]["returned"] == 0
+
+
+@pytest.mark.unit
+def test_capital_allocation_tolerates_empty_input():
+    assert vm.capital_allocation([])["totals"]["returned"] == 0
+
+
+@pytest.mark.unit
+def test_yearly_average_closes_groups_by_calendar_year():
+    hist = pd.DataFrame({"Close": [10, 20, 30]},
+                        index=pd.to_datetime(["2024-03-01", "2024-09-01", "2025-02-01"]))
+    assert yahoo_vm.yearly_average_closes(hist) == {"2024": 15.0, "2025": 30.0}
+    assert yahoo_vm.yearly_average_closes(None) == {}
+
+
+@pytest.mark.unit
+def test_report_has_a_capital_allocation_section_with_the_totals_line():
+    m = vm.company_metrics([_year(), _year()], price=20, market_cap=2000, shares=100)
+    text = vm.render_report("X", "2026-10-23", m)
+    assert "## Capital allocation" in text and "Over 2 years" in text
