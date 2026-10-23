@@ -829,6 +829,8 @@ def test_pm_prompt_describes_the_three_lanes():
         "inflection only with verified demand evidence from the news report; state the lane's numbers "
         "in `**Lane**:`",
         "ROIC including goodwill of at least 15% in every counted year (at least four)",
+        "For the compounder and inflection lanes the Cheap test is replaced by the lane's own price bars",
+        "Compounder (a wonderful business at a fair price): good business and good management pass",
         "free cash flow growing ≥ 5%/yr over ≥ 3 years; the price's implied growth (reverse DCF) no "
         "higher than the earned growth (revenue CAGR capped at the cohort base rate) or the "
         "sustainable growth, whichever is higher; expected return = yield + earned growth + "

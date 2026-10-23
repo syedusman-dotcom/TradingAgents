@@ -555,9 +555,12 @@ def test_a_lane_buy_allows_no_red_flag_and_needs_the_verdicts():
     two = _inflection(rating=PortfolioRating.OVERWEIGHT, red_flags=["a", "b"])
     assert "The inflection lane allows no red flag; the decision lists 2: resolve it or choose the value lane." \
         in decision_checks(two, None, None, worksheet=infl)
-    dear = _compounder(cheap=Verdict(passed=False, note="Margin of safety: 5%"))
-    assert decision_checks(dear, None, None, worksheet=comp) == [
-        "The compounder lane needs the Cheap test to pass; it is FAIL."]
+    # The compounder's price test is its own (premium, expected return, upside/downside): Cheap may fail.
+    lane_priced = _compounder(cheap=Verdict(passed=False, note="Margin of safety: 5%; price 1.08× base"))
+    assert decision_checks(lane_priced, None, None, worksheet=comp) == []
+    weak_comp = _compounder(good_business=Verdict(passed=False, note="x"))
+    assert decision_checks(weak_comp, None, None, worksheet=comp) == [
+        "The compounder lane needs the Good business test to pass; it is FAIL."]
     # The inflection lane does not ask for Cheap, but does ask for the business and management.
     assert decision_checks(_inflection(cheap=Verdict(passed=False, note="x")), None, None, worksheet=infl) == []
     weak = _inflection(good_management=Verdict(passed=False, note="dilutes"))

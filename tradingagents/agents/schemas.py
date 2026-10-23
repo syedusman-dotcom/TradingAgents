@@ -349,7 +349,9 @@ class PortfolioDecision(BaseModel):
         default="value",
         description=(
             "The investment lane the evidence supports; value first. 'value': the margin-of-safety "
-            "bars. 'compounder': ROIC including goodwill at least 15% in every counted year (at "
+            "bars. For the compounder and inflection lanes the Cheap test is replaced by the lane's "
+            "own price bars (Cheap may be FAIL; its note states the lane's price test). "
+            "'compounder': good business and good management pass, ROIC including goodwill at least 15% in every counted year (at "
             "least four), revenue CAGR at least 8% (ten years, or five flagged), free cash flow "
             "growing at least 5%/yr over at least 3 years, the reverse-DCF implied growth no higher "
             "than the earned growth (revenue CAGR capped at the cohort base rate) or the sustainable "

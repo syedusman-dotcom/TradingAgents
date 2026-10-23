@@ -320,7 +320,9 @@ def _quote_fx(ticker: str) -> tuple[str | None, float | None]:
 def offscreen_row(ticker: str, paths: Paths, cfg: dict, screen: dict[str, dict]) -> dict | None:
     """The screen's row for a ticker the screen did not cover (a holding or a --tickers name),
     built the same way, with its sector's median EV/EBIT from the screen as the reversion
-    target; None when its fundamentals cannot be fetched."""
+    target, its hard filters (``fail_reasons``, ``passes_filters``) and lane hints, so the
+    pipeline note names a hint for every reviewed ticker; None when its fundamentals cannot be
+    fetched."""
     scfg = cfg["screen"]
     try:
         data = market_data.fundamentals(ticker, paths, scfg["cache_days"])
@@ -332,6 +334,10 @@ def offscreen_row(ticker: str, paths: Paths, cfg: dict, screen: dict[str, dict])
     row["sector"] = market_data.cached_sector(ticker, paths) or data.get("sector")
     target = screener.sector_target(list(screen.values()), row["sector"])
     screener.with_target(row, data["years"], data.get("price"), row["market_cap"], row["shares"], target)
+    reasons = screener.failed_filters(row, cfg["filters"])
+    row["passes_filters"], row["fail_reasons"] = not reasons, "; ".join(reasons)
+    hints = screener.lane_hints(row)
+    row["hints"], row["lane_hint"] = ";".join(hints), hints[0] if hints else ""
     return row
 
 

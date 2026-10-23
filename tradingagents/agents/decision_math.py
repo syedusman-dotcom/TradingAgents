@@ -157,7 +157,8 @@ def _upside_downside_problem(decision, today, bar, lane) -> str | None:
 
 def _compounder_problems(decision, formula_value, price, worksheet) -> list[str]:
     rec = worksheet_record(worksheet)
-    problems = _lane_buy_problems(decision, "compounder", ("good_business", "good_management", "cheap"))
+    # The lane's own price bars (premium, expected return, upside/downside) replace the Cheap test.
+    problems = _lane_buy_problems(decision, "compounder", ("good_business", "good_management"))
     above, counted, worst = rec["roic_gw_years_above_15"], rec["roic_years_counted"], rec["roic_gw_min"]
     if (above is None or counted is None or counted < COMPOUNDER_MIN_ROIC_YEARS or above != counted
             or (worst is not None and worst < COMPOUNDER_ROIC_INCL_GOODWILL - 1e-9)):

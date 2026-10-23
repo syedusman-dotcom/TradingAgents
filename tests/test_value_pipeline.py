@@ -1681,3 +1681,24 @@ def test_watch_survives_an_empty_screen_and_odd_sidecars(tmp_path, monkeypatch):
     (paths.reports / "watch_2026-10-10.json").write_text("{nope")       # unreadable
     _, out = watch.run(paths, DEFAULTS, notify=False, today="2026-10-24")
     assert "(first watch)" in out.read_text() and "DS1" in out.read_text()
+
+
+@pytest.mark.unit
+def test_an_offscreen_row_carries_its_filters_and_lane_hints(tmp_path, monkeypatch):
+    from value_pipeline import market_data, review
+
+    row = {"ticker": "ADBE", "market_cap": 1e11, "fscore": 7, "altman_z": 7.5, "free_cash_flow": 9e9,
+           "interest_coverage": 30.0, "earnings_yield_avg": 0.08, "roic_ranked": 1.0, "roic_min": 0.5,
+           "fundamentals_intact": True, "drawdown_from_high": -0.25, "move_1m": -0.02, "move_3m": 0.2,
+           "market_cap_usd": 1e11, "shares": 4e8}
+    monkeypatch.setattr(market_data, "fundamentals", lambda t, paths, days: {"years": [], "price": 270.0})
+    monkeypatch.setattr(review.screener, "evaluate", lambda data, *a: dict(row))
+    monkeypatch.setattr(review.screener, "with_target", lambda *a: None)
+    monkeypatch.setattr(market_data, "cached_sector", lambda t, paths: "Technology")
+    built = review.offscreen_row("ADBE", Paths(tmp_path), DEFAULTS, {})
+    assert built["passes_filters"] is True and built["fail_reasons"] == ""
+    assert built["hints"] == "dislocation" and built["lane_hint"] == "dislocation"
+    assert review.pipeline_note(built).startswith("lane hint dislocation; 3-month move +20%")
+    monkeypatch.setattr(review.screener, "evaluate", lambda data, *a: {**row, "altman_z": 1.0})
+    weak = review.offscreen_row("ADBE", Paths(tmp_path), DEFAULTS, {})
+    assert weak["passes_filters"] is False and weak["fail_reasons"] == "Altman Z" and weak["lane_hint"] == ""
