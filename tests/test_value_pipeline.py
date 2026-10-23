@@ -1152,3 +1152,37 @@ def test_results_and_position_carry_the_earnings_date_or_none(tmp_path, monkeypa
     assert pfmod.load(paths).position("HRB").next_earnings_date == "2026-11-05"
     review._record_ratings(paths, pf, [act], "2026-10-24", {"HRB": None})
     assert pfmod.load(paths).position("HRB").next_earnings_date == "2026-11-05"
+
+
+@pytest.mark.unit
+def test_an_old_portfolio_file_loads_without_the_newer_position_fields(tmp_path):
+    paths = Paths(tmp_path)
+    paths.root.mkdir(parents=True, exist_ok=True)
+    paths.portfolio.write_text(json.dumps({
+        "cash": 100.0, "currency": "USD", "deposits": [],
+        "positions": [{"ticker": "HRB", "shares": 1, "avg_price": 50.0, "first_bought": "2026-10-02"}],
+    }), encoding="utf-8")
+    p = pfmod.load(paths).position("HRB")
+    assert p.next_earnings_date is None and p.kill_criteria == [] and p.entry_price is None
+
+
+@pytest.mark.unit
+def test_a_failing_earnings_lookup_gives_none(tmp_path, monkeypatch):
+    import pandas as pd
+
+    from value_pipeline import market_data, operations as ops, review
+
+    paths = Paths(tmp_path)
+    ops.init_portfolio(paths, 1000.0, on="2026-10-01")
+    monkeypatch.setattr(review, "fake_run", lambda t, i, held, price: review.RunResult(t, "Hold", ""))
+    monkeypatch.setattr(review, "_screen_rows", lambda paths: {})
+    monkeypatch.setattr(market_data, "latest_price", lambda t: 50.0)
+    monkeypatch.setattr(market_data, "quote_fx", lambda t: ("USD", 1.0))
+    monkeypatch.setattr(market_data, "closes_between", lambda *a, **k: pd.Series(dtype=float))
+
+    def boom(t):
+        raise RuntimeError("yahoo down")
+
+    monkeypatch.setattr(review, "next_earnings_date", boom)
+    out = review.run(paths, DEFAULTS, yes=True, dry_run=True, today="2026-10-23", only=["HRB"])
+    assert json.loads((out.parent / "results.json").read_text())[0]["earnings_date"] is None

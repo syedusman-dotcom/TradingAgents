@@ -76,6 +76,12 @@ def _no_network(request, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_earnings_lookup(monkeypatch):
+    """review.run looks up each ticker's next earnings date; never from Yahoo in a test."""
+    monkeypatch.setattr("value_pipeline.review.next_earnings_date", lambda t: None)
+
+
+@pytest.fixture(autouse=True)
 def _at_a_terminal(monkeypatch):
     """Tests of the interactive steps run as if at a terminal; pytest's stdin is
     not one. A test of an unattended run sets isatty to False itself."""
