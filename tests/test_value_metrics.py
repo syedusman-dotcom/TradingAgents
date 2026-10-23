@@ -13,7 +13,8 @@ def _year(**kw):
             "net_ppe": 500, "long_term_debt": 400, "total_debt": 500, "equity": 900,
             "retained_earnings": 700, "total_liabilities": 1100, "shares": 100,
             "operating_cash_flow": 220, "free_cash_flow": 180, "capex": -40,
-            "dividends_paid": -50, "buybacks": -30, "stock_based_comp": 20}
+            "dividends_paid": -50, "buybacks": -30, "stock_based_comp": 20,
+            "receivables": 120, "depreciation": 40, "sga": 150, "acquisitions": 0}
     return {**base, **kw}
 
 
@@ -229,3 +230,55 @@ def test_report_states_the_discount_rate_and_where_it_came_from():
     assert "10-year Treasury 5.2% + 4.5% premium" in report
     plain = vm.render_report("ABC", "2026-10-15", vm.company_metrics(years, price=25.0, market_cap=2500.0, shares=100))
     assert "(9.0% − g)" in plain and "Treasury yield unavailable" in plain
+
+
+@pytest.mark.unit
+def test_accruals_ratio_is_net_income_less_cfo_over_average_assets():
+    assert vm.accruals_ratio(_year(net_income=150, operating_cash_flow=220, total_assets=2000),
+                             _year(total_assets=1800)) == pytest.approx((150 - 220) / 1900)
+
+
+@pytest.mark.unit
+def test_beneish_m_for_identical_years_is_the_intercept_plus_tata():
+    y = _year()
+    m = vm.beneish_m(y, y)       # every index is 1.0; TATA = (150-220)/2000
+    assert m == pytest.approx(-4.84 + 0.920 + 0.528 + 0.404 + 0.892 + 0.115 - 0.172 - 0.327 + 4.679 * (-70 / 2000))
+
+
+@pytest.mark.unit
+def test_beneish_m_is_none_when_receivables_are_missing():
+    assert vm.beneish_m(_year(receivables=None), _year()) is None
+
+
+@pytest.mark.unit
+def test_accounting_checks_tolerate_missing_inputs():
+    assert vm.accruals_ratio({}, None) is None
+    assert vm.cash_conversion([]) is None
+    assert vm.receivables_vs_revenue({}, {}) is None
+    assert vm.beneish_m({}, None) is None
+    assert vm.accounting_checks([{}])["flags"] == []
+
+
+@pytest.mark.unit
+def test_accounting_flags_name_each_breach():
+    bad = [_year(net_income=400, operating_cash_flow=100, receivables=300), _year(receivables=100, revenue=1000)]
+    flags = vm.accounting_checks(bad)["flags"]
+    assert any("accruals" in f for f in flags) and any("receivables" in f for f in flags)
+    assert vm.accounting_checks([_year(), _year()])["flags"] == []
+
+
+@pytest.mark.unit
+def test_report_has_an_accounting_section():
+    m = vm.company_metrics([_year(), _year()], price=20, market_cap=2000, shares=100)
+    assert "## Accounting checks" in vm.render_report("X", "2026-10-23", m)
+
+
+@pytest.mark.unit
+def test_yahoo_rows_map_the_accounting_fields():
+    rows = {"Total Revenue": 1000.0, "Gross Profit": 400.0, "Net Income": 150.0, "Total Assets": 2000.0,
+            "Operating Cash Flow": 220.0, "Cash And Cash Equivalents": 100.0,
+            "Accounts Receivable": 120.0, "Reconciled Depreciation": 40.0,
+            "Selling General And Administration": 150.0, "Purchase Of Business": -7.0}
+    frame = pd.DataFrame({pd.Timestamp("2025-12-31"): list(rows.values())}, index=list(rows))
+    (year,) = yahoo_vm.statement_years(frame)
+    assert (year["receivables"], year["depreciation"], year["sga"], year["acquisitions"]) == (120.0, 40.0, 150.0, -7.0)

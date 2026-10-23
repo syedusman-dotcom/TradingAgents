@@ -13,6 +13,7 @@ from tradingagents.dataflows.value_metrics import (  # noqa: F401 - re-exported 
     DISCOUNT_RATE,
     FSCORE_POINTS,
     YEAR_FIELDS,
+    accounting_checks,
     altman_z,
     current_discount_rate,
     debt_to_equity,

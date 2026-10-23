@@ -36,6 +36,7 @@ def evaluate(data: dict, normalize_years: int = 5, roic_cap: float = 1.0,
     value = metrics.formula_value(years, data.get("price"), shares, net_debt, rate) or {}
     tr = metrics.trend(data.get("closes") or [])
     norm = metrics.normalized(years, normalize_years)
+    acc = metrics.accounting_checks(years)
     row = {
         "ticker": data["ticker"],
         "fiscal_year_end": cur["fiscal_year_end"],
@@ -57,6 +58,9 @@ def evaluate(data: dict, normalize_years: int = 5, roic_cap: float = 1.0,
         "altman_z": metrics.altman_z(cur, mcap),
         "debt_to_equity": metrics.debt_to_equity(cur),
         "interest_coverage": metrics.interest_coverage(cur),
+        "accruals_ratio": acc["accruals_ratio"],
+        "beneish_m": acc["beneish_m"],
+        "accounting_flags": "; ".join(acc["flags"]),
         "value_base": value.get("base"),
         "value_low": value.get("low"),
         "value_high": value.get("high"),
@@ -96,6 +100,12 @@ def failed_filters(row: dict, filters: dict) -> list[str]:
     cap = filters.get("max_dilution_per_year")
     if cap is not None and row.get("dilution_per_year") is not None and row["dilution_per_year"] > cap:
         reasons.append("dilution")
+    cap = filters.get("max_accruals_ratio")
+    if cap is not None and row.get("accruals_ratio") is not None and row["accruals_ratio"] > cap:
+        reasons.append("accruals")
+    cap = filters.get("max_beneish_m")
+    if cap is not None and row.get("beneish_m") is not None and row["beneish_m"] > cap:
+        reasons.append("M-score")
     return reasons
 
 

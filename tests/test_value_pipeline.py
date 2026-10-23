@@ -328,6 +328,20 @@ def test_hard_filters():
 
 
 @pytest.mark.unit
+def test_screen_rows_carry_accounting_columns_and_optional_filters():
+    year = {"fiscal_year_end": "2025-12-31", "revenue": 1000, "ebit": 200, "net_income": 150,
+            "total_assets": 2000, "operating_cash_flow": 220, "current_assets": 400, "cash": 0,
+            "current_liabilities": 200, "net_ppe": 100, "shares": 100, "total_debt": 0}
+    row = screener.evaluate({"ticker": "ACC", "years": [year, year], "market_cap": 2000, "price": 20, "closes": []})
+    assert {"accruals_ratio", "beneish_m", "accounting_flags"} <= set(row)
+    f = DEFAULTS["filters"]
+    assert "accruals" in screener.failed_filters(dict(GOOD, accruals_ratio=0.0), {**f, "max_accruals_ratio": -1.0})
+    assert "accruals" not in screener.failed_filters(dict(GOOD, accruals_ratio=0.0), f)
+    assert "M-score" in screener.failed_filters(dict(GOOD, beneish_m=-1.0), {**f, "max_beneish_m": -1.78})
+    assert "M-score" not in screener.failed_filters(dict(GOOD, beneish_m=None), {**f, "max_beneish_m": -1.78})
+
+
+@pytest.mark.unit
 def test_rank_drops_owned_and_freefall_from_the_top_list():
     rows = [dict(GOOD, ticker="A", earnings_yield_avg=0.2, fail_reasons=[]),
             dict(GOOD, ticker="B", earnings_yield_avg=0.15, trend="FREEFALL", fail_reasons=[]),

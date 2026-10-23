@@ -30,7 +30,7 @@ HEADERS = {"User-Agent": "value-pipeline/0.1 (personal research tool)"}
 
 
 # Bump when the cached fields change, so older cache files are fetched again.
-CACHE_SCHEMA = 2
+CACHE_SCHEMA = 3
 
 
 class DataUnavailable(Exception):

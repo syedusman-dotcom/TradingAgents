@@ -47,6 +47,11 @@ ROWS: dict[str, tuple[str, ...]] = {
     "dividends_paid": ("Cash Dividends Paid", "Common Stock Dividend Paid"),
     "buybacks": ("Repurchase Of Capital Stock", "Common Stock Payments"),
     "stock_based_comp": ("Stock Based Compensation",),
+    "receivables": ("Accounts Receivable", "Receivables"),
+    "depreciation": ("Reconciled Depreciation", "Depreciation And Amortization",
+                     "Depreciation Amortization Depletion"),
+    "sga": ("Selling General And Administration",),
+    "acquisitions": ("Purchase Of Business",),
 }
 assert set(ROWS) == set(YEAR_FIELDS)
 

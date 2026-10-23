@@ -105,7 +105,7 @@ def _csv_records(path: Path) -> list[dict]:
 
 _SCREEN_COLUMNS = ("ticker", "sector", "mf_position", "earnings_yield_avg", "roic_avg", "fcf_yield", "fscore",
                    "altman_z", "mos_formula", "superinvestors", "superinvestor_names", "trend", "passes_filters",
-                   "fail_reasons")
+                   "fail_reasons", "accounting_flags")
 
 
 def screen_table(paths: Paths) -> dict | None:

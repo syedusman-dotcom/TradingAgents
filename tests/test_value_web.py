@@ -186,14 +186,14 @@ def test_screen_page_shows_the_latest_screen(tmp_path):
     paths.screens.mkdir(parents=True)
     (paths.screens / "screen_2026-10-11.csv").write_text(
         "ticker,name,sector,mf_position,earnings_yield_avg,roic_avg,fcf_yield,fscore,altman_z,mos_formula,trend,"
-        "passes_filters,fail_reasons\n"
-        "HRB,H&R Block,Consumer Discretionary,1,0.129,1.34,0.14,7,3.3,0.50,UPTREND,True,\n"
-        "XYZ,Xyz,Industrials,,0.01,0.05,0.01,3,1.0,,DOWNTREND,False,F-Score\n")
+        "passes_filters,fail_reasons,accounting_flags\n"
+        "HRB,H&R Block,Consumer Discretionary,1,0.129,1.34,0.14,7,3.3,0.50,UPTREND,True,,accruals 12%\n"
+        "XYZ,Xyz,Industrials,,0.01,0.05,0.01,3,1.0,,DOWNTREND,False,F-Score,\n")
     (paths.screens / "screen_2026-10-11_excluded.csv").write_text("ticker,name,sector\nJPM,JPMorgan,Financials\n")
     (paths.screens / "screen_2026-10-11_skipped.csv").write_text("ticker,reason\nBAD,no annual statements\n")
     r = client.get("/screen")
     assert r.status_code == 200
-    for text in ("2026-10-11", "HRB", "50%", "XYZ", "F-Score", "JPM", "no annual statements", "Industrials"):
+    for text in ("2026-10-11", "HRB", "50%", "XYZ", "F-Score", "JPM", "no annual statements", "Industrials", "accruals 12%"):
         assert text in r.text, text
     assert r.text.index("HRB") < r.text.index("XYZ")          # ranked first, unranked last
 

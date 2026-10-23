@@ -21,6 +21,7 @@ YEAR_FIELDS = (
     "long_term_debt", "total_debt", "equity", "retained_earnings", "total_liabilities",
     "shares", "operating_cash_flow", "free_cash_flow",
     "capex", "dividends_paid", "buybacks", "stock_based_comp",
+    "receivables", "depreciation", "sga", "acquisitions",
 )
 
 def num(x) -> float | None:
@@ -179,6 +180,114 @@ def interest_coverage(year: dict) -> float | None:
     return ebit / interest
 
 
+# --- accounting checks ----------------------------------------------------------------
+
+ACCRUALS_LIMIT = 0.10         # (net income - operating cash flow) / average assets
+CASH_CONVERSION_FLOOR = 0.8   # operating cash flow / net income, over three years
+RECEIVABLES_GAP_LIMIT = 0.15  # receivables growth less revenue growth
+BENEISH_LIMIT = -1.78         # M above this is the "likely manipulator" band
+CAPEX_TO_DEPRECIATION_FLOOR = 0.5
+
+
+def accruals_ratio(cur: dict, prev: dict | None) -> float | None:
+    """(Net income - operating cash flow) / average total assets: profit not backed by cash."""
+    ni, cfo, ta = (num(cur.get(k)) for k in ("net_income", "operating_cash_flow", "total_assets"))
+    if ni is None or cfo is None or ta is None:
+        return None
+    ta_prev = num((prev or {}).get("total_assets"))
+    return div(ni - cfo, (ta + ta_prev) / 2 if ta_prev is not None else ta)
+
+
+def cash_conversion(years: list[dict], n: int = 3) -> float | None:
+    """Operating cash flow / net income summed over up to ``n`` years; None unless profit is positive."""
+    rows = [(num(y.get("operating_cash_flow")), num(y.get("net_income"))) for y in years[:n]]
+    rows = [r for r in rows if r[0] is not None and r[1] is not None]
+    if not rows:
+        return None
+    ni = sum(r[1] for r in rows)
+    return div(sum(r[0] for r in rows), ni) if ni > 0 else None
+
+
+def receivables_vs_revenue(cur: dict, prev: dict | None) -> float | None:
+    """Receivables growth less revenue growth; positive means sales are piling up unpaid."""
+    prev = prev or {}
+    rec, rev = div(cur.get("receivables"), prev.get("receivables")), div(cur.get("revenue"), prev.get("revenue"))
+    return None if rec is None or rev is None else rec - rev
+
+
+def beneish_m(cur: dict, prev: dict | None) -> float | None:
+    """Beneish's eight-variable M-score; None if any input is missing."""
+    if not prev:
+        return None
+    a = {k: num(cur.get(k)) for k in ("revenue", "gross_profit", "receivables", "current_assets", "net_ppe",
+                                "total_assets", "long_term_debt", "current_liabilities", "net_income",
+                                "operating_cash_flow", "depreciation", "sga")}
+    b = {k: num(prev.get(k)) for k in a}
+    if any(v is None for v in (*a.values(), *b.values())):
+        return None
+    a["depreciation"], a["sga"] = abs(a["depreciation"]), abs(a["sga"])
+    b["depreciation"], b["sga"] = abs(b["depreciation"]), abs(b["sga"])
+
+    def margin(y):
+        return div(y["gross_profit"], y["revenue"])
+
+    def hard(y):
+        v = div(y["current_assets"] + y["net_ppe"], y["total_assets"])
+        return None if v is None else 1 - v
+
+    def dep_rate(y):
+        return div(y["depreciation"], y["depreciation"] + y["net_ppe"])
+
+    def leverage(y):
+        return div(y["long_term_debt"] + y["current_liabilities"], y["total_assets"])
+
+    def ratio(f):
+        return div(f(a), f(b))
+
+    parts = (
+        ratio(lambda y: div(y["receivables"], y["revenue"])),          # DSRI
+        div(margin(b), margin(a)),                                      # GMI
+        ratio(hard),                                                    # AQI
+        div(a["revenue"], b["revenue"]),                                # SGI
+        div(dep_rate(b), dep_rate(a)),                                  # DEPI
+        ratio(lambda y: div(y["sga"], y["revenue"])),                   # SGAI
+        div(a["net_income"] - a["operating_cash_flow"], a["total_assets"]),  # TATA
+        ratio(leverage),                                                # LVGI
+    )
+    if any(p is None for p in parts):
+        return None
+    dsri, gmi, aqi, sgi, depi, sgai, tata, lvgi = parts
+    return (-4.84 + 0.920 * dsri + 0.528 * gmi + 0.404 * aqi + 0.892 * sgi + 0.115 * depi
+            - 0.172 * sgai + 4.679 * tata - 0.327 * lvgi)
+
+
+def accounting_checks(years: list[dict]) -> dict:
+    """The earnings-quality numbers and a plain-language flag for each breach."""
+    cur = years[0] if years else {}
+    prev = years[1] if len(years) > 1 else None
+    out = {
+        "accruals_ratio": accruals_ratio(cur, prev),
+        "cash_conversion": cash_conversion(years),
+        "receivables_vs_revenue": receivables_vs_revenue(cur, prev),
+        "beneish_m": beneish_m(cur, prev),
+    }
+    flags = []
+    if out["accruals_ratio"] is not None and out["accruals_ratio"] > ACCRUALS_LIMIT:
+        flags.append(f"accruals ratio {out['accruals_ratio']:.0%} above {ACCRUALS_LIMIT:.0%}")
+    if out["cash_conversion"] is not None and out["cash_conversion"] < CASH_CONVERSION_FLOOR:
+        flags.append(f"cash conversion {out['cash_conversion']:.2f} below {CASH_CONVERSION_FLOOR} over 3 years")
+    if out["receivables_vs_revenue"] is not None and out["receivables_vs_revenue"] > RECEIVABLES_GAP_LIMIT:
+        flags.append(f"receivables grew {out['receivables_vs_revenue']:+.0%} faster than revenue")
+    if out["beneish_m"] is not None and out["beneish_m"] > BENEISH_LIMIT:
+        flags.append(f"Beneish M-score {out['beneish_m']:.2f} above {BENEISH_LIMIT}")
+    ratios = [div(abs(num(y.get("capex")) or 0.0) if num(y.get("capex")) is not None else None,
+                  abs(num(y.get("depreciation")) or 0.0)) for y in years[:2]]
+    if len(ratios) == 2 and all(r is not None and r < CAPEX_TO_DEPRECIATION_FLOOR for r in ratios):
+        flags.append("capex below half of depreciation for 2 years")
+    out["flags"] = flags
+    return out
+
+
 # --- formula valuation -----------------------------------------------------------
 
 # Value = normalized cash flow x (1 + g) / (r - g): a growing perpetuity, the
@@ -328,6 +437,7 @@ def company_metrics(years: list[dict], price, market_cap, shares,
         "pb": div(market_cap, cur.get("equity")) if (num(cur.get("equity")) or 0) > 0 else None,
         "fscore": piotroski(cur, years[1]) if len(years) > 1 else None,
         "altman_z": altman_z(cur, market_cap),
+        "accounting": accounting_checks(years),
         "current_ratio": div(cur.get("current_assets"), cur.get("current_liabilities")),
         "valuation": formula_value(years, price, shares, net_debt, rate),
         "treasury_10y": treasury_10y,
@@ -342,6 +452,10 @@ def _x(x) -> str:
     if x is None:
         return "n/a"
     return "no interest" if math.isinf(x) else f"{x:.1f}x"
+
+
+def _x2(x, suffix: str = "x") -> str:
+    return "n/a" if x is None else f"{x:.2f}{suffix}"
 
 
 def _money(x, scale: float = 1e6) -> str:
@@ -406,6 +520,16 @@ def render_report(symbol: str, as_of: str, m: dict, currency: str | None = None)
     lines.append(f"Altman Z-Score: {'n/a' if z is None else f'{z:.2f}'} (above 3 safe, 1.8-3 grey, below 1.8 distress) | "
                  f"Current ratio {_x(m['current_ratio'])}")
     lines.append("")
+    acc = m["accounting"]
+    lines += [
+        "## Accounting checks",
+        "",
+        f"Accruals ratio {_pct(acc['accruals_ratio'])} | Cash conversion (3 years) {_x2(acc['cash_conversion'])} | "
+        f"Receivables growth less revenue growth {_pct(acc['receivables_vs_revenue'])} | "
+        f"Beneish M-score {_x2(acc['beneish_m'], '')}",
+        "Flags: " + ("; ".join(acc["flags"]) if acc["flags"] else "none"),
+        "",
+    ]
     v = m["valuation"]
     if v:
         lines += [f"## Formula valuation (per share; {v['years_used']}-year averages)", ""]

@@ -12,7 +12,7 @@
   <label>Min formula margin of safety <input id="f-mos" type="number" step="5" size="4">%</label>
 </fieldset>
 <div class="table"><table id="screen">
-<thead><tr><th data-k="n">#</th><th>Ticker</th><th>Sector</th><th class="num" data-k="n">EBIT/EV avg</th><th class="num" data-k="n">ROIC avg</th><th class="num" data-k="n">FCF yield</th><th class="num" data-k="n">F</th><th class="num" data-k="n">Z</th><th class="num" data-k="n">Formula MoS</th><th>Superinvestors</th><th>Trend</th><th>Fails</th></tr></thead>
+<thead><tr><th data-k="n">#</th><th>Ticker</th><th>Sector</th><th class="num" data-k="n">EBIT/EV avg</th><th class="num" data-k="n">ROIC avg</th><th class="num" data-k="n">FCF yield</th><th class="num" data-k="n">F</th><th class="num" data-k="n">Z</th><th class="num" data-k="n">Formula MoS</th><th>Superinvestors</th><th>Trend</th><th>Accounting</th><th>Fails</th></tr></thead>
 <tbody>
 {% for r in screen.rows %}
 <tr data-sector="{{ r.sector or '' }}" data-trend="{{ r.trend or '' }}" data-pass="{{ 'y' if r.passes_filters in (true, 'True') else 'n' }}" data-mos="{{ r.mos_formula if r.mos_formula is not none else '' }}">
@@ -25,7 +25,7 @@
 <td class="num">{{ "{:.1f}".format(r.altman_z) if r.altman_z is not none else "–" }}</td>
 <td class="num">{{ "{:.0%}".format(r.mos_formula) if r.mos_formula is not none else "–" }}</td>
 <td>{% if r.superinvestors %}{{ r.superinvestors | int }}: {{ r.superinvestor_names }}{% endif %}</td>
-<td>{{ r.trend or "–" }}</td><td class="muted">{{ r.fail_reasons or "" }}</td></tr>
+<td>{{ r.trend or "–" }}</td><td class="muted">{{ r.accounting_flags or "" }}</td><td class="muted">{{ r.fail_reasons or "" }}</td></tr>
 {% endfor %}
 </tbody></table></div>
 <h2>Excluded sectors ({{ screen.excluded | length }})</h2>
