@@ -327,14 +327,15 @@ def discover_themes(paths: Paths, cfg: dict, llm, today: str, owned: set[str],
     """The theme scan's inflection candidates (screen rows hinted ``inflection``) and the report
     written to ``reports/themes_<label or today>.md``, with the latest screen's sector scares
     (``scares``, read from the screen when None). No themes but a scare: the report has only the
-    scares (no model call). Fails open: no candidates, no report."""
+    scares (no model call). Fails open: a failed scan gives no candidates and a report with only
+    the scares (none when there are no scares)."""
     names = cfg.get("lanes", {}).get("themes") or []
     if scares is None:
         scares = screener.latest_scares(paths)
     if not names and not scares:
         return [], None
+    extra = themes_mod.scare_lines(scares)
     try:
-        extra = themes_mod.scare_lines(scares)
         if not names:
             out = themes_mod.write_report(paths, label or today, [], [], [], extra=extra)
             print(f"Sector scares: {', '.join(scares)}; see {out}")
@@ -344,7 +345,13 @@ def discover_themes(paths: Paths, cfg: dict, llm, today: str, owned: set[str],
         out = themes_mod.write_report(paths, label or today, ideas, kept, skipped, extra=extra)
     except Exception as exc:  # noqa: BLE001 - discovery is extra; the review stands without it
         log.warning("theme scan failed: %s: %s", type(exc).__name__, exc)
-        return [], None
+        if not scares:
+            return [], None
+        try:                    # the scares come from the screen: keep them without the scan
+            return [], themes_mod.write_report(paths, label or today, [], [], [], extra=extra)
+        except Exception as exc2:  # noqa: BLE001
+            log.warning("sector scares report failed: %s: %s", type(exc2).__name__, exc2)
+            return [], None
     print(f"Theme scan: {len(ideas)} idea(s), {len(kept)} inflection candidate(s); see {out}")
     return kept, out
 

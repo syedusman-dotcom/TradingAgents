@@ -99,10 +99,15 @@ def evaluate(data: dict, normalize_years: int = 5, roic_cap: float = 1.0,
     return row
 
 
+AVERAGE_MIN_YEARS = 3
+
+
 def _average(years: list[dict], field: str, n: int = 5) -> float | None:
-    """The mean of ``field`` over the latest ``n`` annual statements that report it."""
+    """The mean of ``field`` over the latest ``n`` annual statements that report it; None when
+    fewer than three do (too short a record for a five-year average, so ``fundamentals_intact``
+    is None and no dislocation hint is given)."""
     vals = [v for v in (metrics.num(y.get(field)) for y in years[:n]) if v is not None]
-    return sum(vals) / len(vals) if vals else None
+    return sum(vals) / len(vals) if len(vals) >= AVERAGE_MIN_YEARS else None
 
 
 SECTOR_MIN_ROWS = 3
@@ -296,8 +301,12 @@ def latest_scares(paths: Paths) -> dict[str, list[dict]]:
     path = latest_screen(paths)
     if path is None:
         return {}
-    df = pd.read_csv(path)
-    if "sector_scare" not in df:
+    try:
+        df = pd.read_csv(path)
+    except (pd.errors.EmptyDataError, OSError, ValueError) as exc:
+        log.warning("latest screen %s unreadable for sector scares: %s", path.name, exc)
+        return {}
+    if "sector_scare" not in df or "ticker" not in df:
         return {}
     out: dict[str, list[dict]] = {}
     for r in df.to_dict("records"):

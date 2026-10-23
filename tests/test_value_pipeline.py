@@ -1405,11 +1405,13 @@ def test_dislocation_metrics_and_hint():
     quarters = [{"fiscal_year_end": e, "revenue": 27.5, "ebit": 5.5} for e in ends]
     row = screener.evaluate({"ticker": "DIS", "years": [year] * 5, "market_cap": 2000, "price": 70,
                              "closes": closes, "quarters": quarters, "industry": "Software"})
-    assert row["industry"] == "Software"
+    assert row["industry"] == "Software" and row["accounting_flags"] == ""
     assert row["drawdown_from_high"] == pytest.approx(-0.30)
-    assert row["fundamentals_intact"] in (True, False)
-    for k in ("move_1m", "move_3m"):
-        assert k in row
+    assert row["move_3m"] == pytest.approx(-0.30) and row["move_1m"] == pytest.approx(70 / closes[-22] - 1)
+    assert row["fundamentals_intact"] is True                 # TTM 110 / 22 vs averages 100 / 20
+    two_years = screener.evaluate({"ticker": "DIS", "years": [year] * 2, "market_cap": 2000, "price": 70,
+                                   "closes": closes, "quarters": quarters})
+    assert two_years["fundamentals_intact"] is None           # under three years: no five-year average
 
     base = {"passes_filters": True, "fundamentals_intact": True, "drawdown_from_high": -0.30,
             "move_1m": -0.05, "roic_min": 0.1}
@@ -1567,3 +1569,34 @@ def test_watch_new_ideas_lists_only_new_hints(tmp_path, monkeypatch):
 
     _, out = watch.run(paths, DEFAULTS, notify=False, today="2026-10-31")
     assert "No new ideas" in out.read_text().split("## New ideas")[1]
+
+
+@pytest.mark.unit
+def test_dislocation_at_the_high_gives_no_hint():
+    d = metrics.dislocation([100.0] * 300, 110.0, 22.0, 100.0, 20.0, [])
+    assert d["drawdown_from_high"] == pytest.approx(0.0) and d["move_1m"] == pytest.approx(0.0)
+    assert d["move_3m"] == pytest.approx(0.0) and d["fundamentals_intact"] is True
+    assert screener.lane_hints({**d, "passes_filters": True}) == []
+
+
+@pytest.mark.unit
+def test_watch_survives_an_empty_screen_and_odd_sidecars(tmp_path, monkeypatch):
+    from value_pipeline import watch
+
+    paths = Paths(tmp_path)
+    pf = pfmod.Portfolio(cash=0.0)
+    pfmod.apply_deposit(pf, 1000.0, on="2026-10-01")
+    pfmod.save(paths, pf)
+    monkeypatch.setattr(watch.market_data, "latest_price", lambda t: 40.0)
+    monkeypatch.setattr(watch.market_data, "closes", lambda t: [])
+    paths.screens.mkdir(parents=True, exist_ok=True)
+    (paths.screens / "screen_2026-10-20.csv").write_text("\n")        # a zero-row screen
+    _, out = watch.run(paths, DEFAULTS, notify=False, today="2026-10-24")
+    assert "No screen yet" in out.read_text().split("## New ideas")[1]
+    assert not (paths.reports / "watch_2026-10-24.json").exists()
+
+    _dislocation_screen(paths, day="2026-10-21")
+    (paths.reports / "watch_2026-10-17.json").write_text("[]")          # not an object
+    (paths.reports / "watch_2026-10-10.json").write_text("{nope")       # unreadable
+    _, out = watch.run(paths, DEFAULTS, notify=False, today="2026-10-24")
+    assert "(first watch)" in out.read_text() and "DS1" in out.read_text()

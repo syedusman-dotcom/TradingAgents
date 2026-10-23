@@ -99,15 +99,20 @@ def _pct(v) -> str:
 
 
 def _hinted_rows(paths: Paths) -> dict[str, dict] | None:
-    """The latest screen's rows carrying a lane hint, by ticker; None when there is no screen."""
+    """The latest screen's rows carrying a lane hint, by ticker; None when there is no screen or
+    it cannot be read (a zero-row screen after a Yahoo outage is just a newline)."""
     path = screener.latest_screen(paths)
     if path is None:
         return None
-    df = pd.read_csv(path)
-    if "lane_hint" not in df:
-        return {}
-    return {r["ticker"]: r for r in df.to_dict("records")
-            if isinstance(r.get("lane_hint"), str) and r["lane_hint"]}
+    try:
+        df = pd.read_csv(path)
+        if "lane_hint" not in df:
+            return {}
+        return {r["ticker"]: r for r in df.to_dict("records")
+                if isinstance(r.get("lane_hint"), str) and r["lane_hint"]}
+    except (pd.errors.EmptyDataError, KeyError, OSError, ValueError) as exc:
+        log.warning("latest screen %s unreadable for New ideas: %s", path.name, exc)
+        return None
 
 
 def _previous_hinted(paths: Paths, today: str) -> dict[str, str] | None:
@@ -116,10 +121,11 @@ def _previous_hinted(paths: Paths, today: str) -> dict[str, str] | None:
         if f.stem.removeprefix("watch_") >= today:
             continue
         try:
-            hinted = json.loads(f.read_text(encoding="utf-8")).get("hinted")
+            obj = json.loads(f.read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
             log.warning("unreadable watch sidecar %s: %s", f.name, exc)
             continue
+        hinted = obj.get("hinted") if isinstance(obj, dict) else None
         if isinstance(hinted, dict):
             return hinted
         if isinstance(hinted, list):

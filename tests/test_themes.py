@@ -243,3 +243,23 @@ def test_screen_page_shows_and_filters_the_lane_hint(tmp_path):
     assert '<option value="compounder">compounder</option>' in text and "inflection" in text
     assert 'data-hint="compounder"' in text and 'data-hint=""' in text
     assert "f-hint" in text.split("<script>")[1]                        # the filter is wired
+
+
+@pytest.mark.unit
+def test_a_failed_theme_scan_still_writes_the_sector_scares(tmp_path, monkeypatch):
+    from value_pipeline import review, themes
+
+    paths = Paths(tmp_path)
+    scares = {"Software": [{"ticker": "DS1", "drawdown_from_high": -0.4}]}
+
+    def boom(llm, names, today):
+        raise RuntimeError("model down")
+
+    monkeypatch.setattr(themes, "scan", boom)
+    cfg = copy.deepcopy(DEFAULTS)
+    cfg["lanes"]["themes"] = ["AI infrastructure"]
+    kept, out = review.discover_themes(paths, cfg, None, "2026-10-23", set(), scares=scares)
+    assert kept == [] and out is not None
+    assert "## Sector scares" in out.read_text() and "DS1 (-40%)" in out.read_text()
+    kept, out = review.discover_themes(paths, cfg, None, "2026-10-24", set(), scares={})
+    assert kept == [] and out is None                                   # no scares: nothing to write
