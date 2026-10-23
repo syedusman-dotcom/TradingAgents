@@ -237,8 +237,9 @@ def preview(paths: Paths, cfg: dict, only: list[str] | None = None,
     """What a review would run and cost, without running anything.
 
     Candidates: the names in ``lanes.tickers``, the screen's best Magic Formula names, up to
-    ``lanes.compounder_candidates`` compounder-hinted ones, then ``discovered`` (the theme scan's
-    inflection candidates); the cost cap drops from the end."""
+    ``lanes.compounder_candidates`` compounder-hinted ones, up to ``lanes.dislocation_candidates``
+    dislocation-hinted ones, then ``discovered`` (the theme scan's inflection candidates); the
+    cost cap drops from the end."""
     rcfg, lanes = cfg["review"], cfg.get("lanes", {})
     pf = pfmod.load(paths)
     owned = {p.ticker for p in pf.positions}
@@ -246,7 +247,8 @@ def preview(paths: Paths, cfg: dict, only: list[str] | None = None,
     if not only:
         named = [t.strip().upper() for t in lanes.get("tickers") or [] if t.strip()]
         screened = screener.top_candidates(paths, owned, rcfg["candidates"],
-                                           compounders=int(lanes.get("compounder_candidates", 0)))
+                                           compounders=int(lanes.get("compounder_candidates", 0)),
+                                           dislocations=int(lanes.get("dislocation_candidates", 0)))
         candidates = [t for t in dict.fromkeys(named + [c["ticker"] for c in screened] + (discovered or []))
                       if t not in owned]
     tickers, n_held, n_new = select_tickers([p.ticker for p in pf.positions], candidates, only)
@@ -320,16 +322,26 @@ def run(paths: Paths, cfg: dict, *, yes: bool = False, dry_run: bool = False,
 
 
 def discover_themes(paths: Paths, cfg: dict, llm, today: str, owned: set[str],
-                    label: str | None = None) -> tuple[list[dict], Path | None]:
+                    label: str | None = None,
+                    scares: dict[str, list[dict]] | None = None) -> tuple[list[dict], Path | None]:
     """The theme scan's inflection candidates (screen rows hinted ``inflection``) and the report
-    written to ``reports/themes_<label or today>.md``. Fails open: no candidates, no report."""
+    written to ``reports/themes_<label or today>.md``, with the latest screen's sector scares
+    (``scares``, read from the screen when None). No themes but a scare: the report has only the
+    scares (no model call). Fails open: no candidates, no report."""
     names = cfg.get("lanes", {}).get("themes") or []
-    if not names:
+    if scares is None:
+        scares = screener.latest_scares(paths)
+    if not names and not scares:
         return [], None
     try:
+        extra = themes_mod.scare_lines(scares)
+        if not names:
+            out = themes_mod.write_report(paths, label or today, [], [], [], extra=extra)
+            print(f"Sector scares: {', '.join(scares)}; see {out}")
+            return [], out
         ideas = themes_mod.scan(llm, names, today)
         kept, skipped = themes_mod.candidates(paths, cfg, ideas, owned)
-        out = themes_mod.write_report(paths, label or today, ideas, kept, skipped)
+        out = themes_mod.write_report(paths, label or today, ideas, kept, skipped, extra=extra)
     except Exception as exc:  # noqa: BLE001 - discovery is extra; the review stands without it
         log.warning("theme scan failed: %s: %s", type(exc).__name__, exc)
         return [], None
@@ -346,12 +358,15 @@ def _run(paths: Paths, cfg: dict, *, yes: bool, dry_run: bool, today: str | None
     ta = tally = None
     discovered: dict[str, dict] = {}
     themes_report = None
-    if discover and not only and cfg.get("lanes", {}).get("themes"):
-        if not dry_run:
+    names = cfg.get("lanes", {}).get("themes")
+    scares = screener.latest_scares(paths) if discover and not only else {}
+    if discover and not only and (names or scares):
+        if not dry_run and names:
             ta, tally = _graph(rcfg)
         exclude = owned | set(preview(paths, cfg)["tickers"])
         kept, themes_report = discover_themes(paths, cfg, ta.quick_thinking_llm if ta else None, today,
-                                              exclude, label=today + ("-dry-run" if dry_run else ""))
+                                              exclude, label=today + ("-dry-run" if dry_run else ""),
+                                              scares=scares)
         discovered = {r["ticker"]: r for r in kept}
     scan_usage = tally.snapshot() if tally else {}
     plan_ = preview(paths, cfg, only, list(discovered))
@@ -495,7 +510,8 @@ def _run(paths: Paths, cfg: dict, *, yes: bool, dry_run: bool, today: str | None
                                  committee=committee, committee_unavailable=unavailable,
                                  max_weight=cfg["sizing"]["max_position_weight"],
                                  themes_report=themes_report.name
-                                 if themes_report and set(discovered) & set(tickers) else None)
+                                 if themes_report and (set(discovered) & set(tickers) or scares)
+                                 else None)
     (out_dir / "ACTIONS.md").write_text(md, encoding="utf-8")
     (out_dir / "ACTIONS.html").write_text(render.actions_html(md, f"Value review {today}"), encoding="utf-8")
     # Written whole: the website reads these files while a review may be finishing.
@@ -520,7 +536,8 @@ def _graph(rcfg: dict):
 
 
 def _hint(row: dict | None) -> str:
-    """The row's lane hint ("compounder", "inflection" or ""); "" for a screen from before it."""
+    """The row's lane hint ("compounder", "inflection", "dislocation" or ""); "" for a screen from
+    before it."""
     hint = (row or {}).get("lane_hint")
     return hint if isinstance(hint, str) else ""
 

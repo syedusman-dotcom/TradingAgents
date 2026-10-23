@@ -166,7 +166,8 @@ def cmd_themes(args, paths: Paths, cfg) -> None:
     llm = review.make_graph(rcfg["analysts"], rcfg.get("statement_vendor")).quick_thinking_llm
     ideas = themes.scan(llm, names, today)
     kept, skipped = themes.candidates(paths, cfg, ideas, owned)
-    out = themes.write_report(paths, today, ideas, kept, skipped)
+    extra = themes.scare_lines(screener.latest_scares(paths))
+    out = themes.write_report(paths, today, ideas, kept, skipped, extra=extra)
     console.print(Markdown(out.read_text(encoding="utf-8")))
     console.print(f"\nSaved {out}")
 

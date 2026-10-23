@@ -127,3 +127,34 @@ def trend(closes: Sequence[float]) -> dict:
         "from_52w_high": price / high - 1,
         "from_52w_low": price / low - 1,
     }
+
+
+# --- dislocation (a quality business knocked down while its numbers held) --------------
+
+def dislocation(closes: Sequence[float], ttm_revenue, ttm_ebit, avg_revenue_5y, avg_ebit_5y,
+                flags: Sequence[str]) -> dict:
+    """How far the price fell, and whether the business did not.
+
+    From daily closes (oldest first; the price is the last close): ``drawdown_from_high`` vs the
+    52-week high (252 closes needed), ``move_1m`` over 21 trading days (22 closes) and ``move_3m``
+    over 63 (64 closes); None when there are too few. ``fundamentals_intact``: TTM revenue and
+    TTM EBIT at or above their five-year averages and no accounting flag; None when a TTM figure
+    or an average is missing."""
+    cl = [float(c) for c in (closes or []) if num(c) is not None]
+    price = cl[-1] if cl else None
+
+    def move(n: int) -> float | None:
+        return price / cl[-n] - 1 if len(cl) >= n and cl[-n] > 0 else None
+
+    high = max(cl[-252:]) if len(cl) >= 252 else None
+    figures = [num(x) for x in (ttm_revenue, ttm_ebit, avg_revenue_5y, avg_ebit_5y)]
+    intact = None
+    if all(v is not None for v in figures):
+        rev, ebit, avg_rev, avg_ebit = figures
+        intact = rev >= avg_rev and ebit >= avg_ebit and not list(flags or [])
+    return {
+        "drawdown_from_high": price / high - 1 if high else None,
+        "move_1m": move(22),
+        "move_3m": move(64),
+        "fundamentals_intact": intact,
+    }

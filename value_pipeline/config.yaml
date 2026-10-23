@@ -46,13 +46,14 @@ sizing:
   lane_caps: {compounder: 0.30, inflection: 0.20}       # buys and adds stop at these shares per lane
   lane_size_factor: {compounder: 0.5, inflection: 0.5}  # a lane buy is this fraction of the target size
 
-# Investment lanes beyond value (compounder, inflection): where discovery looks, and how many
-# candidates of each it adds to a review.
+# Investment lanes beyond value (compounder, inflection) and the dislocation scan: where
+# discovery looks, and how many candidates of each it adds to a review.
 # lanes:
 #   themes: []                 # e.g. ["AI infrastructure", "grid equipment"]
 #   tickers: []                # names to always consider
 #   inflection_candidates: 3
 #   compounder_candidates: 2
+#   dislocation_candidates: 3  # quality names down 25%+ from the high (or 20%+ in a month), numbers intact
 
 watch:
   # The weekly check flags a stock the agents rated Buy/Overweight once its price

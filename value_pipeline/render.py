@@ -58,7 +58,8 @@ def actions_markdown(date: str, actions: list[Action], summary: dict, *, reports
     else:
         lines.append(f"- Cost of this review: ~{_money(cost)}")
     if themes_report:          # reports/themes_<date>.md, one level above the review folder
-        lines.append(f"- Theme scan: [{themes_report}](../{themes_report}) (inflection candidates added)")
+        lines.append(f"- Theme scan: [{themes_report}](../{themes_report}) "
+                     "(inflection candidates, sector scares)")
     for ticker, weight in summary.get("over_cap", []):
         lines.append(f"- **{ticker} at {weight:.0%}** of the portfolio is above the max position but was not "
                      "reviewed: consider trimming it to the cap")

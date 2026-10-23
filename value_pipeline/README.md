@@ -53,7 +53,7 @@ uv run python -m value_pipeline status
 | `review [--yes] [--dry-run] [--candidates N]` | Run the agents and write the action list. |
 | `run-all [--yes] [--dry-run]` | `screen`, then the theme scan (when `lanes.themes` names any), then `review` with the scan's inflection candidates. |
 | `themes` | The theme scan alone (see Themes below): one quick model call per theme in `lanes.themes`, the named tickers fetched and checked, `reports/themes_<date>.md` written and printed. No review. |
-| `watch [--no-notify]` | The free weekly check (prices only, no agents): a holding above its intrinsic value or in FREEFALL, a stock last rated Buy/Overweight now at least 30% below its value, or a stock now at or below the entry price its last review gave (ENTRY PRICE). Lists each holding's kill criteria for you to check against the news. Writes `reports/watch_<date>.md` and shows a macOS notification when something needs a look. |
+| `watch [--no-notify]` | The free weekly check (prices only, no agents): a holding above its intrinsic value or in FREEFALL, a stock last rated Buy/Overweight now at least 30% below its value, or a stock now at or below the entry price its last review gave (ENTRY PRICE). Lists each holding's kill criteria for you to check against the news. A `New ideas` section lists names you don't own that newly carry a compounder, inflection or dislocation hint in the latest screen since the previous watch (the first watch lists them all), so a scare that starts mid-month is seen that Saturday. Writes `reports/watch_<date>.md` (and `watch_<date>.json`, the hinted list the next watch compares against) and shows a macOS notification when something needs a look. |
 
 Use `--data-dir PATH` before the command (or `VALUE_PIPELINE_DATA`) to keep data somewhere else, and `-v` to log every skipped ticker.
 
@@ -78,7 +78,7 @@ The first screen of a week fetches every ticker (roughly 20-40 minutes); later r
 ## The review
 
 1. Scores past decisions in the memory log (`settle_all_pending`).
-2. Runs TradingAgents (market, news, fundamentals analysts) on every holding, then on the names in `lanes.tickers`, the top `review.candidates` (default 5) screen picks you don't own, up to `lanes.compounder_candidates` (default 2) compounder-hinted names, and (in `run-all`) up to `lanes.inflection_candidates` (default 3) from the theme scan, in that order. Every run sees your holdings and cash.
+2. Runs TradingAgents (market, news, fundamentals analysts) on every holding, then on the names in `lanes.tickers`, the top `review.candidates` (default 5) screen picks you don't own, up to `lanes.compounder_candidates` (default 2) compounder-hinted names, up to `lanes.dislocation_candidates` (default 3) dislocation-hinted names, and (in `run-all`) up to `lanes.inflection_candidates` (default 3) from the theme scan, in that order. Every run sees your holdings and cash.
 3. Prints the number of runs and the estimated cost (`cost_per_run`, default $2) and asks before starting, unless you pass `--yes`. Candidates are dropped from the end to stay under `max_cost_per_review` (default $40); holdings are never dropped, and if they alone exceed the cap the review refuses to start. Only one review runs at a time: the scheduled run, the website and a terminal share a lock in the data folder, and a second start is refused rather than spending twice.
    With `TRADINGAGENTS_LLM_PROVIDER=claude_code` the agents run on your Claude plan through Claude Code, so the cap is a usage budget rather than a bill; the ACTIONS report then shows the measured tokens and what the run would have cost at API prices. The website runs reviews in its own process: restart it after changing `.env`. Inside Claude Code, `/review HRB` runs one stock and relays the agents as they finish.
 4. Saves each report to `data/reports/YYYY-MM-DD/TICKER/`. A failed run is retried once, then reported.
@@ -158,8 +158,13 @@ The screen's `Lane hint` column (and the Screen page's filter) points at names w
 
 - `compounder`: passes the hard filters, worst-year ROIC ≥ 20% over at least 4 years, revenue growth ≥ 8%/yr over at least 5 years, sustainable growth ≥ 10%.
 - `inflection`: passes the hard filters, TTM EBIT ≥ 1.5× the five-year average and revenue growth up ≥ 10 points.
+- `dislocation`: passes the hard filters, the price is ≥ 25% below its 52-week high or fell ≥ 20% in a month, and the fundamentals are intact (TTM revenue and TTM EBIT at or above their five-year averages, no accounting flag).
+
+When several apply, `Lane hint` shows the first in that order (a dislocated compounder is still a compounder) and the `hints` column lists all of them.
 
 The review adds up to `lanes.compounder_candidates` (default 2) compounder-hinted names by expected return, not owned and not in FREEFALL, after the Magic Formula picks. ACTIONS shows a candidate's hint as `(hint: inflection)`, and `results.json` stores it as `lane_hint`.
+
+**Dislocations.** A quality business whose price fell hard while its numbers did not is the value lane's classic entry. The screen adds `drawdown_from_high` (price vs the 52-week high), `move_1m`, `move_3m`, `fundamentals_intact` and the Yahoo `industry` for every name, and the `dislocation` hint above. Up to `lanes.dislocation_candidates` (default 3) dislocation-hinted names, best expected return first, not owned and not in FREEFALL, join every review (plain `review` and `run-all`) after the compounder candidates, as value-lane candidates shown `(hint: dislocation)`. The news analyst classifies the cause of a 20%+ three-month fall (company-specific deterioration, sector-wide sentiment or macro, with sources): a sector-wide scare with intact numbers is the classic entry; a company-specific cause still needs the value bar. When three or more names in one industry carry the hint in the same screen, each is tagged in the `sector_scare` column (the Screen page's `Scare` column), and `run-all` lists the industry and its members with their drawdowns under `## Sector scares` in `reports/themes_<date>.md`, written even when `lanes.themes` is empty (then without a model call), so a sentiment-driven selloff reads as one event.
 
 ## Themes
 
@@ -171,6 +176,7 @@ lanes:
   tickers: [CLS, VRT]                               # always reviewed (unless you hold them)
   inflection_candidates: 3                          # theme ideas added to a review, at most
   compounder_candidates: 2                          # compounder-hinted screen names added, at most
+  dislocation_candidates: 3                         # dislocation-hinted screen names added, at most
 ```
 
 For each theme the scan asks: "Where is demand inflecting for this theme, and which listed suppliers with pricing power benefit? Name up to 8 tickers with one line of evidence each; label unverified claims." Each named ticker you don't own is fetched and evaluated like a screen row; those with TTM EBIT ≥ 1.3× the five-year average or revenue growth up ≥ 10 points join the review hinted `inflection`, best expected return first, up to `lanes.inflection_candidates`. A ticker that cannot be fetched, isn't inflecting or is over the cap is listed under Skipped. `reports/themes_<date>.md` (beside the watch and daily reports; a dry run writes `themes_<date>-dry-run.md`) has each theme's ideas with their evidence (verified or unverified), the candidates added and the skipped ones.

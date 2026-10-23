@@ -41,6 +41,8 @@ def evaluate(data: dict, normalize_years: int = 5, roic_cap: float = 1.0,
     er = metrics.expected_return(years, data.get("price"), mcap, shares) or {}
     rec = metrics.record(years)
     inf = metrics.inflection(years, data.get("quarters") or [])   # absent from a pre-quarterly cache
+    dis = metrics.dislocation(data.get("closes") or [], inf["ttm_revenue"], inf["ttm_ebit"],
+                              _average(years, "revenue"), _average(years, "ebit"), acc["flags"])
     row = {
         "ticker": data["ticker"],
         "fiscal_year_end": cur["fiscal_year_end"],
@@ -84,12 +86,23 @@ def evaluate(data: dict, normalize_years: int = 5, roic_cap: float = 1.0,
         "sustainable_growth": rec["sustainable_growth"],
         "ttm_vs_5y_ebit": inf["ttm_vs_5y_ebit"],
         "revenue_acceleration": inf["revenue_acceleration"],
+        "drawdown_from_high": dis["drawdown_from_high"],
+        "move_1m": dis["move_1m"],
+        "move_3m": dis["move_3m"],
+        "fundamentals_intact": dis["fundamentals_intact"],
+        "industry": data.get("industry"),           # absent from a pre-industry cache
         "trend": tr.get("trend"),
         "vs_sma200": tr.get("vs_sma200"),
         "momentum_12_1": tr.get("momentum_12_1"),
     }
     row.update({f"f_{k}": v for k, v in fs["points"].items()})
     return row
+
+
+def _average(years: list[dict], field: str, n: int = 5) -> float | None:
+    """The mean of ``field`` over the latest ``n`` annual statements that report it."""
+    vals = [v for v in (metrics.num(y.get(field)) for y in years[:n]) if v is not None]
+    return sum(vals) / len(vals) if vals else None
 
 
 SECTOR_MIN_ROWS = 3
@@ -178,26 +191,43 @@ def latest_screen(paths: Paths) -> Path | None:
     return files[-1] if files else None
 
 
-def top_candidates(paths: Paths, owned: set[str], n: int, compounders: int = 0) -> list[dict]:
+def top_candidates(paths: Paths, owned: set[str], n: int, compounders: int = 0,
+                   dislocations: int = 0) -> list[dict]:
     """The best-ranked, not-owned, not-FREEFALL tickers from the latest screen, then up to
-    ``compounders`` compounder-hinted ones (best expected return first) not already listed."""
+    ``compounders`` compounder-hinted ones, then up to ``dislocations`` dislocation-hinted ones
+    (each best expected return first, not already listed). A dislocated compounder counts as a
+    dislocation too (its ``hints`` column lists both)."""
     path = latest_screen(paths)
     if path is None:
         return []
     df = pd.read_csv(path)
     df = df[~df["ticker"].isin(owned) & (df["trend"] != "FREEFALL")]
     picks = df[df["mf_position"].notna()].sort_values("mf_position").head(n)
-    if compounders > 0 and "lane_hint" in df:
-        hinted = df[(df["lane_hint"] == "compounder") & ~df["ticker"].isin(picks["ticker"])]
+    for hint, count in (("compounder", compounders), ("dislocation", dislocations)):
+        if count <= 0 or "lane_hint" not in df:
+            continue
+        has = _hint_series(df).map(lambda h, hint=hint: hint in h.split(";"))
+        hinted = df[has & ~df["ticker"].isin(picks["ticker"])]
         hinted = hinted.sort_values("expected_return", ascending=False, na_position="last")
-        picks = pd.concat([picks, hinted.head(compounders)])
+        picks = pd.concat([picks, hinted.head(count)])
     return picks.to_dict("records")
+
+
+def _hint_series(df: pd.DataFrame) -> pd.Series:
+    """Each row's hints (";"-joined): the ``hints`` column, else ``lane_hint`` for a screen from
+    before it."""
+    lane = df["lane_hint"].where(df["lane_hint"].map(lambda v: isinstance(v, str)), "")
+    if "hints" not in df:
+        return lane
+    return df["hints"].where(df["hints"].map(lambda v: isinstance(v, str)), lane)
 
 
 # The lane hints: a pointer for the review, not a verdict (the Portfolio Manager decides the lane).
 COMPOUNDER_ROIC, COMPOUNDER_ROIC_YEARS = 0.20, 4
 COMPOUNDER_CAGR, COMPOUNDER_CAGR_YEARS, COMPOUNDER_GROWTH = 0.08, 5, 0.10
 INFLECTION_EBIT, INFLECTION_ACCELERATION = 1.5, 0.10
+DISLOCATION_DRAWDOWN, DISLOCATION_MONTH = -0.25, -0.20
+SCARE_MIN_NAMES = 3
 
 
 def _at_least(row: dict, key: str, floor: float) -> bool:
@@ -205,22 +235,79 @@ def _at_least(row: dict, key: str, floor: float) -> bool:
     return isinstance(v, (int, float)) and v == v and v >= floor
 
 
-def lane_hint(row: dict) -> str:
-    """"compounder" when the record clears the compounder bar, "inflection" when the TTM numbers
-    clear the inflection bar, else "". Only for rows that pass the hard filters."""
+def _at_most(row: dict, key: str, ceiling: float) -> bool:
+    v = row.get(key)
+    return isinstance(v, (int, float)) and v == v and v <= ceiling
+
+
+def lane_hints(row: dict) -> list[str]:
+    """Every hint that applies, in precedence order: "compounder" when the record clears the
+    compounder bar, "inflection" when the TTM numbers clear the inflection bar, "dislocation" when
+    the price is down 25%+ from its 52-week high (or 20%+ in a month) with the fundamentals
+    intact. Only for rows that pass the hard filters."""
     if row.get("passes_filters") not in (True, "True"):
-        return ""
+        return []
+    hints = []
     years = row.get("roic_years")
     roic_ok = _at_least(row, "roic_min", COMPOUNDER_ROIC) and (
         years is None or years != years or years >= COMPOUNDER_ROIC_YEARS)
     if (roic_ok and _at_least(row, "revenue_cagr", COMPOUNDER_CAGR)
             and _at_least(row, "revenue_cagr_years", COMPOUNDER_CAGR_YEARS)
             and _at_least(row, "sustainable_growth", COMPOUNDER_GROWTH)):
-        return "compounder"
+        hints.append("compounder")
     if _at_least(row, "ttm_vs_5y_ebit", INFLECTION_EBIT) and _at_least(
             row, "revenue_acceleration", INFLECTION_ACCELERATION):
-        return "inflection"
-    return ""
+        hints.append("inflection")
+    if row.get("fundamentals_intact") in (True, "True") and (
+            _at_most(row, "drawdown_from_high", DISLOCATION_DRAWDOWN)
+            or _at_most(row, "move_1m", DISLOCATION_MONTH)):
+        hints.append("dislocation")
+    return hints
+
+
+def lane_hint(row: dict) -> str:
+    """The first of ``lane_hints`` (a dislocated compounder is still a compounder), else ""."""
+    hints = lane_hints(row)
+    return hints[0] if hints else ""
+
+
+def tag_sector_scares(rows: list[dict]) -> dict[str, list[str]]:
+    """Set ``sector_scare`` to the industry on every dislocation-hinted row whose industry has at
+    least three of them (a sentiment-driven selloff seen as one event), "" on the rest; returns
+    ``{industry: [tickers]}``."""
+    by_industry: dict[str, list[dict]] = {}
+    for r in rows:
+        industry = r.get("industry")
+        hinted = "dislocation" in (r.get("hints") or "").split(";")
+        if isinstance(industry, str) and industry and hinted:
+            by_industry.setdefault(industry, []).append(r)
+    scares = {k: v for k, v in by_industry.items() if len(v) >= SCARE_MIN_NAMES}
+    for r in rows:
+        r["sector_scare"] = ""
+    for industry, members in scares.items():
+        for r in members:
+            r["sector_scare"] = industry
+    return {k: [r["ticker"] for r in v] for k, v in scares.items()}
+
+
+def latest_scares(paths: Paths) -> dict[str, list[dict]]:
+    """The latest screen's sector scares: ``{industry: [rows]}`` (deepest drawdown first); empty
+    for a screen from before the column."""
+    path = latest_screen(paths)
+    if path is None:
+        return {}
+    df = pd.read_csv(path)
+    if "sector_scare" not in df:
+        return {}
+    out: dict[str, list[dict]] = {}
+    for r in df.to_dict("records"):
+        scare = r.get("sector_scare")
+        if isinstance(scare, str) and scare:
+            out.setdefault(scare, []).append(r)
+    for members in out.values():
+        members.sort(key=lambda r: r["drawdown_from_high"]
+                     if _at_most(r, "drawdown_from_high", 0.0) else 0.0)
+    return out
 
 
 def run(paths: Paths, cfg: dict, owned: set[str], today: str | None = None) -> dict:
@@ -269,7 +356,12 @@ def run(paths: Paths, cfg: dict, owned: set[str], today: str | None = None) -> d
         r.setdefault("er_rank", None)
         r["passes_filters"] = not r["fail_reasons"]
         r["fail_reasons"] = "; ".join(r["fail_reasons"])
-        r["lane_hint"] = lane_hint(r)
+        hints = lane_hints(r)
+        r["hints"] = ";".join(hints)
+        r["lane_hint"] = hints[0] if hints else ""
+    scares = tag_sector_scares(rows)
+    for industry, tickers in scares.items():
+        log.info("sector scare in %s: %s", industry, ", ".join(tickers))
 
     paths.screens.mkdir(parents=True, exist_ok=True)
     out = paths.screens / f"screen_{today}.csv"
@@ -281,7 +373,8 @@ def run(paths: Paths, cfg: dict, owned: set[str], today: str | None = None) -> d
     _write_rows(paths.screens / f"screen_{today}_skipped.csv", skipped, ["ticker", "reason"])
     _write_rows(paths.screens / f"screen_{today}_excluded.csv",
                 excluded[["ticker", "name", "sector"]].to_dict("records"), ["ticker", "name", "sector"])
-    return {**result, "path": out, "screened": len(rows), "skipped": skipped, "excluded": excluded}
+    return {**result, "path": out, "screened": len(rows), "skipped": skipped, "excluded": excluded,
+            "scares": scares}
 
 
 def _write_rows(path: Path, rows: list[dict], fields: list[str]) -> None:

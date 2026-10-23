@@ -34,7 +34,7 @@ HEADERS = {"User-Agent": "value-pipeline/0.1 (personal research tool)"}
 
 
 # Bump when the cached fields change, so older cache files are fetched again.
-CACHE_SCHEMA = 4
+CACHE_SCHEMA = 5
 
 
 class DataUnavailable(Exception):
@@ -104,6 +104,7 @@ def fundamentals(ticker: str, paths: Paths, cache_days: int = 7) -> dict:
         "shares": info.get("sharesOutstanding"),
         "currency": info.get("currency"),
         "sector": info.get("sector"),
+        "industry": info.get("industry"),
         "years": years,
         "quarters": quarters,
         "closes": series,

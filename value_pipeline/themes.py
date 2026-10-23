@@ -73,6 +73,10 @@ def _num(row: dict, key: str) -> float | None:
     return float(v) if isinstance(v, (int, float)) and v == v else None
 
 
+def _pct(v: float | None) -> str:
+    return "–" if v is None else format(v, ".0%")
+
+
 def _inflecting(row: dict) -> bool:
     ebit, accel = _num(row, "ttm_vs_5y_ebit"), _num(row, "revenue_acceleration")
     return (ebit is not None and ebit >= MIN_TTM_VS_5Y_EBIT) or (
@@ -133,6 +137,22 @@ def report_lines(ideas: list[ThemeIdea], kept: list[dict], skipped: list[str]) -
     return lines + [""]
 
 
+def scare_lines(scares: dict[str, list[dict]]) -> list[str]:
+    """The ``## Sector scares`` section: each industry where three or more quality names with
+    intact numbers fell together, with its members and their drawdowns from the 52-week high
+    (markdown lines; none when there is no scare)."""
+    if not scares:
+        return []
+    lines = ["## Sector scares", "",
+             "Three or more names in one industry carry the dislocation hint (down 25%+ from the "
+             "52-week high or 20%+ in a month, TTM revenue and EBIT at or above the five-year "
+             "average): likely one sentiment-driven selloff rather than many company problems.", ""]
+    for industry, members in scares.items():
+        names = ", ".join(f"{r['ticker']} ({_pct(_num(r, 'drawdown_from_high'))})" for r in members)
+        lines.append(f"- **{industry}**: {names}")
+    return lines + [""]
+
+
 def report_path(paths: Paths, today: str) -> Path:
     """``reports/themes_<today>.md``, beside the watch and daily reports (not a review folder)."""
     return paths.reports / f"themes_{today}.md"
@@ -141,13 +161,19 @@ def report_path(paths: Paths, today: str) -> Path:
 def write_report(paths: Paths, today: str, ideas: list[ThemeIdea], kept: list[dict],
                  skipped: list[str], extra: list[str] | None = None) -> Path:
     """``reports/themes_<today>.md``: each theme's ideas, then the candidates added and skipped.
-    ``extra`` lines (another discovery section, e.g. the dislocation scan's) are appended after."""
+    ``extra`` lines (another discovery section, e.g. the sector scares) are appended after; with
+    no ideas, candidates or skips but ``extra`` (no themes named, a scare found), only those."""
     paths.reports.mkdir(parents=True, exist_ok=True)
+    out = report_path(paths, today)
+    if extra and not (ideas or kept or skipped):
+        head = [f"# Theme scan {today}", "",
+                "No themes named in `lanes.themes`; the screen's sector scares only.", ""]
+        out.write_text("\n".join(head + extra), encoding="utf-8")
+        return out
     head = [f"# Theme scan {today}", "",
             "Ideas the model named for each theme in `lanes.themes`; unverified claims are labelled. "
             "Only names whose TTM figures show the inflection join the review.", ""]
     if not ideas:
         head += ["No ideas (no themes named, or the scan gave none).", ""]
-    out = report_path(paths, today)
     out.write_text("\n".join(head + report_lines(ideas, kept, skipped) + (extra or [])), encoding="utf-8")
     return out

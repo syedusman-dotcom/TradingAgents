@@ -1242,7 +1242,8 @@ def test_fundamentals_cache_quarterly_statements(tmp_path, monkeypatch):
             "Current Assets": [300, 290], "Current Liabilities": [300, 280], "Net PPE": [100, 90]}
 
     class FakeTicker:
-        info = {"marketCap": 2000, "currentPrice": 20, "currency": "USD", "sector": "Industrials"}
+        info = {"marketCap": 2000, "currentPrice": 20, "currency": "USD", "sector": "Industrials",
+                "industry": "Specialty Industrial Machinery"}
         income_stmt = frame(annual, rows)
         balance_sheet = cashflow = None
         quarterly_income_stmt = frame(quarters, rows)
@@ -1252,7 +1253,8 @@ def test_fundamentals_cache_quarterly_statements(tmp_path, monkeypatch):
     monkeypatch.setattr(market_data, "closes", lambda t: [20.0])
     paths = Paths(tmp_path)
     data = market_data.fundamentals("ABC", paths)
-    assert market_data.CACHE_SCHEMA == 4 and data["schema"] == 4
+    assert market_data.CACHE_SCHEMA == 5 and data["schema"] == 5
+    assert data["industry"] == "Specialty Industrial Machinery"
     assert [q["fiscal_year_end"] for q in data["quarters"]] == ["2026-06-30", "2026-03-31"]
     assert market_data.fundamentals("ABC", paths)["from_cache"] is True
 
@@ -1370,3 +1372,198 @@ def test_watch_lists_demand_criteria_first(tmp_path, monkeypatch):
     assert ("- INF: 1. Backlog falls year on year; 2. Net debt above 3x EBITDA; "
             "3. Book-to-bill below 1 for two quarters") in text
     assert "- HRB: 1. Dividend cut; 2. Demand drops" in text
+
+
+# --- dislocation scan ---------------------------------------------------------------
+
+def _dislocated_closes(high=100.0, price=70.0, n=420):
+    """A flat series at ``high`` that falls to ``price`` over the last month."""
+    return [high] * (n - 22) + [high - (high - price) * (i + 1) / 22 for i in range(22)]
+
+
+@pytest.mark.unit
+def test_dislocation_metrics_and_hint():
+    closes = _dislocated_closes()
+    d = metrics.dislocation(closes, 110.0, 22.0, 100.0, 20.0, [])
+    assert d["drawdown_from_high"] == pytest.approx(70 / 100 - 1)
+    assert d["move_1m"] == pytest.approx(70 / closes[-22] - 1)
+    assert d["move_3m"] == pytest.approx(70 / 100 - 1)
+    assert d["fundamentals_intact"] is True
+    assert metrics.dislocation(closes, 99.0, 22.0, 100.0, 20.0, [])["fundamentals_intact"] is False
+    assert metrics.dislocation(closes, 110.0, 19.0, 100.0, 20.0, [])["fundamentals_intact"] is False
+    assert metrics.dislocation(closes, 110.0, 22.0, 100.0, 20.0, ["accruals"])["fundamentals_intact"] is False
+    assert metrics.dislocation(closes, None, 22.0, 100.0, 20.0, [])["fundamentals_intact"] is None
+    short = metrics.dislocation([10.0] * 30, 1.0, 1.0, 1.0, 1.0, [])
+    assert short["drawdown_from_high"] is None and short["move_3m"] is None
+    assert short["move_1m"] == pytest.approx(0.0)
+    assert metrics.dislocation([], None, None, None, None, [])["move_1m"] is None
+
+    # The screen row carries the columns; the industry comes from the fundamentals record.
+    year = {"fiscal_year_end": "2025-12-31", "revenue": 100, "ebit": 20, "net_income": 15,
+            "total_assets": 500, "current_assets": 100, "current_liabilities": 50}
+    ends = ["2026-09-30", "2026-06-30", "2026-03-31", "2025-12-31"]
+    quarters = [{"fiscal_year_end": e, "revenue": 27.5, "ebit": 5.5} for e in ends]
+    row = screener.evaluate({"ticker": "DIS", "years": [year] * 5, "market_cap": 2000, "price": 70,
+                             "closes": closes, "quarters": quarters, "industry": "Software"})
+    assert row["industry"] == "Software"
+    assert row["drawdown_from_high"] == pytest.approx(-0.30)
+    assert row["fundamentals_intact"] in (True, False)
+    for k in ("move_1m", "move_3m"):
+        assert k in row
+
+    base = {"passes_filters": True, "fundamentals_intact": True, "drawdown_from_high": -0.30,
+            "move_1m": -0.05, "roic_min": 0.1}
+    assert screener.lane_hint(base) == "dislocation" and screener.lane_hints(base) == ["dislocation"]
+    assert screener.lane_hint({**base, "drawdown_from_high": -0.10, "move_1m": -0.21}) == "dislocation"
+    assert screener.lane_hint({**base, "drawdown_from_high": -0.10}) == ""
+    assert screener.lane_hint({**base, "fundamentals_intact": False}) == ""
+    assert screener.lane_hint({**base, "fundamentals_intact": "True"}) == "dislocation"   # read from a CSV
+    assert screener.lane_hint({**base, "fundamentals_intact": None}) == ""
+    assert screener.lane_hint({**base, "passes_filters": False}) == ""
+    compounder = {**base, "roic_min": 0.25, "revenue_cagr": 0.11, "revenue_cagr_years": 10,
+                  "sustainable_growth": 0.14}
+    assert screener.lane_hint(compounder) == "compounder"                 # a dislocated compounder
+    assert screener.lane_hints(compounder) == ["compounder", "dislocation"]
+    old = {"passes_filters": True, "roic_min": 0.1}                       # a screen from before the columns
+    assert screener.lane_hint(old) == "" and screener.lane_hints(old) == []
+
+
+@pytest.mark.unit
+def test_sector_scare_tags_three_names_in_one_industry():
+    def r(t, industry, hints="dislocation"):
+        return {"ticker": t, "industry": industry, "hints": hints, "lane_hint": hints.split(";")[0]}
+
+    rows = [r("SAA", "Software"), r("SBB", "Software"), r("SCC", "Software", "compounder;dislocation"),
+            r("SDD", "Software", "compounder"), r("BKA", "Banks"), r("BKB", "Banks"), r("NOI", None),
+            r("NOJ", None), r("NOK", None)]
+    scares = screener.tag_sector_scares(rows)
+    assert scares == {"Software": ["SAA", "SBB", "SCC"]}
+    tags = {x["ticker"]: x["sector_scare"] for x in rows}
+    assert tags["SAA"] == tags["SBB"] == tags["SCC"] == "Software"
+    assert tags["SDD"] == "" and tags["BKA"] == "" and tags["NOI"] == ""
+
+
+def _dislocation_screen(paths, day="2026-10-20", **extra):
+    import pandas as pd
+
+    def r(t, mf, er, hints="", trend="UPTREND", industry="Software", **kw):
+        return {"ticker": t, "name": f"{t} Corp", "mf_position": mf, "expected_return": er,
+                "lane_hint": hints.split(";")[0], "hints": hints, "trend": trend, "sector": "Technology",
+                "industry": industry, "value_base": 100.0, "fscore": 7, "drawdown_from_high": -0.32,
+                "move_1m": -0.12, "sector_scare": "", **kw}
+    rows = [r("AAA", 1, 0.10), r("BBB", 2, 0.09), r("CMP", 9, 0.15, "compounder"),
+            r("DS1", 20, 0.14, "dislocation", sector_scare="Software"),
+            r("DS2", None, 0.18, "dislocation", sector_scare="Software"),
+            r("DS3", 22, 0.12, "compounder;dislocation", sector_scare="Software"),
+            r("DS4", 23, 0.11, "dislocation"), r("DSF", 24, 0.30, "dislocation", trend="FREEFALL"),
+            r("OWN", 25, 0.40, "dislocation")]
+    paths.screens.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(rows).to_csv(paths.screens / f"screen_{day}.csv", index=False)
+    return rows
+
+
+@pytest.mark.unit
+def test_review_adds_dislocation_candidates(tmp_path, monkeypatch):
+    import copy
+
+    import pandas as pd
+
+    from value_pipeline import market_data, operations as ops, review, themes
+
+    paths = Paths(tmp_path)
+    _dislocation_screen(paths)
+    picks = screener.top_candidates(paths, {"OWN"}, 2, compounders=1, dislocations=3)
+    assert [p["ticker"] for p in picks] == ["AAA", "BBB", "CMP", "DS2", "DS1", "DS3"]
+    assert [p["ticker"] for p in screener.top_candidates(paths, {"OWN"}, 2, dislocations=2)] == [
+        "AAA", "BBB", "DS2", "DS1"]
+    old = pd.read_csv(paths.screens / "screen_2026-10-20.csv").drop(columns=["hints", "lane_hint"])
+    old.to_csv(paths.screens / "screen_2026-10-21.csv", index=False)     # a screen from before the columns
+    assert [p["ticker"] for p in screener.top_candidates(paths, {"OWN"}, 2, dislocations=3)] == ["AAA", "BBB"]
+    (paths.screens / "screen_2026-10-21.csv").unlink()
+
+    monkeypatch.setattr(market_data, "quote_fx", lambda t: ("USD", 1.0))
+    ops.init_portfolio(paths, 1000.0, on="2026-10-01")
+    ops.record_buy(paths, "OWN", 1, 10.0, on="2026-10-02")
+    monkeypatch.setattr(market_data, "latest_price", lambda t: 50.0)
+    monkeypatch.setattr(market_data, "closes", lambda t, days=420: [])
+    monkeypatch.setattr(market_data, "closes_between", lambda *a, **k: pd.Series(dtype=float))
+    monkeypatch.setattr(market_data, "cached_sector", lambda t, p: "Technology")
+    monkeypatch.setattr(review, "next_earnings_date", lambda t: None)
+    monkeypatch.setattr(review, "fake_run", lambda t, i, held, price: review.RunResult(t, "Hold", ""))
+    scans = []
+    monkeypatch.setattr(themes, "scan", lambda llm, names, today: scans.append(names) or [])
+    cfg = copy.deepcopy(DEFAULTS)
+    assert cfg["lanes"]["dislocation_candidates"] == 3
+    cfg["review"].update(candidates=2, committee=False)
+    cfg["lanes"]["compounder_candidates"] = 1
+
+    out = review.run(paths, cfg, yes=True, dry_run=True, today="2026-10-23", discover=True)
+    rows = json.loads((out.parent / "results.json").read_text())
+    assert [r["ticker"] for r in rows] == ["OWN", "AAA", "BBB", "CMP", "DS2", "DS1", "DS3"]
+    hints = {r["ticker"]: r["lane_hint"] for r in rows}
+    assert hints["DS2"] == "dislocation" and hints["DS3"] == "compounder"
+    md = out.read_text()
+    assert "(hint: dislocation)" in md
+    assert scans == []                                                  # no themes named: no scan
+    report = (paths.reports / "themes_2026-10-23-dry-run.md").read_text()
+    assert "## Sector scares" in report
+    assert "Software" in report and "DS1" in report and "DS2" in report and "-32%" in report
+    assert "DS4" not in report
+    assert "themes_2026-10-23-dry-run.md" in md
+
+    plain = review.run(paths, cfg, yes=True, dry_run=True, today="2026-10-24")   # a plain review
+    assert "DS2" in [r["ticker"] for r in json.loads((plain.parent / "results.json").read_text())]
+
+
+@pytest.mark.unit
+def test_themes_report_lists_sector_scares_after_the_themes(tmp_path):
+    from value_pipeline import themes
+
+    paths = Paths(tmp_path)
+    scares = {"Software": [{"ticker": "DS1", "drawdown_from_high": -0.32},
+                           {"ticker": "DS2", "drawdown_from_high": None}]}
+    lines = themes.scare_lines(scares)
+    assert lines[0] == "## Sector scares"
+    text = "\n".join(lines)
+    assert "**Software**" in text and "DS1 (-32%)" in text and "DS2 (–)" in text
+    assert themes.scare_lines({}) == []
+    out = themes.write_report(paths, "2026-10-23", [], [], [], extra=lines)
+    body = out.read_text()
+    assert "## Sector scares" in body and "## Candidates added" not in body   # scares only, no scan
+
+
+@pytest.mark.unit
+def test_watch_new_ideas_lists_only_new_hints(tmp_path, monkeypatch):
+    from value_pipeline import watch
+
+    paths = Paths(tmp_path)
+    pf = pfmod.Portfolio(cash=0.0)
+    pfmod.apply_deposit(pf, 1000.0, on="2026-10-01")
+    pfmod.apply_buy(pf, "OWN", 1, 40.0, on="2026-10-02")
+    pfmod.save(paths, pf)
+    monkeypatch.setattr(watch.market_data, "latest_price", lambda t: 40.0)
+    monkeypatch.setattr(watch.market_data, "closes", lambda t: [])
+    _dislocation_screen(paths)
+
+    _, out = watch.run(paths, DEFAULTS, notify=False, today="2026-10-17")
+    text = out.read_text()
+    assert "## New ideas" in text and "(first watch)" in text
+    assert "- DS1 (DS1 Corp): dislocation — drawdown -32% / 1m -12% — expected return 14%/yr" in text
+    assert "- CMP (CMP Corp): compounder" in text and "AAA (" not in text
+    assert "OWN (" not in text                                          # held: not a new idea
+    side = json.loads((paths.reports / "watch_2026-10-17.json").read_text())
+    assert side["hinted"]["DS1"] == "dislocation" and "AAA" not in side["hinted"]
+
+    import pandas as pd
+
+    df = pd.read_csv(paths.screens / "screen_2026-10-20.csv")
+    df.loc[df["ticker"] == "AAA", ["lane_hint", "hints"]] = "inflection"
+    df.to_csv(paths.screens / "screen_2026-10-24.csv", index=False)
+    _, out = watch.run(paths, DEFAULTS, notify=False, today="2026-10-24")
+    text = out.read_text()
+    section = text.split("## New ideas")[1].split("\n## ")[0]
+    assert "(first watch)" not in section
+    assert "- AAA (AAA Corp): inflection" in section and "DS1" not in section and "CMP" not in section
+
+    _, out = watch.run(paths, DEFAULTS, notify=False, today="2026-10-31")
+    assert "No new ideas" in out.read_text().split("## New ideas")[1]
