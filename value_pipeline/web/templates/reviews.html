@@ -7,6 +7,7 @@
 <tr><td>{{ r.folder }}</td><td>{{ r.cost or "–" }}</td>
 <td>{% for x in r.results %}<a href="/stock/{{ x.ticker }}">{{ x.ticker }}</a> {{ x.rating }}{% if x.report %} (<a href="/reports/{{ r.folder }}/{{ x.report }}">report</a>){% endif %}{% if not loop.last %} · {% endif %}{% endfor %}</td>
 <td><a href="/reports/{{ r.folder }}/ACTIONS.html">actions</a></td></tr>
+{% if r.committee %}<tr><td></td><td colspan="3" class="muted">Investment committee: {{ r.committee }}</td></tr>{% endif %}
 {% else %}<tr><td colspan="4" class="muted">No reviews yet. Start one from <a href="/run">Run</a>.</td></tr>{% endfor %}
 </table></div>
 {% endblock %}

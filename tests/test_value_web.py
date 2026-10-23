@@ -452,3 +452,15 @@ def test_stock_page_shows_checklist_and_kill_criteria(tmp_path):
     _review(old[2], "2026-10-11", [ROW])
     page = old[0].get("/stock/HRB").text
     assert "Kill criteria" not in page and "Checklist" not in page and "Scenarios" not in page
+
+
+@pytest.mark.unit
+def test_reviews_page_shows_the_committee_summary(tmp_path):
+    client, app, paths = _client(tmp_path)
+    ops.init_portfolio(paths, 1000.0)
+    _review(paths, "2026-10-11", [ROW])
+    _review(paths, "2026-11-07", [ROW])
+    (paths.reports / "2026-11-07" / "committee.json").write_text(json.dumps(
+        {"ranking": [], "swaps": [], "concentration": [], "summary": "Trim HRB, add MSFT.", "notes": []}))
+    r = client.get("/reviews")
+    assert r.status_code == 200 and r.text.count("Trim HRB, add MSFT.") == 1

@@ -13,6 +13,7 @@ import pandas as pd
 
 from value_pipeline import (
     benchmark,
+    committee as committee_mod,
     lock,
     market_data,
     metrics,
@@ -328,14 +329,7 @@ def _run(paths: Paths, cfg: dict, *, yes: bool, dry_run: bool, today: str | None
         ranked = sorted((r for r in screen.values() if not pd.isna(r.get("mf_position"))), key=lambda r: r["mf_position"])
         knives = [r["ticker"] for r in ranked[:50] if r.get("trend") == "FREEFALL" and r["ticker"] not in owned][:10]
 
-    md = render.actions_markdown(today, actions, summary, reports={r.ticker: r.report for r in results if r.report},
-                                 comparison=comparison, cost=cost, failures=failures, dry_run=dry_run, knives=knives,
-                                 usage=usage, names={r.ticker: r.name for r in results if r.name})
-    (out_dir / "ACTIONS.md").write_text(md, encoding="utf-8")
-    (out_dir / "ACTIONS.html").write_text(render.actions_html(md, f"Value review {today}"), encoding="utf-8")
-    # Written whole: the website reads this file while a review may be finishing.
-    tmp = out_dir / "results.json.tmp"
-    tmp.write_text(json.dumps([
+    rows = [
         {"ticker": r.ticker, "name": r.name, "rating": r.rating, "error": r.error, "report": r.report,
          "tokens_in": r.tokens_in, "tokens_out": r.tokens_out, "nominal_cost_usd": round(r.nominal_cost_usd, 4),
          "intrinsic_value": parse.intrinsic_value(r.decision), "margin_of_safety": parse.margin_of_safety(r.decision),
@@ -345,12 +339,51 @@ def _run(paths: Paths, cfg: dict, *, yes: bool, dry_run: bool, today: str | None
          "checklist": parse.checklist(r.decision), "scenarios": scenarios[r.ticker],
          "value_bridge": parse.value_bridge(r.decision), "red_flags": parse.red_flags(r.decision)}
         for r in results
-    ], indent=2), encoding="utf-8")
-    tmp.replace(out_dir / "results.json")
+    ]
+
+    committee, unavailable = None, None
+    if rcfg["committee"] and not dry_run and sum(1 for r in results if not r.error) >= 2:
+        committee, unavailable = _committee(ta, tally, decisions, rows, pf, summary, cfg["sizing"], actions)
+        used = tally.snapshot()
+        for key in ("tokens_in", "tokens_out", "nominal_cost_usd"):
+            usage[key] += used.get(key, 0)
+
+    md = render.actions_markdown(today, actions, summary, reports={r.ticker: r.report for r in results if r.report},
+                                 comparison=comparison, cost=cost, failures=failures, dry_run=dry_run, knives=knives,
+                                 usage=usage, names={r.ticker: r.name for r in results if r.name},
+                                 committee=committee, committee_unavailable=unavailable)
+    (out_dir / "ACTIONS.md").write_text(md, encoding="utf-8")
+    (out_dir / "ACTIONS.html").write_text(render.actions_html(md, f"Value review {today}"), encoding="utf-8")
+    # Written whole: the website reads these files while a review may be finishing.
+    _write_whole(out_dir / "results.json", rows)
+    if committee:
+        _write_whole(out_dir / "committee.json", {**committee[0].model_dump(), "notes": committee[1]})
 
     if not dry_run:
         _record_ratings(paths, pf, actions, today)
     return out_dir / "ACTIONS.md"
+
+
+def _write_whole(path: Path, data) -> None:
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    tmp.replace(path)
+
+
+def _committee(ta, tally, decisions, rows, pf, summary, sizing, actions):
+    """The committee's reconciled answer and notes, or the reason it is not available.
+    Its tokens are left in ``tally`` for the review's cost line."""
+    tally.reset()
+    try:
+        payload = committee_mod.build_payload(decisions, rows, pf, summary, sizing)
+        result = committee_mod.run_committee(ta.deep_thinking_llm, payload)
+    except Exception as exc:  # noqa: BLE001 - the committee is advice on top; the review stands without it
+        log.warning("investment committee failed: %s: %s", type(exc).__name__, exc)
+        return None, f"{type(exc).__name__}: {exc}"
+    if result is None:
+        log.warning("investment committee gave no structured answer")
+        return None, "the model gave no structured answer"
+    return committee_mod.reconcile(result, actions), None
 
 
 def _record_ratings(paths: Paths, pf: pfmod.Portfolio, actions, today: str) -> None:

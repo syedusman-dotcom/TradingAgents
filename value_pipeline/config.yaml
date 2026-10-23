@@ -32,6 +32,10 @@ review:
   statement_vendor: yfinance
   cost_per_run: 2.0        # USD per TradingAgents run, for the estimate
   max_cost_per_review: 40.0
+  # After the per-stock reviews, one deep-model call ranks every reviewed stock, proposes the
+  # allocation and swaps, and names concentration risks; ACTIONS shows where it disagrees with
+  # the rules (it can never buy a stock its own review rated Sell). false to skip it.
+  committee: true
 
 sizing:
   max_position_weight: 0.10   # never target more than 10% of the portfolio per stock

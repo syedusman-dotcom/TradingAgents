@@ -42,13 +42,22 @@ def _results(folder: Path) -> list[dict]:
     return json.loads(f.read_text(encoding="utf-8")) if f.exists() else []
 
 
+def _committee_summary(folder: Path) -> str | None:
+    """The investment committee's summary, when the review had one."""
+    try:
+        return json.loads((folder / "committee.json").read_text(encoding="utf-8")).get("summary")
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
 def reviews_index(paths: Paths) -> list[dict]:
-    """Every real review, newest first, with its results and cost."""
+    """Every real review, newest first, with its results, cost and committee summary."""
     out = []
     for folder in reviewmod.review_dirs(paths):
         actions = folder / "ACTIONS.md"
         cost = _COST.search(actions.read_text(encoding="utf-8")) if actions.exists() else None
-        out.append({"folder": folder.name, "results": _results(folder), "cost": cost.group(1) if cost else None})
+        out.append({"folder": folder.name, "results": _results(folder), "cost": cost.group(1) if cost else None,
+                    "committee": _committee_summary(folder)})
     return out
 
 

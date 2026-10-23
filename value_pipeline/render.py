@@ -6,6 +6,7 @@ import html
 
 from markdown_it import MarkdownIt
 
+from value_pipeline import committee as committee_mod
 from value_pipeline.actions import Action
 
 
@@ -24,7 +25,9 @@ def _cell(text) -> str:
 def actions_markdown(date: str, actions: list[Action], summary: dict, *, reports: dict[str, str],
                      comparison: dict | None, cost: float, failures: list[str], dry_run: bool,
                      knives: list[str] | None = None, usage: dict | None = None,
-                     names: dict[str, str] | None = None) -> str:
+                     names: dict[str, str] | None = None,
+                     committee: tuple[committee_mod.Committee, list[str]] | None = None,
+                     committee_unavailable: str | None = None) -> str:
     def who(ticker: str) -> str:
         return f"{names[ticker]} ({ticker})" if names and names.get(ticker) else ticker
 
@@ -56,6 +59,11 @@ def actions_markdown(date: str, actions: list[Action], summary: dict, *, reports
         lines.append(f"- **{ticker} at {weight:.0%}** of the portfolio is above the max position but was not "
                      "reviewed: consider trimming it to the cap")
     lines.append("")
+
+    if committee:
+        lines += committee_mod.render_committee(*committee, names)
+    elif committee_unavailable:
+        lines += committee_mod.render_unavailable(committee_unavailable)
 
     lines += ["## Holdings", ""]
     if held:
