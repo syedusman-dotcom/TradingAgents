@@ -36,7 +36,7 @@ DEFAULTS: dict = {
         "committee": True,
     },
     "watch": {"buy_margin_of_safety": 0.30, "max_rating_age_days": 120},
-    "daily": {"enabled": True, "max_reviews": 3, "cooldown_days": 5, "big_move": 0.15},
+    "daily": {"enabled": True, "scope": "holdings", "max_reviews": 3, "cooldown_days": 5, "big_move": 0.15},
     "superinvestors": {
         "refresh_days": 7,
         "investors": [

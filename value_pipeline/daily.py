@@ -1,4 +1,5 @@
-"""The weekday check: which holdings and ideas changed enough to deserve a re-review.
+"""The weekday check: which holdings changed enough to deserve a keep-or-sell re-review
+(and which ideas fired, for Saturday's review).
 
 ``triggers`` and ``select`` are pure; ``run`` fetches prices, re-runs the agents on the
 names that fired and writes the report. Nothing here trades.
@@ -198,7 +199,13 @@ def run(paths: Paths, cfg: dict, *, dry_run: bool = False, notify: bool = True,
     rows = holdings + [{"ticker": i["ticker"], "last_price": i.get("price")} for i in ideas]
     prices, trends = _prices_and_trends([r["ticker"] for r in rows])
     fired = triggers(holdings, ideas, prices, trends, today, cfg)
-    selected, deferred = select(fired, last_review, today, cfg)
+    # Scope "holdings" (the default): the daily check decides keep-or-sell on what you own;
+    # ideas that fired are listed for Saturday's review instead of spending a run today.
+    held = {h["ticker"] for h in holdings}
+    scope = cfg["daily"].get("scope", "holdings")
+    for_saturday = [] if scope == "all" else [tr for tr in fired if tr.ticker not in held]
+    to_select = fired if scope == "all" else [tr for tr in fired if tr.ticker in held]
+    selected, deferred = select(to_select, last_review, today, cfg)
     review_lines, n_run, code = _reviews(paths, cfg, selected, dry_run)
 
     lines = [f"# Daily check {today.isoformat()}", "",
@@ -216,6 +223,10 @@ def run(paths: Paths, cfg: dict, *, dry_run: bool = False, notify: bool = True,
     lines += ["", "## Triggers", ""]
     lines += [f"- **{tr.kind}**: {tr.message}" for tr in fired] or ["Nothing fired."]
     lines += ["", "## Reviews run", "", *review_lines]
+    if for_saturday:
+        lines += ["", "## For Saturday's review", "",
+                  "Ideas that fired today; the weekly review decides whether to buy. No run spent.", ""]
+        lines += [f"- **{tr.kind}**: {tr.message}" for tr in for_saturday]
     if deferred:
         lines += ["", "## Deferred", "", *[f"- {t}: {why}" for t, why in deferred]]
     hit = list(dict.fromkeys(tr.ticker for tr in fired if criteria.get(tr.ticker)))
@@ -228,6 +239,8 @@ def run(paths: Paths, cfg: dict, *, dry_run: bool = False, notify: bool = True,
     out.write_text("\n".join(lines) + "\n", encoding="utf-8")
     if notify:
         text = (f"{len(fired)} trigger(s): " + "; ".join(f"{tr.ticker} {tr.kind}" for tr in fired)
-                + f" — {n_run} review(s) run") if fired else "Nothing fired"
+                + f" — {n_run} review(s) run"
+                + (f"; {len({tr.ticker for tr in for_saturday})} idea(s) for Saturday" if for_saturday else "")
+                ) if fired else "Nothing fired"
         watch._notify("Daily check", text)
     return fired, out, code

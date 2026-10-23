@@ -65,6 +65,7 @@ watch:
 
 daily:
   enabled: true        # the weekday price check that re-reviews what changed
+  scope: holdings      # holdings: keep-or-sell re-reviews only; ideas that fire wait for Saturday. all: re-review ideas too
   max_reviews: 3       # re-reviews per day; the rest wait until tomorrow
   cooldown_days: 5     # skip a ticker reviewed this recently (EARNINGS and REACHED VALUE ignore it)
   big_move: 0.15       # a move this far from the last review's price triggers a re-review

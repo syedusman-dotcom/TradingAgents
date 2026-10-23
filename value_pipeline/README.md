@@ -203,7 +203,7 @@ The SPY comparison replays your deposits and trades into SPY on the same dates a
 
 ## Daily check
 
-`daily` is the weekday check between reviews. It fetches prices (free) and re-runs the agents only on the few holdings and ideas whose triggers fired:
+`daily` is the weekday check between reviews. It fetches prices (free) and re-runs the agents only on the few holdings and ideas whose triggers fired: By default (`daily.scope: holdings`) it re-reviews only what you own, to decide keep or sell; an idea that reaches its entry price mid-week is listed under "For Saturday's review" in the daily report and left for the weekly run, which is where buys are found. Set `scope: all` to re-review ideas on weekdays too.
 
 - **ENTRY PRICE**: the stock is at or below the entry price its last review gave.
 - **REACHED VALUE**: a holding is at or above its intrinsic value.

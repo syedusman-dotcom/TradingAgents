@@ -194,7 +194,8 @@ def test_daily_runs_the_review_on_fired_tickers(tmp_path, monkeypatch):
     monkeypatch.setattr(review, "run", fake_run)
     notes = []
     monkeypatch.setattr(daily.watch, "_notify", lambda title, text: notes.append(text))
-    found, out, code = daily.run(paths, RUN_CFG, today=TODAY)
+    all_scope = {**RUN_CFG, "daily": {**RUN_CFG["daily"], "scope": "all"}}
+    found, out, code = daily.run(paths, all_scope, today=TODAY)
     assert code == 0
     assert calls == [(True, False, ["DNLM.L", "HRB"])]
     text = out.read_text()
@@ -255,7 +256,8 @@ def test_daily_max_and_cooldown_defer_and_bad_dates_do_not_abort(tmp_path, monke
     pf.positions[0].last_review_date = "not-a-date"
     pfmod.save(paths, pf)
     monkeypatch.setattr(review, "run", _no_review)
-    found, out, code = daily.run(paths, RUN_CFG, dry_run=True, notify=False, max_reviews=1, today=TODAY)
+    all_scope = {**RUN_CFG, "daily": {**RUN_CFG["daily"], "scope": "all"}}   # cap/cooldown mechanics, any scope
+    found, out, code = daily.run(paths, all_scope, dry_run=True, notify=False, max_reviews=1, today=TODAY)
     assert code == 0
     assert "## Deferred" in out.read_text()
     assert "- HRB: over the daily cap of 1" in out.read_text()
@@ -306,7 +308,8 @@ def test_daily_links_no_report_for_an_errored_ticker(tmp_path, monkeypatch):
 def test_daily_negative_max_runs_nothing(tmp_path, monkeypatch):
     paths = _data(tmp_path, monkeypatch, {"HRB": 56.0, "DNLM.L": 740.0})
     monkeypatch.setattr(review, "run", _no_review)
-    found, out, code = daily.run(paths, RUN_CFG, notify=False, max_reviews=-1, today=TODAY)
+    all_scope = {**RUN_CFG, "daily": {**RUN_CFG["daily"], "scope": "all"}}
+    found, out, code = daily.run(paths, all_scope, notify=False, max_reviews=-1, today=TODAY)
     assert code == 0 and len(found) == 2
     text = out.read_text()
     assert "- HRB: over the daily cap of 0" in text
@@ -333,3 +336,25 @@ def test_daily_lists_an_inflection_holdings_demand_criteria_first(tmp_path, monk
     monkeypatch.setattr(review, "run", _no_review)
     _, out, _ = daily.run(paths, RUN_CFG, dry_run=True, notify=False, today=TODAY)
     assert "- HRB: 1. Backlog falls year on year; 2. Net debt above 3x EBITDA" in out.read_text()
+
+
+def test_daily_default_scope_reviews_holdings_and_lists_ideas_for_saturday(tmp_path, monkeypatch):
+    """The daily check decides keep-or-sell on holdings; ideas at their entry price wait for Saturday."""
+    paths = _data(tmp_path, monkeypatch, {"HRB": 56.0, "DNLM.L": 740.0})
+    calls = []
+
+    def fake_run(p, cfg, *, yes, dry_run, only):
+        calls.append(only)
+        return paths.reports / "2026-10-23" / "ACTIONS.md"
+
+    monkeypatch.setattr(review, "run", fake_run)
+    notes = []
+    monkeypatch.setattr(daily.watch, "_notify", lambda title, text: notes.append(text))
+    found, out, code = daily.run(paths, RUN_CFG, today=TODAY)       # default scope: holdings
+    assert code == 0
+    assert calls == [["HRB"]]
+    text = out.read_text()
+    assert "## For Saturday's review" in text
+    assert "DNLM.L" in text.split("## For Saturday's review")[1]
+    assert "ENTRY PRICE" in text
+    assert notes == ["2 trigger(s): HRB REACHED VALUE; DNLM.L ENTRY PRICE — 1 review(s) run; 1 idea(s) for Saturday"]
