@@ -464,3 +464,39 @@ def test_reviews_page_shows_the_committee_summary(tmp_path):
         {"ranking": [], "swaps": [], "concentration": [], "summary": "Trim HRB, add MSFT.", "notes": []}))
     r = client.get("/reviews")
     assert r.status_code == 200 and r.text.count("Trim HRB, add MSFT.") == 1
+
+
+def _seed_portfolio(client, app):
+    client.post("/start", data={"cash": "1000", "currency": "USD", "token": app.state.token},
+                follow_redirects=False)
+
+
+@pytest.mark.unit
+def test_dashboard_shows_the_newer_of_watch_and_daily(tmp_path):
+    client, app, paths = _client(tmp_path)
+    _seed_portfolio(client, app)
+    paths.reports.mkdir(parents=True, exist_ok=True)
+    (paths.reports / "watch_2026-10-18.md").write_text("WATCHTEXT", encoding="utf-8")
+    (paths.reports / "daily_2026-10-24.md").write_text("DAILYTEXT", encoding="utf-8")
+    r = client.get("/")
+    assert "DAILYTEXT" in r.text and "WATCHTEXT" not in r.text and "Latest check" in r.text
+    (paths.reports / "watch_2026-10-25.md").write_text("WATCHTEXT", encoding="utf-8")
+    r = client.get("/")
+    assert "WATCHTEXT" in r.text and "DAILYTEXT" not in r.text
+    (paths.reports / "daily_2026-10-25.md").write_text("DAILYTEXT", encoding="utf-8")
+    assert "DAILYTEXT" in client.get("/").text            # a tie goes to the daily check
+
+
+@pytest.mark.unit
+def test_dashboard_empty_state_mentions_both_checks(tmp_path):
+    client, app, paths = _client(tmp_path)
+    _seed_portfolio(client, app)
+    r = client.get("/")
+    assert "Saturday watch" in r.text and "weekday daily check" in r.text
+
+
+@pytest.mark.unit
+def test_run_page_offers_the_daily_job(tmp_path):
+    client, app, paths = _client(tmp_path)
+    assert 'value="daily"' in client.get("/run").text
+    assert "daily" in app.state.job_funcs

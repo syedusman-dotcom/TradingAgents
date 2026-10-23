@@ -56,7 +56,7 @@ def _markdown(text: str) -> str:
 
 def _default_job_funcs() -> dict:
     """What each Run-page button runs: the same functions as the commands."""
-    from value_pipeline import screener, watch
+    from value_pipeline import daily, screener, watch
 
     def owned(paths: Paths) -> set[str]:
         return {p.ticker for p in pfmod.load(paths).positions} if paths.portfolio.exists() else set()
@@ -66,6 +66,7 @@ def _default_job_funcs() -> dict:
         "review": lambda paths, cfg, only=None, dry_run=False: reviewmod.run(
             paths, cfg, yes=True, dry_run=dry_run, only=only),
         "watch": lambda paths, cfg, **kw: watch.run(paths, cfg, notify=False),
+        "daily": lambda paths, cfg, **kw: daily.run(paths, cfg, notify=False),
     }
 
 

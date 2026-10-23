@@ -27,11 +27,18 @@ def next_review_date(today: date) -> date:
 
 
 def latest_watch(paths: Paths) -> tuple[str, str] | None:
-    """The newest weekly watch: (date, markdown)."""
-    files = sorted(paths.reports.glob("watch_????-??-??.md")) if paths.reports.exists() else []
-    if not files:
+    """The newest check, the Saturday watch or the weekday daily check: (date, markdown).
+    The date in the file name decides; on a tie the daily check wins."""
+    if not paths.reports.exists():
         return None
-    return files[-1].stem.removeprefix("watch_"), files[-1].read_text(encoding="utf-8")
+    found = []
+    for prefix, rank in (("watch", 0), ("daily", 1)):
+        for f in paths.reports.glob(f"{prefix}_????-??-??.md"):
+            found.append((f.stem.removeprefix(f"{prefix}_"), rank, f))
+    if not found:
+        return None
+    day, _, f = max(found, key=lambda t: (t[0], t[1]))
+    return day, f.read_text(encoding="utf-8")
 
 
 _COST = re.compile(r"Cost of this review: ~?(\$[\d,.]+)")

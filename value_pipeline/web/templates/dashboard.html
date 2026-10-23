@@ -32,6 +32,6 @@
 {% endfor %}
 </table></div>
 {% else %}<p class="muted">No holdings yet. <a href="/trade">Record a buy</a>.</p>{% endif %}
-<h2>Weekly watch</h2>
-{% if watch %}<p class="muted">{{ watch[0] }}</p>{{ watch[1] | markdown | safe }}{% else %}<p class="muted">No watch yet. It runs on the Saturdays between reviews, or from <a href="/run">Run</a>.</p>{% endif %}
+<h2>Latest check</h2>
+{% if watch %}<p class="muted">{{ watch[0] }}</p>{{ watch[1] | markdown | safe }}{% else %}<p class="muted">No check yet. The Saturday watch and the weekday daily check write one, or start one from <a href="/run">Run</a>.</p>{% endif %}
 {% endblock %}

@@ -35,7 +35,7 @@ uv run python -m value_pipeline status
 - **History**: every trade and deposit with realised gains, and undo for the last entry. Undo is refused once something else, such as a review, has changed the files since.
 - **Reviews** and **Stock**: past reviews and agent reports, and each ticker's ratings and values over time.
 - **Screen**: the latest screen, sortable and filterable.
-- **Run**: start a screen, a review or a watch. A review shows its run count and cost first and starts only when you confirm. One job runs at a time, and it keeps running if you close the page.
+- **Run**: start a screen, a review, a watch or the daily check. A review shows its run count and cost first and starts only when you confirm. One job runs at a time, and it keeps running if you close the page.
 - **Settings**: edit `config.yaml`, validated and backed up on every save.
 
 ## Commands
@@ -160,7 +160,21 @@ value_pipeline/data/            (gitignored: your holdings)
 
 The SPY comparison replays your deposits and trades into SPY on the same dates and with the same dollars. It uses prices without dividends, so it reads slightly in SPY's favour if you don't record your dividends as deposits.
 
-## Scheduling (macOS: review on the first Saturday, watch on the others)
+## Daily check
+
+`daily` is the weekday check between reviews. It fetches prices (free) and re-runs the agents only on the few holdings and ideas whose triggers fired:
+
+- **ENTRY PRICE**: the stock is at or below the entry price its last review gave.
+- **REACHED VALUE**: a holding is at or above its intrinsic value.
+- **EARNINGS**: the company has reported since its last review.
+- **FREEFALL**: the stock has just entered FREEFALL.
+- **BIG MOVE**: the price is 15% or more away from the price at its last review (`daily.big_move`).
+
+At most 3 names are re-reviewed per day (`daily.max_reviews`); the rest wait until tomorrow. A ticker reviewed in the last 5 days is skipped (`daily.cooldown_days`), except for EARNINGS and REACHED VALUE, which always go through. The report is `value_pipeline/data/reports/daily_<date>.md`, and the website's dashboard shows the newest of it and the Saturday watch under "Latest check". Nothing trades; you decide.
+
+To run it by hand without spending anything: `uv run python -m value_pipeline daily --dry-run` (it fetches prices and lists which triggers fired, but re-runs no agents). Add `--no-notify` to skip the macOS notification, or `--max N` to change the cap for one run.
+
+## Scheduling (macOS: review on the first Saturday, watch on the others, daily check on weekdays)
 
 `scripts/monthly.sh` is started by launchd every Saturday and logs to `value_pipeline/data/logs/`. On the first Saturday of the month (the 1st to the 7th) it runs `run-all --yes`. On the other Saturdays it runs the free `watch`. launchd can't express "first Saturday", so the script checks the date. To run the full review by hand on any day: `scripts/monthly.sh --now`.
 
@@ -186,7 +200,22 @@ The SPY comparison replays your deposits and trades into SPY on the same dates a
    (remove with `launchctl bootout gui/$(id -u)/local.value-pipeline`).
 3. Test it now: `launchctl kickstart gui/$(id -u)/local.value-pipeline` (on a day after the 7th, edit the script or run `scripts/monthly.sh --now` instead).
 
-**The Mac must be awake.** launchd runs a missed job when the Mac wakes from sleep, but not if it was shut down. To wake it automatically: `sudo pmset repeat wakeorpoweron S 08:55:00`. Keep the repo out of `~/Desktop`, `~/Documents` and `~/Downloads`: macOS blocks launchd jobs from those folders ("Operation not permitted", exit 126). `scripts/monthly.sh --check` tests access without spending anything.
+**The Mac must be awake.** launchd runs a missed job when the Mac wakes from sleep, but not if it was shut down. To wake it automatically for the Saturday job alone: `sudo pmset repeat wakeorpoweron S 08:55:00` (the daily-check line below replaces it; `pmset repeat` holds only one schedule). Keep the repo out of `~/Desktop`, `~/Documents` and `~/Downloads`: macOS blocks launchd jobs from those folders ("Operation not permitted", exit 126). `scripts/monthly.sh --check` tests access without spending anything.
+
+**The weekday daily check.** `scripts/daily.sh` runs `daily` Monday to Friday at 7:30 and logs to `value_pipeline/data/logs/daily_<date>.log`; it shows a notification if it fails. Install the template that ships in the repo (it assumes the repo path above; edit it if yours differs):
+
+```bash
+cp scripts/local.value-pipeline-daily.plist ~/Library/LaunchAgents/ && launchctl load ~/Library/LaunchAgents/local.value-pipeline-daily.plist
+sudo pmset repeat wakeorpoweron MTWRFS 07:25:00
+```
+
+`scripts/daily.sh --check` tests access without spending anything. The `pmset` line wakes the Mac at 7:25 Monday to Saturday, five minutes before the jobs. So that one wake serves both, move the Saturday plist's hour from 9 to 7 and its minute to 30:
+
+```bash
+launchctl unload ~/Library/LaunchAgents/local.value-pipeline.plist
+# edit ~/Library/LaunchAgents/local.value-pipeline.plist: Hour 7, Minute 30
+launchctl load ~/Library/LaunchAgents/local.value-pipeline.plist
+```
 
 ## Tests
 

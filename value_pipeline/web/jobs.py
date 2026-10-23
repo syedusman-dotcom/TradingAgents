@@ -1,4 +1,4 @@
-"""One background job at a time (a screen, review or watch), logged to a file.
+"""One background job at a time (a screen, review, watch or daily check), logged to a file.
 
 Jobs cannot be cancelled: a half-finished review is worth nothing. Closing the
 browser does not stop them.
