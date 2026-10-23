@@ -34,6 +34,7 @@ class Position:
     consecutive_underweight: int = 0
     kill_criteria: list[str] = field(default_factory=list)   # verifiable facts that would void the thesis
     entry_price: float | None = None                          # the agents' buy-below price at the last review
+    next_earnings_date: str | None = None                      # ISO date, looked up at the last review
 
 
 @dataclass

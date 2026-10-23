@@ -1120,3 +1120,35 @@ def test_a_screen_row_from_before_the_expected_return_column_is_rebuilt(tmp_path
     assert row["sector"] == "Consumer Discretionary"
     current = {**old, "expected_return": 0.118}
     assert review.screen_row_for("HRB", Paths(tmp_path), DEFAULTS, {"HRB": current}) is current
+
+
+@pytest.mark.unit
+def test_results_and_position_carry_the_earnings_date_or_none(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    import pandas as pd
+
+    from value_pipeline import market_data, operations as ops, review
+
+    paths = Paths(tmp_path)
+    monkeypatch.setattr(market_data, "quote_fx", lambda t: ("USD", 1.0))
+    ops.init_portfolio(paths, 1000.0, on="2026-10-01")
+    ops.record_buy(paths, "HRB", 1, 50.0, on="2026-10-02")
+    monkeypatch.setattr(review, "fake_run", lambda t, i, held, price: review.RunResult(t, "Hold", ""))
+    monkeypatch.setattr(review, "_screen_rows", lambda paths: {})
+    monkeypatch.setattr(market_data, "latest_price", lambda t: 50.0)
+    monkeypatch.setattr(market_data, "closes_between", lambda *a, **k: pd.Series(dtype=float))
+    dates = {"HRB": "2026-11-05", "ADBE": None}
+    monkeypatch.setattr(review, "next_earnings_date", lambda t: dates[t])
+    out = review.run(paths, DEFAULTS, yes=True, dry_run=True, today="2026-10-23", only=["HRB", "ADBE"])
+    rows = {r["ticker"]: r for r in json.loads((out.parent / "results.json").read_text())}
+    assert rows["HRB"]["earnings_date"] == "2026-11-05" and rows["ADBE"]["earnings_date"] is None
+
+    pf = pfmod.load(paths)
+    assert pf.position("HRB").next_earnings_date is None
+    act = SimpleNamespace(ticker="HRB", rating="Hold", consecutive_underweight=0,
+                          decision=SimpleNamespace(intrinsic_value=None, kill_criteria=[], entry_price=None))
+    review._record_ratings(paths, pf, [act], "2026-10-23", {"HRB": "2026-11-05"})
+    assert pfmod.load(paths).position("HRB").next_earnings_date == "2026-11-05"
+    review._record_ratings(paths, pf, [act], "2026-10-24", {"HRB": None})
+    assert pfmod.load(paths).position("HRB").next_earnings_date == "2026-11-05"

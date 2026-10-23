@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from tradingagents.dataflows.vendors.yahoo.fundamentals import next_earnings_date
 from value_pipeline import (
     benchmark,
     committee as committee_mod,
@@ -46,6 +47,7 @@ class RunResult:
     tokens_in: int = 0
     tokens_out: int = 0
     name: str | None = None         # the company's name, for ACTIONS
+    earnings_date: str | None = None  # the next earnings date (ISO) when the review ran
     nominal_cost_usd: float = 0.0   # what the calls would have cost at API prices (measured, not the estimate)
 
 
@@ -363,6 +365,12 @@ def _run(paths: Paths, cfg: dict, *, yes: bool, dry_run: bool, today: str | None
                  "nominal_cost_usd": sum(r.nominal_cost_usd for r in results),
                  "on_plan": str(ta.config.get("llm_provider", "")).lower() == "claude_code"}
 
+    for r in results:
+        try:
+            r.earnings_date = next_earnings_date(r.ticker)
+        except Exception:
+            r.earnings_date = None
+
     scenarios = {r.ticker: _scenarios_at(r.decision, prices.get(r.ticker)) for r in results}
     decisions = []
     for r in results:
@@ -406,6 +414,7 @@ def _run(paths: Paths, cfg: dict, *, yes: bool, dry_run: bool, today: str | None
 
     rows = [
         {"ticker": r.ticker, "name": r.name, "rating": r.rating, "error": r.error, "report": r.report,
+         "earnings_date": r.earnings_date,
          "tokens_in": r.tokens_in, "tokens_out": r.tokens_out, "nominal_cost_usd": round(r.nominal_cost_usd, 4),
          "intrinsic_value": parse.intrinsic_value(r.decision), "margin_of_safety": parse.margin_of_safety(r.decision),
          "thesis": parse.thesis_summary(r.decision), "price": prices.get(r.ticker),
@@ -443,7 +452,7 @@ def _run(paths: Paths, cfg: dict, *, yes: bool, dry_run: bool, today: str | None
         _write_whole(out_dir / "committee.json", {**committee[0].model_dump(), "notes": committee[1]})
 
     if not dry_run:
-        _record_ratings(paths, pf, actions, today)
+        _record_ratings(paths, pf, actions, today, {r.ticker: r.earnings_date for r in results})
     return out_dir / "ACTIONS.md"
 
 
@@ -476,7 +485,8 @@ def _committee(ta, tally, decisions, rows, pf, summary, sizing, actions):
     return committee_mod.reconcile(result, actions), None
 
 
-def _record_ratings(paths: Paths, pf: pfmod.Portfolio, actions, today: str) -> None:
+def _record_ratings(paths: Paths, pf: pfmod.Portfolio, actions, today: str,
+                    earnings: dict[str, str | None] | None = None) -> None:
     """Store each holding's rating, review date, Underweight streak and value estimate.
 
     The portfolio is read again here, not reused from the start of the review: a
@@ -496,6 +506,8 @@ def _record_ratings(paths: Paths, pf: pfmod.Portfolio, actions, today: str) -> N
             held.kill_criteria = list(a.decision.kill_criteria)
         if a.decision.entry_price is not None:
             held.entry_price = a.decision.entry_price
+        if (earnings or {}).get(a.ticker):
+            held.next_earnings_date = earnings[a.ticker]
     pfmod.save(paths, pf)
 
 
