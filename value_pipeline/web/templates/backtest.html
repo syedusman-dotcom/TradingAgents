@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block content %}
+{% if report %}
+<p class="muted">Report of {{ report[0] }}. Run <code>python -m value_pipeline backtest</code> for a new one; the picks are in the CSV beside the report.</p>
+{{ report[1] | markdown | safe }}
+{% else %}
+<h1>Backtest</h1>
+<p class="muted">No backtest yet — run <code>python -m value_pipeline backtest</code>.</p>
+{% endif %}
+{% endblock %}

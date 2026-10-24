@@ -20,6 +20,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, timedelta
 from io import StringIO
+from pathlib import Path
 
 import pandas as pd
 import requests
@@ -42,6 +43,7 @@ from tradingagents.dataflows.value_metrics import EQUITY_PREMIUM, MIN_DISCOUNT_R
 from value_pipeline import market_data, metrics, screener
 from value_pipeline.config import Paths
 from value_pipeline.pit_statements import (
+    facts_for,
     quarters_as_of,
     revenue_history,
     shares_as_of_dated,
@@ -577,8 +579,250 @@ def survivorship(paths: Paths, cohorts: list[str],
     """Per cohort date, how many of today's S&P 500 members joined after it: names the index did
     not hold then, while the names it held and later dropped are missing from today's list.
     ``{}`` when the join dates cannot be read."""
-    added = added_dates(fetch)
-    if not added:
-        return {}
-    joined = [pd.Timestamp(d) for d in added.values()]
-    return {c: sum(d > pd.Timestamp(c) for d in joined) for c in cohorts}
+    return _joined_after(added_dates(fetch), cohorts)
+
+
+def _joined_after(added: dict[str, str], cohorts: list[str]) -> dict[str, int]:
+    """``survivorship`` on dates already read (``{}`` without any)."""
+    return {c: sum(d > c for d in added.values()) for c in cohorts} if added else {}
+
+
+# --- run -----------------------------------------------------------------------------------
+
+def _universe(paths: Paths, cfg: dict, tickers: list[str] | None, universe_fn) -> list[tuple]:
+    """``(ticker, sector)`` for today's members less the excluded sectors, narrowed to
+    ``tickers`` when given."""
+    uni = universe_fn(paths, cfg["universe"]["indexes"])
+    uni = uni[~uni["sector"].isin(cfg["universe"]["exclude_sectors"])]
+    if tickers:
+        wanted = {t.upper() for t in tickers}
+        uni = uni[uni["ticker"].isin(wanted)]
+    return [(t, s if isinstance(s, str) else None) for t, s in zip(uni["ticker"], uni["sector"],
+                                                                   strict=True)]
+
+
+def _ticker_rows(ticker: str, sector, store: dict, hist, cohorts: list[str], rates: dict,
+                 added: dict, cfg: dict) -> dict[str, tuple[dict, tuple]]:
+    """The ticker's snapshot per cohort it belonged to (not joined the S&P 500 after it)."""
+    out = {}
+    for cohort in cohorts:
+        if added.get(ticker, "") > cohort:
+            continue
+        snap = snapshot(ticker, cohort, store, hist, rates[cohort], cfg, sector)
+        if snap is not None:
+            out[cohort] = snap
+    return out
+
+
+def _load(ticker: str, paths: Paths, cfg: dict, fetch: bool, refresh: bool):
+    """The ticker's fact store and price history (either None when missing); throttles after a
+    Yahoo fetch."""
+    store = facts_for(ticker, paths, fetch=fetch, refresh=refresh)
+    yahoo = fetch and (refresh or not _price_path(ticker, paths).exists())
+    hist = price_history(ticker, paths, fetch=fetch, refresh=refresh)
+    if yahoo:
+        market_data.throttle(cfg["screen"]["throttle_seconds"])
+    return store, hist
+
+
+def run(paths: Paths, cfg: dict, today: date | None = None, tickers: list[str] | None = None,
+        refresh: bool = False, fetch: bool = True, progress=None,
+        universe_fn=market_data.universe, added_fn=None) -> dict:
+    """The backtest: every cohort's rows from the statements and closes known on its date, the
+    rules' picks and their returns against SPY and the universe, the summary, sensitivity, the
+    bar that bound and the survivorship counts. ``fetch=False`` reads the statement and price
+    caches only. A ticker whose data is missing or whose snapshot raises is recorded in
+    ``skipped`` and the run goes on. Nothing trades; no agent is called."""
+    today = today or date.today()
+    holds = list(cfg["backtest"]["holds"])
+    cohorts = cohort_dates(cfg, today)
+    members = _universe(paths, cfg, tickers, universe_fn)
+    added = (added_fn or added_dates)()
+    spy = price_history(cfg["backtest"]["benchmark"], paths, fetch=fetch, refresh=refresh)
+    tnx = price_history("^TNX", paths, fetch=fetch, refresh=refresh)
+    rates = {c: discount_rate_on(tnx, c) for c in cohorts}
+    rows: dict[str, list[dict]] = {c: [] for c in cohorts}
+    inputs: dict[str, dict[str, tuple]] = {c: {} for c in cohorts}
+    hists: dict[str, pd.DataFrame] = {}
+    skipped: dict[str, str] = {}
+    with_data = 0
+    for i, (ticker, sector) in enumerate(members, start=1):
+        if progress:
+            progress(i, len(members), ticker)
+        try:
+            store, hist = _load(ticker, paths, cfg, fetch, refresh)
+            if store is None or hist is None:
+                skipped[ticker] = "no EDGAR statements" if store is None else "no price history"
+                continue
+            with_data += 1
+            snaps = _ticker_rows(ticker, sector, store["facts"], hist, cohorts, rates, added, cfg)
+        except Exception as exc:  # noqa: BLE001 - one bad ticker must not stop the run
+            log.warning("skip %s: %s", ticker, exc)
+            skipped[ticker] = str(exc) or type(exc).__name__
+            continue
+        for cohort, (row, tup) in snaps.items():
+            rows[cohort].append(row)
+            inputs[cohort][ticker] = tup
+        if snaps:
+            hists[ticker] = hist
+    for cohort in cohorts:
+        finish_cohort(rows[cohort], inputs[cohort])
+        attach_returns(rows[cohort], hists, cohort, holds)
+    bench = benchmarks(spy, rows, holds)
+    rule_set = rules(cfg)
+    picks = [p for rule in rule_set.values() for p in picks_for(rule, rows, holds, bench)]
+    return {
+        "generated": today.isoformat(), "cohorts": cohorts, "holds": holds,
+        "universe_size": len(members), "with_data": with_data,
+        "rows_per_cohort": {c: len(rows[c]) for c in cohorts}, "picks": picks,
+        "summary": summarize(picks, bench, holds, names=list(rule_set)),
+        "sensitivity": sensitivity(rule_set, rows, bench),
+        "bound": bound_by_price(rule_set, rows, bench, holds),
+        "survivorship": _joined_after(added, cohorts), "skipped": skipped,
+    }
+
+
+# --- report --------------------------------------------------------------------------------
+
+PICK_COLUMNS = ["cohort", "ticker", "rule", "price", "value_base", "mos_formula", "market_cap",
+                "hold", "start_date", "end_date", "ret", "spy", "universe", "excess_spy",
+                "ended_early"]
+SURVIVORSHIP = ("today's members only: N of today's S&P 500 names joined after this date and are "
+                "left out of this cohort; names that left either index since are not in the "
+                "sample and cannot be counted from free data; the S&P 400's join dates are not "
+                "published, so all its members stay")
+
+
+def _ret(x) -> str:
+    return "–" if x is None else f"{x:.1%}"
+
+
+def _points(x) -> str:
+    return "–" if x is None else f"{x * 100:+.1f}"
+
+
+def _tested(result: dict) -> list[str]:
+    cohorts, surv = result["cohorts"], result["survivorship"]
+    span = f"{cohorts[0]} to {cohorts[-1]}" if cohorts else "none (no hold has ended)"
+    holds = " and ".join(str(h) for h in result["holds"])
+    holds += " year" if result["holds"] == [1] else " years"
+    counts = ("; ".join(f"{c}: {n}" for c, n in surv.items()) if surv
+              else "not available (the join dates could not be read)")
+    return ["## What was tested", "",
+            f"The screen's lane rules ({', '.join(result['summary'])}) replayed on "
+            f"{len(cohorts)} cohort dates ({span}), each pick held {holds} with dividends "
+            "reinvested, equal weight, against SPY and the equal-weight universe. Point in time: "
+            "each cohort sees only the statements filed on or before its date (EDGAR) and the "
+            "closes dated on or before it; returns start at the first close on or after it. The "
+            "metrics see the newest four fiscal years known then, as the live screen does. "
+            "Sectors are today's (EDGAR has none), a mild look-ahead. Survivorship — "
+            f"{SURVIVORSHIP}. N per cohort: {counts}.", ""]
+
+
+def verdict(result: dict) -> str:
+    """The ``## Verdict`` section: each rule's sentence, one hold after another."""
+    lines = ["## Verdict", ""]
+    for h in result["holds"]:
+        lines += [f"**{h}-year hold**", ""]
+        lines += [f"- {by_hold[h]['sentence']}" for by_hold in result["summary"].values()]
+        lines.append("")
+    return "\n".join(lines)
+
+
+def _cohort_table(lines: list[dict]) -> list[str]:
+    out = ["| Cohort | n | Basket | Median | SPY | Universe | Excess (pts) | Hit rate |",
+           "|---|--:|--:|--:|--:|--:|--:|--:|"]
+    out += [f"| {c['cohort']} | {c['n']} | {_ret(c['basket'])} | {_ret(c['median'])} "
+            f"| {_ret(c['spy'])} | {_ret(c['universe'])} | {_points(c['excess_spy'])} "
+            f"| {c['hit_rate']:.0%} |" for c in lines]
+    return out
+
+
+def _by_cohort(result: dict) -> list[str]:
+    lines = ["## By cohort", ""]
+    for name, by_hold in result["summary"].items():
+        for h in result["holds"]:
+            s = by_hold[h]
+            lines += [f"### {name}, {h}-year hold", ""]
+            lines += (_cohort_table(s["cohorts"]) if s["cohorts"] else ["No picks."]) + [""]
+    return lines
+
+
+def _sensitivity(result: dict) -> list[str]:
+    lines = ["## Sensitivity", "",
+             "One bar moved at a time, the others at their defaults; one-year hold.", ""]
+    by_rule: dict[str, list[dict]] = {}
+    for point in result["sensitivity"]:
+        by_rule.setdefault(point["rule"], []).append(point)
+    for name, points in by_rule.items():
+        lines += [f"### {name}", "", "| Bar | Value | Picks | Beat SPY | Mean excess (pts) |",
+                  "|---|--:|--:|--:|--:|"]
+        lines += [f"| {p['bar']} | {p['value']:g} | {p['n']} | {p['beat_spy']} of {p['cohorts']} "
+                  f"| {_points(p['mean_excess_spy'])} |" for p in points]
+        lines.append("")
+    return lines
+
+
+def _bound(result: dict) -> list[str]:
+    lines = ["## The bar that bound", "",
+             "The compounders that cleared the screen's hint and the PM's record bars but not the "
+             "price bars (`compounder_record` minus `compounder`): what the price bars cost or "
+             "saved.", ""]
+    for h in result["holds"]:
+        s = result["bound"][BOUND][h]
+        lines += [f"- {s['sentence']}"]
+    lines.append("")
+    for h in result["holds"]:
+        s = result["bound"][BOUND][h]
+        if s["cohorts"]:
+            lines += [f"### {h}-year hold", ""] + _cohort_table(s["cohorts"]) + [""]
+    return lines
+
+
+def _coverage(result: dict) -> list[str]:
+    reasons: dict[str, int] = {}
+    for reason in result["skipped"].values():
+        reasons[reason] = reasons.get(reason, 0) + 1
+    lines = ["## Coverage", "",
+             f"- Universe (today's members less the excluded sectors): {result['universe_size']}",
+             f"- With statements and prices: {result['with_data']}"]
+    if result.get("rows_per_cohort"):
+        lines.append("- Rows per cohort: " + "; ".join(
+            f"{c}: {n}" for c, n in result["rows_per_cohort"].items()))
+    lines.append(f"- Skipped: {len(result['skipped'])}")
+    lines += [f"  - {reason}: {n}" for reason, n in sorted(reasons.items(),
+                                                            key=lambda kv: (-kv[1], kv[0]))]
+    return lines + [""]
+
+
+def markdown(result: dict) -> str:
+    """The report: what was tested, the verdict, each rule by cohort, the sensitivity, the bar
+    that bound and the coverage."""
+    lines = ["# Lane-rule backtest", "", f"Generated {result['generated']}. Nothing trades; "
+             "no agent was called.", ""]
+    lines += _tested(result) + [verdict(result)] + _by_cohort(result) + _sensitivity(result)
+    lines += _bound(result) + _coverage(result)
+    return "\n".join(lines)
+
+
+def _folder(paths: Paths) -> Path:
+    return paths.reports / "backtest"
+
+
+def write(paths: Paths, result: dict, today: str) -> tuple[Path, Path]:
+    """The report and the picks CSV (one row per pick and hold) under ``reports/backtest``."""
+    folder = _folder(paths)
+    folder.mkdir(parents=True, exist_ok=True)
+    md = folder / f"backtest_{today}.md"
+    csv = folder / f"backtest_{today}_picks.csv"
+    md.write_text(markdown(result), encoding="utf-8")
+    pd.DataFrame(result["picks"], columns=PICK_COLUMNS).to_csv(csv, index=False)
+    return md, csv
+
+
+def latest_report(paths: Paths) -> tuple[str, str] | None:
+    """``(date, text)`` of the newest ``backtest_*.md``, None when there is none."""
+    reports = sorted(_folder(paths).glob("backtest_*.md"))
+    if not reports:
+        return None
+    return reports[-1].stem.removeprefix("backtest_"), reports[-1].read_text(encoding="utf-8")

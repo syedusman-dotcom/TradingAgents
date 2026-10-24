@@ -17,6 +17,7 @@ from markdown_it import MarkdownIt
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from value_pipeline import (
+    backtest,
     benchmark,
     calibration,
     history,
@@ -226,6 +227,11 @@ def create_app(paths: Paths, *, config_path: Path = CONFIG_PATH, price_fn=market
         rs = calibration.rows(paths, price_fn=calibration.price_fn_for(paths, fetch=False))
         return render(request, "calibration.html", rows=rs, scores=calibration.score(rs),
                       has_horizons=calibration.has_horizons(rs), horizons=calibration.HORIZONS)
+
+    @app.get("/backtest", response_class=HTMLResponse)
+    def backtest_page(request: Request):
+        # The newest report only: `backtest` on the command line runs it; the page never fetches.
+        return render(request, "backtest.html", report=backtest.latest_report(paths))
 
     @app.get("/screen", response_class=HTMLResponse)
     def screen(request: Request):

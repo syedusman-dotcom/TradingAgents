@@ -695,3 +695,209 @@ def test_backtest_defaults_in_config():
     text = CONFIG_PATH.read_text(encoding="utf-8")
     for key in DEFAULTS["backtest"]:
         assert f"#   {key}:" in text
+
+
+# --- run, report, command ------------------------------------------------------------------
+
+E2E_COHORTS = ["2022-06-30", "2023-06-30"]
+
+
+def _e2e_hist(slope=0.1) -> pd.DataFrame:
+    """Closes from 2021-01-04 into mid-2025 rising ``slope`` a day, no split in range."""
+    days = 1200
+    dates = pd.bdate_range("2021-01-04", periods=days)
+    close = [100.0 + slope * i for i in range(days)]
+    return pd.DataFrame({"date": dates, "close": close, "adj_close": close,
+                         "split": [0.0] * days})
+
+
+def _write_caches(paths, ticker, store=None, hist=None) -> None:
+    if store is not None:
+        facts = paths.cache / "backtest" / "facts" / f"{ticker}.json"
+        facts.parent.mkdir(parents=True, exist_ok=True)
+        facts.write_text(json.dumps({"cik": 1, "fetched_at": "2026-10-24T00:00:00",
+                                     "facts": store}), encoding="utf-8")
+    if hist is not None:
+        prices = paths.cache / "backtest" / "prices" / f"{ticker.lstrip('^')}.csv"
+        prices.parent.mkdir(parents=True, exist_ok=True)
+        hist.assign(date=hist["date"].dt.strftime("%Y-%m-%d")).to_csv(prices, index=False)
+
+
+def _e2e_store() -> dict:
+    """``_snap_store`` with net income growing a little faster than assets, so ROA improves
+    (an F-Score point) in every year, not only by rounding."""
+    store = _snap_store()
+    store["NetIncomeLoss"] = _flows(lambda y: 180.0 * 1.12 ** (y - 2018))
+    return store
+
+
+def _e2e_universe(paths, indexes):
+    return pd.DataFrame({"ticker": ["AAA", "BBB", "BANK", "NOHIST", "NOFACTS"],
+                         "name": ["A", "B", "Bank", "No hist", "No facts"],
+                         "sector": ["Industrials", "Industrials", "Financials", "Industrials",
+                                    "Industrials"],
+                         "index": ["sp500"] * 5})
+
+
+def _e2e_setup(tmp_path):
+    paths = Paths(tmp_path / "data")
+    for t in ("AAA", "BBB", "BANK"):
+        _write_caches(paths, t, _e2e_store(), _e2e_hist())
+    _write_caches(paths, "NOHIST", store=_e2e_store())
+    _write_caches(paths, "NOFACTS", hist=_e2e_hist())
+    _write_caches(paths, "SPY", hist=_e2e_hist(slope=0.02))
+    cfg = _bt_cfg(first_year=2022, last_year=2023)
+    return paths, cfg
+
+
+def _e2e_added():
+    # BBB joined the S&P 500 after the first cohort date: out of 2022, in 2023.
+    return {"AAA": "1990-01-01", "BBB": "2023-01-15"}
+
+
+def _e2e_run(tmp_path, monkeypatch, **kw):
+    paths, cfg = _e2e_setup(tmp_path)
+    monkeypatch.setattr(backtest, "added_dates", lambda fetch=None: _e2e_added())
+    monkeypatch.setattr(backtest.market_data, "throttle", lambda s: pytest.fail("no Yahoo fetch"))
+    seen = []
+    result = backtest.run(paths, cfg, today=date(2024, 10, 24), fetch=False,
+                          progress=lambda i, n, t: seen.append((i, n, t)),
+                          universe_fn=_e2e_universe, **kw)
+    return paths, result, seen
+
+
+def test_run_end_to_end_with_patched_caches(tmp_path, monkeypatch):
+    paths, result, seen = _e2e_run(tmp_path, monkeypatch)
+    assert set(result) >= {"generated", "cohorts", "holds", "universe_size", "with_data", "picks",
+                           "summary", "sensitivity", "bound", "survivorship", "skipped"}
+    assert result["generated"] == "2024-10-24"
+    assert result["cohorts"] == E2E_COHORTS and result["holds"] == [1, 3]
+    assert result["universe_size"] == 4                     # BANK's sector is excluded
+    assert [t for _, _, t in seen] == ["AAA", "BBB", "NOHIST", "NOFACTS"]
+    assert seen[-1][:2] == (4, 4)
+    assert result["with_data"] == 2
+    assert set(result["skipped"]) == {"NOHIST", "NOFACTS"}
+    assert result["rows_per_cohort"] == {"2022-06-30": 1, "2023-06-30": 2}
+    mf = {(p["cohort"], p["ticker"]) for p in result["picks"]
+          if p["rule"] == "magic_formula" and p["hold"] == 1}
+    assert mf == {("2022-06-30", "AAA"), ("2023-06-30", "AAA"), ("2023-06-30", "BBB")}
+    assert {p["rule"] for p in result["picks"]} <= set(backtest.rules(_bt_cfg()))
+    # Every rule has its sentence, picks or not; the 3-year hold of 2023 has not ended.
+    assert list(result["summary"]) == list(backtest.rules(_bt_cfg()))
+    assert result["summary"]["magic_formula"][1]["cohorts_with_picks"] == 2
+    assert result["summary"]["magic_formula"][3]["cohorts_with_picks"] == 1
+    assert result["summary"]["magic_formula"][1]["beat_spy"] == 2     # rising faster than SPY
+    assert result["sensitivity"] and backtest.BOUND in result["bound"]
+    assert result["survivorship"] == {"2022-06-30": 1, "2023-06-30": 0}
+    aaa = next(p for p in result["picks"] if p["ticker"] == "AAA")
+    assert aaa["start_date"] == "2022-06-30"
+
+    md_path, csv_path = backtest.write(paths, result, "2024-10-24")
+    picks = pd.read_csv(csv_path)
+    assert list(picks.columns) == ["cohort", "ticker", "rule", "price", "value_base",
+                                   "mos_formula", "market_cap", "hold", "start_date", "end_date",
+                                   "ret", "spy", "universe", "excess_spy", "ended_early"]
+    assert len(picks) == len(result["picks"])
+
+
+def test_run_narrows_to_tickers_and_fails_open(tmp_path, monkeypatch):
+    def boom(*a, **k):
+        raise RuntimeError("bad facts")
+
+    real = backtest.snapshot
+    calls = []
+
+    def snap(ticker, as_of, store, hist, rate, cfg, sector=None):
+        calls.append((ticker, as_of, rate, sector))
+        if ticker == "BBB":
+            boom()
+        return real(ticker, as_of, store, hist, rate, cfg, sector)
+
+    monkeypatch.setattr(backtest, "snapshot", snap)
+    paths = Paths(tmp_path / "data")
+    tnx = _e2e_hist(slope=0.0).assign(close=5.0)            # the 10-year at 5%
+    tnx.loc[tnx["date"] > "2022-06-30", "close"] = 1.0       # after the first cohort: floor
+    _write_caches(paths, "^TNX", hist=tnx)
+    _, result, seen = _e2e_run(tmp_path, monkeypatch, tickers=["aaa", "BBB"])
+    assert calls[:2] == [("AAA", "2022-06-30", pytest.approx(0.05 + EQUITY_PREMIUM), "Industrials"),
+                         ("AAA", "2023-06-30", MIN_DISCOUNT_RATE, "Industrials")]
+    assert ("BBB", "2022-06-30") not in {c[:2] for c in calls}     # joined after it
+    assert [t for _, _, t in seen] == ["AAA", "BBB"]
+    assert result["universe_size"] == 2
+    assert result["skipped"] == {"BBB": "bad facts"}
+    assert result["rows_per_cohort"] == {"2022-06-30": 1, "2023-06-30": 1}
+
+
+def _fake_result() -> dict:
+    holds = [1, 3]
+    names = list(backtest.rules(_bt_cfg()))
+    picks = [_pick("value", C1, 0.30), _pick("value", C2, 0.0)]
+    summary = backtest.summarize(picks, BENCH, [1], names=names)
+    for name in names:
+        summary[name][3] = backtest.summarize([], BENCH, [3], names=[name])[name][3]
+    return {"generated": "2026-10-24", "cohorts": [C1, C2], "holds": holds, "universe_size": 900,
+            "with_data": 850, "rows_per_cohort": {C1: 600, C2: 640}, "picks": picks,
+            "summary": summary,
+            "sensitivity": [{"rule": "value", "bar": "mos", "value": 0.3, "n": 2, "beat_spy": 1,
+                             "cohorts": 2, "mean_excess_spy": 0.025}],
+            "bound": backtest.summarize([], BENCH, holds, names=[backtest.BOUND]),
+            "survivorship": {C1: 40, C2: 30},
+            "skipped": {"X": "no EDGAR statements", "Y": "no EDGAR statements",
+                        "Z": "no price history"}}
+
+
+def test_markdown_sections_in_order():
+    text = backtest.markdown(_fake_result())
+    heads = [line for line in text.splitlines() if line.startswith(("# ", "## "))]
+    assert heads == ["# Lane-rule backtest", "## What was tested", "## Verdict", "## By cohort",
+                     "## Sensitivity", "## The bar that bound", "## Coverage"]
+    assert ("today's members only: N of today's S&P 500 names joined after this date and are "
+            "left out of this cohort; names that left either index since are not in the sample "
+            "and cannot be counted from free data; the S&P 400's join dates are not published, "
+            "so all its members stay") in text
+    assert f"{C1}: 40" in text
+    assert ("value: beat SPY in 1 of 2 cohorts (1-year hold, equal weight), median excess "
+            "+5.0 points; 2 picks in all.") in text
+    assert "dislocation: no picks in any cohort." in text
+    verdict = text.split("## Verdict")[1].split("## By cohort")[0]
+    assert verdict.index("1-year") < verdict.index("3-year")
+    assert "| Cohort |" in text and "+15.0" in text            # C1's excess over SPY
+    assert "| mos | 0.3 |" in text.replace("0.30", "0.3")
+    assert "no EDGAR statements: 2" in text and "900" in text and "850" in text
+    assert backtest.verdict(_fake_result()) in text
+    empty = backtest.markdown({**_fake_result(), "survivorship": {}})
+    assert "not available" in empty
+
+
+def test_write_and_latest_report(tmp_path):
+    paths = Paths(tmp_path / "data")
+    assert backtest.latest_report(paths) is None
+    result = _fake_result()
+    md, csv = backtest.write(paths, result, "2026-10-24")
+    assert md == paths.reports / "backtest" / "backtest_2026-10-24.md"
+    assert csv == paths.reports / "backtest" / "backtest_2026-10-24_picks.csv"
+    assert md.read_text(encoding="utf-8") == backtest.markdown(result)
+    assert len(pd.read_csv(csv)) == 2
+    backtest.write(paths, result, "2026-01-02")
+    assert backtest.latest_report(paths) == ("2026-10-24", backtest.markdown(result))
+
+
+def test_cli_backtest_no_fetch(tmp_path, monkeypatch, capsys):
+    from functools import partial
+
+    from value_pipeline import cli
+
+    paths, _ = _e2e_setup(tmp_path)
+    monkeypatch.setattr(backtest, "added_dates", lambda fetch=None: _e2e_added())
+    monkeypatch.setattr(backtest, "run", partial(backtest.run, universe_fn=_e2e_universe))
+    cli.main(["--data-dir", str(paths.root), "backtest", "--no-fetch", "--tickers", "AAA,BBB",
+              "--from", "2022", "--to", "2023", "--holds", "1"])
+    out = capsys.readouterr().out
+    assert "Verdict" in out and "magic_formula: beat SPY" in out
+    reports = sorted((paths.reports / "backtest").iterdir())
+    assert [p.name for p in reports] == [f"backtest_{date.today()}.md",
+                                         f"backtest_{date.today()}_picks.csv"]
+    assert "backtest_" in out
+    text = reports[0].read_text(encoding="utf-8")
+    assert "2022-06-30" in text and "2023-06-30" in text and "2024-06-30" not in text
+    assert "3-year" not in text.split("## Verdict")[1].split("## By cohort")[0]

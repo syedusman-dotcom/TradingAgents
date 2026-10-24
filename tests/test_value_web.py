@@ -554,3 +554,22 @@ def test_checklist_without_still_investing_still_renders(tmp_path):
     for want in ("Checklist", "Good business", "serial acquirer", "Margin of safety: 18%"):
         assert want in r.text, want
     assert "Still investing" not in r.text
+
+
+@pytest.mark.unit
+def test_backtest_page_empty_and_populated(tmp_path):
+    client, app, paths = _client(tmp_path)
+    r = client.get("/backtest")
+    assert r.status_code == 200
+    assert "No backtest yet" in r.text and "python -m value_pipeline backtest" in r.text
+    assert 'href="/backtest"' in r.text
+    folder = paths.reports / "backtest"
+    folder.mkdir(parents=True)
+    (folder / "backtest_2026-01-02.md").write_text("# Lane-rule backtest\n\nold one\n")
+    (folder / "backtest_2026-10-24.md").write_text(
+        "# Lane-rule backtest\n\n## Verdict\n\n| Cohort | n |\n|---|--:|\n| 2024-06-30 | 3 |\n")
+    (folder / "backtest_2026-10-24_picks.csv").write_text("cohort,ticker\n")
+    r = client.get("/backtest")
+    assert r.status_code == 200 and "No backtest yet" not in r.text
+    assert "<table>" in r.text and "<td>2024-06-30</td>" in r.text and "old one" not in r.text
+    assert "2026-10-24" in r.text

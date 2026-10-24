@@ -36,6 +36,7 @@ uv run python -m value_pipeline status
 - **Reviews** and **Stock**: past reviews and agent reports, and each ticker's ratings and values over time.
 - **Screen**: the latest screen, sortable and filterable.
 - **Calibration**: past decisions against the prices that followed (see Calibration below). Reads cached closes only.
+- **Backtest**: the newest lane-rule backtest report (see Backtest below). Reads the saved report only.
 - **Run**: start a screen, a review, a watch or the daily check. A review shows its run count and cost first and starts only when you confirm. One job runs at a time, and it keeps running if you close the page.
 - **Settings**: edit `config.yaml`, validated and backed up on every save.
 
@@ -51,6 +52,7 @@ uv run python -m value_pipeline status
 | `superinvestors [--force]` | Refresh which tracked value investors (Buffett, Klarman, Li Lu, Pabrai, Russo, Akre; editable in `config.yaml`) hold what, from their latest 13F filings. Shown in the screen's Superinvestors column and on stock pages. A second opinion only: 13Fs are up to ~4.5 months old by the time you read them, and they never feed the agents or the action rules. The monthly screen refreshes it weekly at most. |
 | `web [--port 8765] [--no-browser]` | Open the local website (this Mac only): dashboard, trades, history with undo, reviews and reports, stock pages, the screen, running jobs and settings. Stop with Ctrl+C. |
 | `calibration [--horizon {30,90,180,365}]` | Every past decision against the closes that followed it, then the scores and one verdict per lane (see Calibration below). Fetches and caches the closes it has not seen. Default horizon 180 days. |
+| `backtest [--from YEAR] [--to YEAR] [--holds 1,3] [--tickers A,B] [--refresh] [--no-fetch]` | The lane rules replayed on past cohort dates against SPY (see Backtest below). No agents. Writes `reports/backtest/backtest_<date>.md` and `_picks.csv` and prints the verdict. |
 | `screen [--top N]` | Rank the universe; writes `data/screens/screen_YYYY-MM-DD.csv`. |
 | `review [--yes] [--dry-run] [--candidates N]` | Run the agents and write the action list. |
 | `run-all [--yes] [--dry-run]` | `screen`, then the theme scan (when `lanes.themes` names any), then `review` with the scan's inflection candidates. |
@@ -242,6 +244,61 @@ after the watch, so the page stays current. It stays empty until a decision is a
 the decisions table shows; the scores and verdicts always use 180 days (365 days for "reached
 value"). A few decisions say little: read the counts before the shares.
 
+## Backtest
+
+Would the lane rules have picked winners? `backtest` replays the screen on one cohort date a
+year (`backtest.first_year` to `last_year`, on `cohort_day`, default 30 June 2015 to 2024),
+using only what was known then: the EDGAR statements filed on or before the date (an
+amendment counts from its filing date) and the closes dated on or before it. It runs the
+screen's hard filters, Magic Formula rank, formula value, the compounder, inflection and
+dislocation hints and the Portfolio Manager's compounder record and price bars, and takes each
+rule's picks: `value` (top 30 by the Magic Formula with a margin of safety of at least 30%),
+`magic_formula` (the top 30 alone), `compounder` and `compounder_overweight` (the PM's Buy and
+Overweight price bars), `compounder_record` (hint and record bars, no price bar),
+`compounder_hint`, `inflection` and `dislocation`. Each pick is held 1 and 3 years, equal
+weight, dividends reinvested, and compared with SPY and with the equal-weight universe of that
+cohort. No agent is called, nothing trades and no bar is changed.
+
+What it cannot test or correct:
+
+- Survivorship. Only today's S&P 500 and 400 members are in the sample. A name that joined the
+  S&P 500 after a cohort date is left out of that cohort (the constituents table dates every
+  join), but names that left either index since are missing and cannot be counted from free
+  data, and the S&P 400 publishes no join dates, so all its members stay. The report prints the
+  count left out per cohort. Expect the results to read somewhat in the rules' favour.
+- Sectors are today's (EDGAR has none), used to exclude Financials, Real Estate and Utilities
+  and for the sector EV/EBIT targets.
+- The agent-only bars (upside/downside, scenario probabilities, kill criteria, verified
+  evidence) are not tested: the rules are the screen's and the PM's mechanical bars only.
+- The 2 bn market-cap floor is nominal in every year (not deflated).
+- The fourth quarter is derived as the annual figure less nine months.
+- The metrics see the newest four fiscal years known at the date, as the live screen does
+  (Yahoo's window); the PM's ten-year revenue CAGR uses the longer EDGAR history.
+
+How to run: `uv run python -m value_pipeline backtest`. The first run fetches every ticker's
+EDGAR company facts and Yahoo price history (about 900 + 900 requests, 20-40 minutes) and
+caches them for good under `data/cache/backtest/facts/` and `prices/`; later runs read the
+caches and take a minute or two. `--refresh` refetches, `--no-fetch` reads the caches only
+(the index lists and join dates are still read from Wikipedia). `--from`/`--to` pick the
+cohort years, `--holds 1` one hold, and `--tickers DECK,ADBE` a quick smoke run. A cohort is
+evaluated only when its one-year hold has ended; a three-year result only when that hold has.
+
+How to read it. The Verdict gives one sentence per rule and hold, such as `compounder: beat SPY
+in 7 of 10 cohorts (1-year hold, equal weight), median excess +3.1 points; 42 picks in all.` A
+cohort counts when the rule picked something there: "beat" means the equal-weight basket's
+return was above SPY's, and the excess is basket minus SPY in percentage points over the hold
+(not annualised). Read the cohort count and the picks before the excess: three cohorts or a
+dozen picks say little. Compare the references: `value` against `magic_formula` is what the
+margin-of-safety bar adds; `compounder` against `compounder_record` what the price bars add;
+`compounder_record` against `compounder_hint` what the PM's record bars add. *The bar that
+bound* is the compounders the price bars turned away, and how they did. The Sensitivity table
+moves one bar at a time over a fixed grid (the others at their defaults, one-year hold): a rule
+whose result flips between neighbouring values is noise, not an edge, and a bar is not to be
+tuned to this sample. *Coverage* counts the universe, the tickers with statements and prices,
+the rows per cohort and the skipped tickers by reason.
+
+The website's Backtest page shows the newest report.
+
 ## Files
 
 ```
@@ -251,10 +308,12 @@ value_pipeline/data/            (gitignored: your holdings)
   backups/<timestamp>/          copy of both files before every write
   cache/<TICKER>.json           Yahoo data, refreshed after 7 days
   cache/prices/<TICKER>.json    closes on past days, for calibration (kept; past closes do not change)
+  cache/backtest/facts|prices/  EDGAR company facts and Yahoo price histories for the backtest (kept)
   universe.csv                  last index membership fetched
   screens/screen_<date>.csv     every screened ticker with all metrics
   reports/<date>/ACTIONS.md|html, results.json, committee.json, <TICKER>/complete_report.html
   reports/themes_<date>.md      the theme scan (linked from ACTIONS when it added candidates)
+  reports/backtest/backtest_<date>.md, backtest_<date>_picks.csv   the lane-rule backtest
   logs/monthly_<date>.log       output of scheduled runs
 ```
 

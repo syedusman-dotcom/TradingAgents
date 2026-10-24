@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import logging
 import sys
 from datetime import date
@@ -12,6 +13,7 @@ from rich.markdown import Markdown
 from rich.table import Table
 
 from value_pipeline import (
+    backtest,
     calibration,
     daily,
     operations as ops,
@@ -142,6 +144,37 @@ def cmd_calibration(args, paths: Paths, cfg) -> None:
     console.print(Markdown(calibration.markdown(rs, calibration.score(rs), args.horizon)))
 
 
+def _ints(text: str) -> list[int]:
+    try:
+        return [int(x) for x in text.split(",") if x.strip()]
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"not a comma list of whole years: {text}") from exc
+
+
+def cmd_backtest(args, paths: Paths, cfg) -> None:
+    cfg = copy.deepcopy(cfg)
+    bt = cfg["backtest"]
+    if args.first_year is not None:
+        bt["first_year"] = args.first_year
+    if args.last_year is not None:
+        bt["last_year"] = args.last_year
+    if args.holds:
+        bt["holds"] = args.holds
+    tickers = [t.strip().upper() for t in (args.tickers or "").split(",") if t.strip()] or None
+    console.print("Replaying the lane rules on past cohorts (the first run fetches every ticker's "
+                  "EDGAR statements and Yahoo prices; 20-40 minutes. Later runs read the caches)...")
+
+    def progress(i: int, n: int, ticker: str) -> None:
+        if i % 50 == 0 or i == n:
+            console.print(f"{i}/{n} tickers ({ticker})")
+
+    result = backtest.run(paths, cfg, tickers=tickers, refresh=args.refresh,
+                          fetch=not args.no_fetch, progress=progress)
+    md, csv = backtest.write(paths, result, result["generated"])
+    console.print(Markdown(backtest.verdict(result)))
+    console.print(f"\nSaved {md} and {csv}")
+
+
 def cmd_web(args, paths: Paths, cfg) -> None:
     import threading
     import webbrowser
@@ -236,6 +269,15 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--horizon", type=int, choices=calibration.HORIZONS, default=180,
                    help="days after the review for the table's return (default 180)")
     s.set_defaults(func=cmd_calibration)
+
+    s = sub.add_parser("backtest", help="the lane rules replayed on past cohorts against SPY (no agents)")
+    s.add_argument("--from", dest="first_year", type=int, help="first cohort year (default backtest.first_year)")
+    s.add_argument("--to", dest="last_year", type=int, help="last cohort year (default backtest.last_year)")
+    s.add_argument("--holds", type=_ints, help="holds in years, comma-separated (default 1,3)")
+    s.add_argument("--tickers", help="only these, comma-separated (a smoke run)")
+    s.add_argument("--refresh", action="store_true", help="refetch the cached statements and prices")
+    s.add_argument("--no-fetch", action="store_true", help="read the statement and price caches only")
+    s.set_defaults(func=cmd_backtest)
 
     s = sub.add_parser("web", help="open the local website (this Mac only)")
     s.add_argument("--port", type=int, default=8765)
