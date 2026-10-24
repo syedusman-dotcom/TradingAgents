@@ -59,6 +59,8 @@ DEFAULTS: dict = {
     },
     "lanes": {"themes": [], "tickers": [], "inflection_candidates": 3, "compounder_candidates": 2,
               "dislocation_candidates": 3},
+    "backtest": {"first_year": 2015, "last_year": 2024, "cohort_day": "06-30", "holds": [1, 3],
+                 "value_top_n": 30, "benchmark": "SPY"},
 }
 
 

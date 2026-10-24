@@ -55,6 +55,16 @@ sizing:
 #   compounder_candidates: 2
 #   dislocation_candidates: 3  # quality names down 25%+ from the high (or 20%+ in a month), numbers intact
 
+# The lane-rule backtest (python -m value_pipeline backtest): the screen's lane rules replayed on
+# what was filed by each past cohort date, held for fixed terms, against SPY and the universe.
+# backtest:
+#   first_year: 2015       # first cohort year
+#   last_year: 2024        # last cohort year (a cohort runs only once its one-year hold has ended)
+#   cohort_day: "06-30"    # month-day of each cohort date; most December 10-Ks are filed by then
+#   holds: [1, 3]          # holding terms in years, each reported separately
+#   value_top_n: 30        # the value and Magic Formula rules take this many of the cohort's ranking
+#   benchmark: SPY         # the index fund every basket is compared with (total return)
+
 watch:
   # The weekly check flags a stock the agents rated Buy/Overweight once its price
   # is at least this far below their intrinsic value.

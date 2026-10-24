@@ -1,5 +1,6 @@
-"""Lane-rule backtest: price helpers and the cohort snapshot (no network; prices and filings faked)."""
+"""Lane-rule backtest: prices, the cohort snapshot, rules, returns and summary (no network; data faked)."""
 
+import copy
 import json
 from datetime import date, timedelta
 
@@ -9,7 +10,7 @@ import pytest
 from tradingagents.agents import decision_math as dm
 from tradingagents.dataflows.value_metrics import EQUITY_PREMIUM, MIN_DISCOUNT_RATE
 from value_pipeline import backtest, metrics, pit_statements as pit
-from value_pipeline.config import DEFAULTS, Paths
+from value_pipeline.config import CONFIG_PATH, DEFAULTS, Paths, load_config, validate_config
 
 pytestmark = pytest.mark.unit
 
@@ -361,3 +362,333 @@ def test_snapshot_none_without_two_years():
     assert _snapshot(store, hist=early, as_of="2021-01-01") is not None  # 2018 and 2019
     assert _snapshot(store, hist=_hist(start="2024-07-01")) is None   # no close by the date
     assert backtest.snapshot("SYN", AS_OF, store, None, 0.09, _cfg()) is None
+
+
+# --- cohorts -------------------------------------------------------------------------------
+
+def _bt_cfg(**over) -> dict:
+    cfg = copy.deepcopy(DEFAULTS)
+    cfg["backtest"].update(over)
+    return cfg
+
+
+def test_cohort_dates_stop_at_completed_holds():
+    cfg = _bt_cfg()
+    assert backtest.cohort_dates(cfg, date(2025, 6, 30)) == [f"{y}-06-30" for y in range(2015, 2025)]
+    assert backtest.cohort_dates(cfg, date(2025, 6, 29)) == [f"{y}-06-30" for y in range(2015, 2024)]
+    assert backtest.cohort_dates(_bt_cfg(first_year=2018, last_year=2030, cohort_day="03-31"),
+                                 date(2021, 3, 30)) == ["2018-03-31", "2019-03-31"]
+    assert backtest.cohort_dates(cfg, date(2016, 6, 1)) == []
+
+
+def test_finish_cohort_applies_sector_targets_and_ranks(monkeypatch):
+    calls = []
+
+    def fake_targets(rows, inputs):
+        calls.append((rows, inputs))
+        for r in rows:
+            r["compounder_return"] = "sector-adjusted"
+
+    monkeypatch.setattr(backtest.screener, "apply_sector_targets", fake_targets)
+    ey, roic = backtest.screener.EY_KEY, backtest.screener.ROIC_KEY
+
+    def row(ticker, ey_v, roic_v, passes=True, trend="UPTREND"):
+        return {"ticker": ticker, ey: ey_v, roic: roic_v, "passes_filters": passes, "trend": trend}
+
+    rows = [row("B", 0.05, 0.20), row("A", 0.10, 0.30), row("C", 0.20, 0.50, trend="FREEFALL"),
+            row("D", 0.30, 0.90, passes=False), row("E", None, 0.40)]
+    inputs = {r["ticker"]: ([], 1.0, 1.0, 1.0) for r in rows}
+    backtest.finish_cohort(rows, inputs)
+    assert len(calls) == 1 and calls[0][0] is rows and calls[0][1] is inputs
+    assert all(r["compounder_return"] == "sector-adjusted" for r in rows)
+    assert {r["ticker"]: r["mf_position"] for r in rows} == {
+        "A": 1, "B": 2, "C": None, "D": None, "E": None}
+
+
+# --- rules ---------------------------------------------------------------------------------
+
+def _lane_row(ticker, **over) -> dict:
+    """A row that clears nothing until ``over`` says so: passing, uptrend, no lane, no rank."""
+    row = {"ticker": ticker, "passes_filters": True, "trend": "UPTREND", "mf_position": None,
+           "mos_formula": 0.0, "lane_hints": [], "pm_record_ok": False, "price": 100.0,
+           "value_base": 100.0, "compounder_return": 0.0, "implied_growth": 0.05,
+           "sustainable_growth": 0.06, "earned_growth": 0.08, "incremental_roic": None}
+    row.update(over)
+    return row
+
+
+def _picked(rule, rows, bars=None) -> set:
+    return {r["ticker"] for r in rule.picks(rows, rule.bars if bars is None else bars)}
+
+
+def test_rules_pick_at_the_bar():
+    cfg = _bt_cfg()
+    rules = backtest.rules(cfg)
+    assert list(rules) == ["value", "magic_formula", "compounder", "compounder_overweight",
+                           "compounder_record", "compounder_hint", "inflection", "dislocation"]
+    top_n, mos = cfg["backtest"]["value_top_n"], cfg["watch"]["buy_margin_of_safety"]
+    assert rules["value"].bars == {"top_n": top_n, "mos": mos}
+    assert rules["magic_formula"].bars == {"top_n": top_n}
+    assert rules["compounder"].bars == {"premium": dm.COMPOUNDER_BUY_PREMIUM,
+                                        "min_return": dm.COMPOUNDER_BUY_RETURN}
+    assert rules["compounder_overweight"].bars == {"premium": dm.COMPOUNDER_OVERWEIGHT_PREMIUM,
+                                                   "min_return": dm.COMPOUNDER_OVERWEIGHT_RETURN}
+    assert rules["compounder_record"].bars == {} and rules["compounder_hint"].bars == {}
+    assert rules["inflection"].bars == {"incremental_roic": dm.INFLECTION_INCREMENTAL_ROIC}
+    assert rules["dislocation"].bars == {}
+    assert all(name == rule.name for name, rule in rules.items())
+
+    ceiling = 0.08      # max(sustainable 0.06, earned 0.08)
+    comp = {"lane_hints": ["compounder"], "pm_record_ok": True}
+    buy = {"price": dm.COMPOUNDER_BUY_PREMIUM * 100.0, "compounder_return": dm.COMPOUNDER_BUY_RETURN,
+           "implied_growth": ceiling}
+    rows = [
+        # value / Magic Formula: at, above and below the rank and MOS bars
+        _lane_row("V_AT", mf_position=top_n, mos_formula=mos),
+        _lane_row("V_HIGH", mf_position=1, mos_formula=mos + 0.3),
+        _lane_row("V_MOS_LOW", mf_position=1, mos_formula=mos - 1e-4),
+        _lane_row("V_RANK_OUT", mf_position=top_n + 1, mos_formula=mos + 0.3),
+        _lane_row("V_FREEFALL", mf_position=2, mos_formula=mos + 0.3, trend="FREEFALL"),
+        _lane_row("V_FAIL", mf_position=3, mos_formula=mos + 0.3, passes_filters=False),
+        _lane_row("V_NONE", mos_formula=mos + 0.3),
+        # compounders: at, inside and outside each price and return bar
+        _lane_row("C_AT", **comp, **buy),
+        _lane_row("C_CHEAP", **comp, price=80.0, compounder_return=0.2, implied_growth=0.01),
+        _lane_row("C_OW", **comp, price=dm.COMPOUNDER_OVERWEIGHT_PREMIUM * 100.0,
+                  compounder_return=dm.COMPOUNDER_OVERWEIGHT_RETURN, implied_growth=ceiling),
+        _lane_row("C_PRICE_HIGH", **comp, **{**buy, "compounder_return": 0.2,
+                                            "price": dm.COMPOUNDER_OVERWEIGHT_PREMIUM * 100 + 0.01}),
+        _lane_row("C_RET_LOW", **comp, **{**buy, "compounder_return":
+                                         dm.COMPOUNDER_OVERWEIGHT_RETURN - 1e-4}),
+        _lane_row("C_IMPLIED_HIGH", **comp, **{**buy, "implied_growth": ceiling + 1e-4}),
+        _lane_row("C_IMPLIED_NONE", **comp, **{**buy, "implied_growth": None}),
+        _lane_row("C_NO_BASE", **comp, **{**buy, "value_base": None}),
+        _lane_row("C_NO_RECORD", lane_hints=["compounder"], **buy),
+        _lane_row("C_NO_HINT", pm_record_ok=True, **buy),
+        # inflection and dislocation
+        _lane_row("I_AT", lane_hints=["inflection"], incremental_roic=dm.INFLECTION_INCREMENTAL_ROIC),
+        _lane_row("I_HIGH", lane_hints=["inflection"], incremental_roic=0.5),
+        _lane_row("I_LOW", lane_hints=["inflection"],
+                  incremental_roic=dm.INFLECTION_INCREMENTAL_ROIC - 1e-4),
+        _lane_row("I_NONE", lane_hints=["inflection"]),
+        _lane_row("I_NO_HINT", incremental_roic=0.5),
+        _lane_row("D", lane_hints=["dislocation"]),
+    ]
+    picked = {name: _picked(rule, rows) for name, rule in rules.items()}
+    assert picked["value"] == {"V_AT", "V_HIGH"}
+    assert picked["magic_formula"] == {"V_AT", "V_HIGH", "V_MOS_LOW"}
+    assert picked["compounder"] == {"C_AT", "C_CHEAP"}
+    assert picked["compounder_overweight"] == {"C_AT", "C_CHEAP", "C_OW"}
+    record = {"C_AT", "C_CHEAP", "C_OW", "C_PRICE_HIGH", "C_RET_LOW", "C_IMPLIED_HIGH",
+              "C_IMPLIED_NONE", "C_NO_BASE"}
+    assert picked["compounder_record"] == record
+    assert picked["compounder_hint"] == record | {"C_NO_RECORD"}
+    assert picked["inflection"] == {"I_AT", "I_HIGH"}
+    assert picked["dislocation"] == {"D"}
+    assert picked["value"] <= picked["magic_formula"]
+    assert picked["compounder"] <= picked["compounder_record"] <= picked["compounder_hint"]
+    # A moved bar is honoured: the value rule at a lower MOS takes the row it refused.
+    assert "V_MOS_LOW" in _picked(rules["value"], rows, {"top_n": top_n, "mos": mos - 0.01})
+    assert _picked(rules["magic_formula"], rows, {"top_n": 1}) == {"V_HIGH", "V_MOS_LOW"}
+
+
+# --- returns -------------------------------------------------------------------------------
+
+def _two_day(start_adj, end_adj, days=("2020-06-30", "2021-06-30")) -> pd.DataFrame:
+    return pd.DataFrame({"date": pd.to_datetime(list(days)), "close": [start_adj, end_adj],
+                         "adj_close": [start_adj, end_adj], "split": [0.0, 0.0]})
+
+
+def test_attach_returns_and_benchmarks():
+    cohort = "2020-06-30"
+    rows = [{"ticker": "AAA"}, {"ticker": "BBB"}, {"ticker": "CCC"}]
+    hists = {"AAA": _two_day(100.0, 120.0), "BBB": _two_day(50.0, 45.0)}
+    backtest.attach_returns(rows, hists, cohort, [1, 3])
+    a, b, c = rows
+    assert a["ret_1"] == pytest.approx(0.2) and b["ret_1"] == pytest.approx(-0.1)
+    assert a["start_date"] == "2020-06-30" and a["end_date_1"] == "2021-06-30"
+    assert a["ended_early_1"] is False
+    # The series stops before the three-year end: last close, flagged.
+    assert a["ret_3"] == pytest.approx(0.2) and a["ended_early_3"] is True
+    assert c["ret_1"] is None and c["end_date_1"] is None and c["ended_early_1"] is None
+    assert c["start_date"] is None and c["ret_3"] is None
+
+    spy = _two_day(300.0, 330.0)
+    bench = backtest.benchmarks(spy, {cohort: rows}, [1, 3])
+    assert bench[(cohort, 1)]["spy"] == pytest.approx(0.1)
+    assert bench[(cohort, 1)]["universe"] == pytest.approx(0.05)      # (0.2 - 0.1) / 2; CCC none
+    assert bench[(cohort, 3)]["spy"] is None                          # SPY's hold has not ended
+    none = backtest.benchmarks(None, {cohort: [{"ticker": "CCC", "ret_1": None}]}, [1])
+    assert none[(cohort, 1)] == {"spy": None, "universe": None}
+
+
+# --- summary -------------------------------------------------------------------------------
+
+C1, C2, C3 = "2020-06-30", "2021-06-30", "2022-06-30"
+BENCH = {(C1, 1): {"spy": 0.15, "universe": 0.05}, (C2, 1): {"spy": 0.05, "universe": 0.0},
+         (C3, 1): {"spy": None, "universe": 0.1}}
+
+
+def _pick(rule, cohort, ret, ticker="T", ended_early=False) -> dict:
+    b = BENCH[(cohort, 1)]
+    excess = None if ret is None or b["spy"] is None else ret - b["spy"]
+    return {"cohort": cohort, "ticker": ticker, "rule": rule, "hold": 1, "ret": ret,
+            "spy": b["spy"], "universe": b["universe"], "excess_spy": excess,
+            "ended_early": ended_early}
+
+
+def test_summarize_by_hand():
+    picks = [_pick("a", C1, 0.10), _pick("a", C1, 0.30, ended_early=True),
+             _pick("a", C2, -0.10), _pick("a", C2, None), _pick("a", C3, 0.50),
+             _pick("c", C1, None)]
+    out = backtest.summarize(picks, BENCH, [1], names=["a", "b", "c"])
+    a = out["a"][1]
+    c1, c2 = a["cohorts"]
+    assert c1["cohort"] == C1 and c1["n"] == 2
+    assert c1["basket"] == pytest.approx(0.2) and c1["median"] == pytest.approx(0.2)
+    assert c1["spy"] == 0.15 and c1["universe"] == 0.05
+    assert c1["excess_spy"] == pytest.approx(0.05) and c1["excess_universe"] == pytest.approx(0.15)
+    assert c1["hit_rate"] == pytest.approx(0.5) and c1["ended_early"] == 1
+    assert c2["cohort"] == C2 and c2["n"] == 1 and c2["basket"] == pytest.approx(-0.1)
+    assert c2["excess_spy"] == pytest.approx(-0.15) and c2["hit_rate"] == 0.0
+    assert c2["ended_early"] == 0
+    assert a["beat_spy"] == 1 and a["cohorts_with_picks"] == 2 and a["picks"] == 3
+    assert a["mean_excess_spy"] == pytest.approx(-0.05)
+    assert a["median_excess_spy"] == pytest.approx(-0.05)
+    assert a["mean_excess_universe"] == pytest.approx(0.025)
+    assert a["all_picks_median"] == pytest.approx(0.1)
+    assert a["worst_cohort"] == C2
+    assert a["sentence"] == ("a: beat SPY in 1 of 2 cohorts (1-year hold, equal weight), "
+                             "median excess -5.0 points; 3 picks in all.")
+    for name in ("b", "c"):
+        s = out[name][1]
+        assert s["sentence"] == f"{name}: no picks in any cohort."
+        assert s["cohorts"] == [] and s["picks"] == 0 and s["beat_spy"] == 0
+        assert s["median_excess_spy"] is None and s["worst_cohort"] is None
+    plus = backtest.summarize([_pick("a", C1, 0.30)], BENCH, [1])
+    assert plus["a"][1]["sentence"] == ("a: beat SPY in 1 of 1 cohorts (1-year hold, equal "
+                                        "weight), median excess +15.0 points; 1 picks in all.")
+
+
+def _cohort_rows():
+    """One cohort: a value pick at the MOS bar, one just under, a compounder at the bar and one
+    over the price bar; each with a one-year return."""
+    cfg = _bt_cfg()
+    mos = cfg["watch"]["buy_margin_of_safety"]
+    comp = {"lane_hints": ["compounder"], "pm_record_ok": True,
+            "compounder_return": dm.COMPOUNDER_BUY_RETURN, "implied_growth": 0.0}
+    rows = [_lane_row("V1", mf_position=1, mos_formula=mos, ret_1=0.20),
+            _lane_row("V2", mf_position=2, mos_formula=0.25, ret_1=0.40),
+            _lane_row("C1", **comp, price=100.0, ret_1=0.10),
+            _lane_row("C2", **comp, price=dm.COMPOUNDER_BUY_PREMIUM * 100 + 1, ret_1=0.30),
+            _lane_row("H", lane_hints=["compounder"], ret_1=0.50)]
+    for r in rows:
+        r.update(start_date=C1, end_date_1=C2, ended_early_1=False)
+    return cfg, {C1: rows}
+
+
+def test_picks_for_builds_one_pick_per_hold():
+    cfg, by_cohort = _cohort_rows()
+    rule = backtest.rules(cfg)["value"]
+    picks = backtest.picks_for(rule, by_cohort, [1, 3], BENCH)
+    assert [(p["ticker"], p["hold"]) for p in picks] == [("V1", 1), ("V1", 3)]
+    one, three = picks
+    assert set(one) == {"cohort", "ticker", "rule", "price", "value_base", "mos_formula",
+                        "market_cap", "hold", "start_date", "end_date", "ret", "spy", "universe",
+                        "excess_spy", "ended_early"}
+    assert one["rule"] == "value" and one["cohort"] == C1 and one["ret"] == 0.20
+    assert one["excess_spy"] == pytest.approx(0.05) and one["end_date"] == C2
+    assert three["ret"] is None and three["spy"] is None and three["excess_spy"] is None
+    lower = backtest.picks_for(rule, by_cohort, [1], BENCH, bars={**rule.bars, "mos": 0.20})
+    assert [p["ticker"] for p in lower] == ["V1", "V2"]
+
+
+def test_sensitivity_grid_rows():
+    cfg, by_cohort = _cohort_rows()
+    rules = backtest.rules(cfg)
+    rows = backtest.sensitivity(rules, by_cohort, BENCH)
+    expected = [(name, bar, value) for name, rule in rules.items() for bar in rule.bars
+                for value in backtest.SENSITIVITY_GRID[bar]]
+    assert [(r["rule"], r["bar"], r["value"]) for r in rows] == expected
+    assert len(rows) == 30
+    assert all(set(r) == {"rule", "bar", "value", "n", "beat_spy", "cohorts", "mean_excess_spy"}
+               for r in rows)
+    by = {(r["rule"], r["bar"], r["value"]): r for r in rows}
+    assert by[("value", "mos", 0.30)]["n"] == 1
+    low = by[("value", "mos", 0.20)]
+    assert low["n"] == 2 and low["cohorts"] == 1 and low["beat_spy"] == 1
+    assert low["mean_excess_spy"] == pytest.approx(0.30 - 0.15)
+    assert by[("compounder", "premium", 1.5)]["n"] == 2
+    assert by[("compounder", "premium", 1.0)]["n"] == 1
+
+
+def test_bound_by_price_is_hint_minus_rule():
+    cfg, by_cohort = _cohort_rows()
+    rules = backtest.rules(cfg)
+    bound = backtest.bound_by_price(rules, by_cohort, BENCH, [1])
+    assert list(bound) == ["compounder_price_bar"]
+    s = bound["compounder_price_bar"][1]
+    assert s["picks"] == 1 and s["cohorts"][0]["basket"] == pytest.approx(0.30)   # C2 only
+    assert s["sentence"].startswith("compounder_price_bar: beat SPY in 1 of 1 cohorts")
+    # Nothing between the record and the price bar: the "no picks" sentence.
+    only = {C1: [r for r in by_cohort[C1] if r["ticker"] != "C2"]}
+    empty = backtest.bound_by_price(rules, only, BENCH, [1])["compounder_price_bar"][1]
+    assert empty["sentence"] == "compounder_price_bar: no picks in any cohort."
+
+
+# --- survivorship --------------------------------------------------------------------------
+
+def _changes_html(rows) -> str:
+    body = "".join(
+        f"<tr><td>{d}</td><td>{at}</td><td>{an}</td><td>{rt}</td><td>{rn}</td><td>r</td></tr>"
+        for d, at, an, rt, rn in rows)
+    return (
+        "<html><body>"
+        "<table><tr><th>Symbol</th><th>Security</th><th>GICS Sector</th></tr>"
+        "<tr><td>AAA</td><td>Aaa Inc</td><td>Industrials</td></tr></table>"
+        "<table><thead>"
+        "<tr><th rowspan='2'>Date</th><th colspan='2'>Added</th><th colspan='2'>Removed</th>"
+        "<th rowspan='2'>Reason</th></tr>"
+        "<tr><th>Ticker</th><th>Security</th><th>Ticker</th><th>Security</th></tr>"
+        f"</thead><tbody>{body}</tbody></table></body></html>")
+
+
+def test_survivorship_counts_removals_after_each_cohort(tmp_path):
+    html = _changes_html([
+        ("October 1, 2025", "NEW", "New Co", "YYY", "Y Co"),
+        ("March 20, 2023", "", "", "ZZZ", "Z Co"),
+        ("June 1, 2021", "ADD", "Add Co", "", ""),
+        ("January 5, 2021", "", "", "VVV", "V Co"),
+        ("June 30, 2020", "", "", "WWW", "W Co"),      # on the cohort date: not after it
+    ])
+    urls = []
+
+    def fetch(url):
+        urls.append(url)
+        return html
+
+    paths = Paths(tmp_path / "data")
+    cohorts = ["2020-06-30", "2022-06-30", "2024-06-30", "2026-06-30"]
+    assert backtest.survivorship(paths, cohorts, fetch=fetch) == {
+        "2020-06-30": 3, "2022-06-30": 2, "2024-06-30": 1, "2026-06-30": 0}
+    assert urls == [backtest.market_data.WIKI["sp500"]]
+
+    def boom(url):
+        raise RuntimeError("offline")
+
+    assert backtest.survivorship(paths, cohorts, fetch=boom) == {}
+    no_table = "<table><tr><th>Symbol</th></tr><tr><td>AAA</td></tr></table>"
+    assert backtest.survivorship(paths, cohorts, fetch=lambda url: no_table) == {}
+
+
+# --- config --------------------------------------------------------------------------------
+
+def test_backtest_defaults_in_config():
+    assert DEFAULTS["backtest"] == {"first_year": 2015, "last_year": 2024, "cohort_day": "06-30",
+                                    "holds": [1, 3], "value_top_n": 30, "benchmark": "SPY"}
+    cfg = load_config()
+    assert cfg["backtest"] == DEFAULTS["backtest"]
+    validate_config(cfg)
+    text = CONFIG_PATH.read_text(encoding="utf-8")
+    for key in DEFAULTS["backtest"]:
+        assert f"#   {key}:" in text
