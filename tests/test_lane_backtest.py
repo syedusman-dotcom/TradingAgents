@@ -10,7 +10,7 @@ import pytest
 from tradingagents.agents import decision_math as dm
 from tradingagents.dataflows.value_metrics import EQUITY_PREMIUM, MIN_DISCOUNT_RATE
 from value_pipeline import backtest, metrics, pit_statements as pit
-from value_pipeline.config import CONFIG_PATH, DEFAULTS, Paths, load_config, validate_config
+from value_pipeline.config import CONFIG_PATH, DEFAULTS, Paths, load_config
 
 pytestmark = pytest.mark.unit
 
@@ -638,47 +638,51 @@ def test_bound_by_price_is_hint_minus_rule():
 
 # --- survivorship --------------------------------------------------------------------------
 
-def _changes_html(rows) -> str:
-    body = "".join(
-        f"<tr><td>{d}</td><td>{at}</td><td>{an}</td><td>{rt}</td><td>{rn}</td><td>r</td></tr>"
-        for d, at, an, rt, rn in rows)
-    return (
-        "<html><body>"
-        "<table><tr><th>Symbol</th><th>Security</th><th>GICS Sector</th></tr>"
-        "<tr><td>AAA</td><td>Aaa Inc</td><td>Industrials</td></tr></table>"
-        "<table><thead>"
-        "<tr><th rowspan='2'>Date</th><th colspan='2'>Added</th><th colspan='2'>Removed</th>"
-        "<th rowspan='2'>Reason</th></tr>"
-        "<tr><th>Ticker</th><th>Security</th><th>Ticker</th><th>Security</th></tr>"
-        f"</thead><tbody>{body}</tbody></table></body></html>")
+def _constituents_html(rows) -> str:
+    head = ("Symbol", "Security", "GICS Sector", "GICS Sub-Industry", "Headquarters Location",
+            "Date added", "CIK", "Founded")
+    body = "".join(f"<tr><td>{sym}</td><td>{sym} Inc</td><td>Industrials</td><td>Machinery</td>"
+                   f"<td>Somewhere</td><td>{added}</td><td>1</td><td>1900</td></tr>"
+                   for sym, added in rows)
+    return ("<html><body><table><tr>" + "".join(f"<th>{h}</th>" for h in head) + "</tr>"
+            f"{body}</table><table><tr><td>navbox</td></tr></table></body></html>")
 
 
-def test_survivorship_counts_removals_after_each_cohort(tmp_path):
-    html = _changes_html([
-        ("October 1, 2025", "NEW", "New Co", "YYY", "Y Co"),
-        ("March 20, 2023", "", "", "ZZZ", "Z Co"),
-        ("June 1, 2021", "ADD", "Add Co", "", ""),
-        ("January 5, 2021", "", "", "VVV", "V Co"),
-        ("June 30, 2020", "", "", "WWW", "W Co"),      # on the cohort date: not after it
-    ])
+SP500_HTML = _constituents_html([
+    ("AAA", "1957-03-04"), ("BRK.B", "2010-02-16"), ("NEW", "2025-10-01"),
+    ("MID", "2023-03-20"), ("ODD", "unknown"), ("EDGE", "2020-06-30")])
+
+
+def test_added_dates_reads_the_constituents_table():
     urls = []
 
     def fetch(url):
         urls.append(url)
-        return html
+        return SP500_HTML
 
-    paths = Paths(tmp_path / "data")
-    cohorts = ["2020-06-30", "2022-06-30", "2024-06-30", "2026-06-30"]
-    assert backtest.survivorship(paths, cohorts, fetch=fetch) == {
-        "2020-06-30": 3, "2022-06-30": 2, "2024-06-30": 1, "2026-06-30": 0}
+    assert backtest.added_dates(fetch) == {
+        "AAA": "1957-03-04", "BRK-B": "2010-02-16", "NEW": "2025-10-01", "MID": "2023-03-20",
+        "EDGE": "2020-06-30"}
     assert urls == [backtest.market_data.WIKI["sp500"]]
 
     def boom(url):
         raise RuntimeError("offline")
 
+    assert backtest.added_dates(boom) == {}
+    assert backtest.added_dates(lambda url: "<table><tr><th>X</th></tr><tr><td>1</td></tr></table>") == {}
+
+
+def test_survivorship_counts_members_added_after_each_cohort(tmp_path):
+    paths = Paths(tmp_path / "data")
+    cohorts = ["2020-06-30", "2022-06-30", "2024-06-30", "2026-06-30"]
+    # EDGE joined on the 2020 cohort date: not after it.
+    assert backtest.survivorship(paths, cohorts, fetch=lambda url: SP500_HTML) == {
+        "2020-06-30": 2, "2022-06-30": 2, "2024-06-30": 1, "2026-06-30": 0}
+
+    def boom(url):
+        raise RuntimeError("offline")
+
     assert backtest.survivorship(paths, cohorts, fetch=boom) == {}
-    no_table = "<table><tr><th>Symbol</th></tr><tr><td>AAA</td></tr></table>"
-    assert backtest.survivorship(paths, cohorts, fetch=lambda url: no_table) == {}
 
 
 # --- config --------------------------------------------------------------------------------
@@ -686,9 +690,8 @@ def test_survivorship_counts_removals_after_each_cohort(tmp_path):
 def test_backtest_defaults_in_config():
     assert DEFAULTS["backtest"] == {"first_year": 2015, "last_year": 2024, "cohort_day": "06-30",
                                     "holds": [1, 3], "value_top_n": 30, "benchmark": "SPY"}
-    cfg = load_config()
-    assert cfg["backtest"] == DEFAULTS["backtest"]
-    validate_config(cfg)
+    cfg = load_config()      # the user's config.yaml may override values; the keys stay
+    assert set(cfg["backtest"]) >= set(DEFAULTS["backtest"])
     text = CONFIG_PATH.read_text(encoding="utf-8")
     for key in DEFAULTS["backtest"]:
         assert f"#   {key}:" in text

@@ -557,27 +557,28 @@ def _wiki_html(url: str) -> str:
     return requests.get(url, headers=market_data.HEADERS, timeout=30).text
 
 
-def _changes_table(html: str) -> pd.DataFrame:
-    """The S&P 500 page's "Selected changes" table: the one with a ``Date`` column and a
-    ``Removed`` column group."""
-    for table in pd.read_html(StringIO(html)):
-        tops = [c[0] if isinstance(c, tuple) else c for c in table.columns]
-        if "Date" in tops and "Removed" in tops:
-            return table
-    raise ValueError("no S&P 500 changes table")
+def added_dates(fetch: Callable[[str], str] | None = None) -> dict[str, str]:
+    """Ticker (Yahoo's spelling, ``BRK.B`` -> ``BRK-B``) -> ISO date it joined the S&P 500, from
+    the constituents table's ``Date added`` column; rows without a readable date are left out,
+    and ``{}`` (logged) when the page or table cannot be read."""
+    try:
+        table = pd.read_html(StringIO((fetch or _wiki_html)(market_data.WIKI["sp500"])))[0]
+        tickers = table["Symbol"].astype(str).str.replace(".", "-", regex=False)
+        dates = pd.to_datetime(table["Date added"], errors="coerce")
+        return {t: d.date().isoformat() for t, d in zip(tickers, dates, strict=True)
+                if pd.notna(d)}
+    except Exception as exc:  # noqa: BLE001 - the dates are optional; callers fail open
+        log.warning("no S&P 500 dates added: %s", exc)
+        return {}
 
 
 def survivorship(paths: Paths, cohorts: list[str],
                  fetch: Callable[[str], str] | None = None) -> dict[str, int | None]:
-    """How many names left the S&P 500 after each cohort date (today's members are the sample,
-    so these are missing from it); ``{}`` when the changes table cannot be read."""
-    try:
-        table = _changes_table((fetch or _wiki_html)(market_data.WIKI["sp500"]))
-        date_col = next(c for c in table.columns if (c[0] if isinstance(c, tuple) else c) == "Date")
-        dates = pd.to_datetime(table[date_col], errors="coerce", format="mixed")
-        removed = table[("Removed", "Ticker")].fillna("").astype(str).str.strip()
-        gone = dates[(removed != "") & dates.notna()]
-        return {c: int((gone > pd.Timestamp(c)).sum()) for c in cohorts}
-    except Exception as exc:  # noqa: BLE001 - the note is optional; the report says so
-        log.warning("no S&P 500 changes table: %s", exc)
+    """Per cohort date, how many of today's S&P 500 members joined after it: names the index did
+    not hold then, while the names it held and later dropped are missing from today's list.
+    ``{}`` when the join dates cannot be read."""
+    added = added_dates(fetch)
+    if not added:
         return {}
+    joined = [pd.Timestamp(d) for d in added.values()]
+    return {c: sum(d > pd.Timestamp(c) for d in joined) for c in cohorts}
