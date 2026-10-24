@@ -1245,6 +1245,8 @@ def test_harvesting_signal():
     assert vm.innovation(no_data)["harvesting"] is None
     capex_only = [_year(capex=-20, ebit=250), _year()]               # capex below depreciation, no R&D
     assert vm.innovation(capex_only)["harvesting"] is True
+    exact_point = [_year(rnd=50, ebit=250), _year(rnd=60, ebit=200)]   # 6% -> 5%: exactly one point
+    assert vm.innovation(exact_point)["harvesting"] is True
     no_cut = [_year(rnd=100, ebit=250), prev]
     assert vm.innovation(no_cut)["harvesting"] is False
 
@@ -1291,8 +1293,8 @@ def test_render_innovation_section_labels_and_na():
         [_year(capex=None), _year(capex=None)], 20, 2000, 100)))
     for label in ("R&D / revenue", "R&D / revenue 5-year average", "R&D growth",
                   "Revenue growth over the same span", "Gross profit added per R&D dollar",
-                  "Growth capex / revenue (3-year average)", "Return on incremental capital (3-year)",
-                  "Harvesting signal"):
+                  "Growth capex / revenue (3-year average)", "Growth spend / operating cash flow (3-year)",
+                  "Return on incremental capital (3-year)", "Harvesting signal"):
         assert f"- {label} n/a" in bare, label
     assert ("R&D is not reported separately; judge reinvestment from growth capex, acquisitions and "
             "the filings' product evidence.") in bare

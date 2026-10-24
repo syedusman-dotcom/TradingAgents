@@ -767,7 +767,7 @@ def _harvesting(years: list[dict]) -> bool | None:
     rnd_known = rnd_now is not None and rnd_before is not None
     if not rnd_known and not capex_known:
         return None
-    cut = (rnd_known and rnd_now <= rnd_before - HARVEST_RND_CUT) or (capex_known and _growth_capex(cur) < 0)
+    cut = (rnd_known and rnd_before - rnd_now >= HARVEST_RND_CUT - 1e-9) or (capex_known and _growth_capex(cur) < 0)
     if not cut:
         return False
     m_now, m_before = div(cur.get("ebit"), cur.get("revenue")), div(prev.get("ebit"), prev.get("revenue"))
@@ -782,9 +782,11 @@ def innovation(years: list[dict]) -> dict:
     Development" row, absent for companies that do not break it out.
 
     ``rnd_cagr`` spans the newest to the oldest year with positive R&D, at least ``MIN_CAGR_SPAN``
-    intervals (``rnd_cagr_years``), as ``record``'s revenue CAGR; ``revenue_cagr_same_span`` and
-    ``gross_profit_per_rnd`` (gross profit added over that span per dollar of R&D spent in it,
-    the latest year's excluded) run over the same years. Growth spend is R&D + capex beyond
+    intervals (``rnd_cagr_years``), as ``record``'s revenue CAGR but counted in list positions, not
+    fiscal-year numbers; ``revenue_cagr_same_span`` and ``gross_profit_per_rnd`` (gross profit
+    added over that span per dollar of R&D spent in it, the span's newest year excluded) run over
+    the same years, so when the latest year has no R&D the span, and the gross profit, start at
+    the newest year that has it. Growth spend is R&D + capex beyond
     depreciation (floored at 0) + acquisitions, over operating cash flow, for the last three years."""
     out = dict.fromkeys(("rnd_to_revenue", "rnd_to_revenue_avg", "rnd_cagr", "rnd_cagr_years",
                          "revenue_cagr_same_span", "gross_profit_per_rnd", "growth_capex_to_revenue",
@@ -1464,7 +1466,9 @@ def _innovation_section(m: dict) -> list[str]:
     if incremental is None:
         second = "the return on incremental capital is not computable"
     else:
-        rate = (m.get("valuation") or {}).get("discount_rate") or discount_rate(m.get("treasury_10y"))
+        rate = (m.get("valuation") or {}).get("discount_rate")
+        if rate is None:
+            rate = discount_rate(m.get("treasury_10y"))
         side = "above" if incremental > rate else "below" if incremental < rate else "at"
         second = f"the return on incremental capital, {incremental:.0%}, is {side} the {rate:.1%} cost of capital"
     return lines + [f"{first}; {second}."]
