@@ -15,7 +15,7 @@
 </table></div>
 {% set l = data.latest %}{% if l %}
 {% if l.checklist %}<h2>Checklist</h2>
-<ul>{% for key, label in (("good_business", "Good business"), ("good_management", "Good management"), ("cheap", "Cheap")) %}{% set c = l.checklist.get(key) %}{% if c %}
+<ul>{% for key, label in (("good_business", "Good business"), ("good_management", "Good management"), ("still_investing", "Still investing"), ("cheap", "Cheap")) %}{% set c = l.checklist.get(key) %}{% if c %}
 <li><b>{{ label }}</b>: {{ "PASS" if c.passed else "FAIL" }}{% if c.note %} · {{ c.note }}{% endif %}</li>{% endif %}{% endfor %}</ul>{% endif %}
 {% if l.kill_criteria %}<h2>Kill criteria</h2>
 <ol>{% for k in l.kill_criteria %}<li>{{ k }}</li>{% endfor %}</ol>{% endif %}

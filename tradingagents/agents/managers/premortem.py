@@ -31,7 +31,7 @@ Trader's transaction proposal:
 Risk Analysts Debate History:
 {state["risk_debate_state"]["history"]}
 
-It is three years on and this position has lost 40%. Write about 250 words: 1. The single most likely cause. 2. The evidence visible today that supports it. 3. The one metric that would show it first, and the level that confirms it.""" + get_language_instruction()
+It is three years on and this position has lost 40%. Write about 300 words: 1. The single most likely cause. 2. The evidence visible today that supports it. 3. The one metric that would show it first, and the level that confirms it. 4. The disruption exposure: who or what could make the product unnecessary, and the signal visible first that it is happening.""" + get_language_instruction()
 
         response = llm.invoke(prompt)
         return {"premortem": "Pre-mortem: " + response.content}

@@ -65,9 +65,10 @@ def decision_checks(decision: PortfolioDecision, formula_value: float | None,
             problems.append("No scenarios: give bear, base and bull values with their probabilities.")
         for label, verdict in (("Good business", decision.good_business),
                                ("Good management", decision.good_management),
+                               ("Still investing", decision.still_investing),
                                ("Cheap", decision.cheap)):
             if verdict is None:
-                problems.append(f"No {label} verdict: the checklist needs all three tests.")
+                problems.append(f"No {label} verdict: the checklist needs all four tests.")
     if decision.rating.value != "Sell" and len(decision.kill_criteria) < MIN_KILL_CRITERIA:
         problems.append(f"Only {len(decision.kill_criteria)} kill criteria: give 3 to 6 verifiable "
                         "facts that would prove the thesis wrong.")
@@ -139,7 +140,8 @@ def _lane_buy_problems(decision, lane: str, verdicts: tuple[str, ...]) -> list[s
     if decision.red_flags:
         problems.append(f"The {lane} lane allows no red flag; the decision lists {len(decision.red_flags)}: "
                         "resolve it or choose the value lane.")
-    labels = {"good_business": "Good business", "good_management": "Good management", "cheap": "Cheap"}
+    labels = {"good_business": "Good business", "good_management": "Good management",
+              "still_investing": "Still investing", "cheap": "Cheap"}
     for key in verdicts:
         verdict = getattr(decision, key)
         if verdict is not None and not verdict.passed:
@@ -165,7 +167,8 @@ def _upside_downside_problem(decision, today, bar, lane) -> str | None:
 def _compounder_problems(decision, formula_value, price, worksheet) -> list[str]:
     rec = worksheet_record(worksheet)
     # The lane's own price bars (premium, expected return, upside/downside) replace the Cheap test.
-    problems = _lane_buy_problems(decision, "compounder", ("good_business", "good_management"))
+    problems = _lane_buy_problems(decision, "compounder",
+                                  ("good_business", "good_management", "still_investing"))
     above, counted, worst = rec["roic_gw_years_above_15"], rec["roic_years_counted"], rec["roic_gw_min"]
     if (above is None or counted is None or counted < COMPOUNDER_MIN_ROIC_YEARS or above != counted
             or (worst is not None and worst < COMPOUNDER_ROIC_INCL_GOODWILL - 1e-9)):

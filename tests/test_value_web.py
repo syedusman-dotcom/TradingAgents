@@ -522,3 +522,35 @@ def test_screen_page_filters_dislocations_and_shows_sector_scares(tmp_path):
     old.to_csv(paths.screens / "screen_2026-10-21.csv", index=False)    # from before the columns
     r = client.get("/screen")
     assert r.status_code == 200 and 'data-hints=""' in r.text and "<td>Software</td>" not in r.text
+
+
+@pytest.mark.unit
+def test_stock_page_lists_still_investing(tmp_path):
+    client, app, paths = _client(tmp_path)
+    row = dict(ROW, checklist={"good_business": {"passed": True, "note": "ROIC above 20%"},
+                               "good_management": {"passed": True, "note": "buybacks below value"},
+                               "still_investing": {"passed": False, "note": "R&D cut to 6% of revenue"},
+                               "cheap": {"passed": True, "note": "Margin of safety: 18%"}})
+    _review(paths, "2026-11-07", [row])
+    text = client.get("/stock/HRB").text
+    assert "Still investing" in text and "R&amp;D cut to 6% of revenue" in text
+    assert (text.index("Good business") < text.index("Good management") < text.index("Still investing")
+            < text.index("<b>Cheap</b>"))
+
+
+@pytest.mark.unit
+def test_checklist_without_still_investing_still_renders(tmp_path):
+    from value_pipeline import parse
+
+    old = ("**Rating**: Hold\n\n**Checklist**:\nGood business — PASS: ROIC above 20%\n"
+           "Good management — FAIL: serial acquirer\nCheap — PASS: Margin of safety: 18%\n\n"
+           "**Lane**: value")
+    checks = parse.checklist(old)
+    assert set(checks) == {"good_business", "good_management", "cheap"}
+    client, app, paths = _client(tmp_path)
+    _review(paths, "2026-11-07", [dict(ROW, checklist=checks)])
+    r = client.get("/stock/HRB")
+    assert r.status_code == 200
+    for want in ("Checklist", "Good business", "serial acquirer", "Margin of safety: 18%"):
+        assert want in r.text, want
+    assert "Still investing" not in r.text

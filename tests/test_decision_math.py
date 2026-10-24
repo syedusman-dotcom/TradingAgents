@@ -35,6 +35,7 @@ def _good_fields():
         "time_horizon": "1-3 years", "formula_value": 80.33,
         "good_business": Verdict(passed=True, note="ROIC above 20% for ten years"),
         "good_management": Verdict(passed=True, note="buybacks below value"),
+        "still_investing": Verdict(passed=True, note="R&D 12% of revenue and rising"),
         "cheap": Verdict(passed=True, note="Margin of safety: 18%"),
         "red_flags": [],
         "kill_criteria": ["ROIC below 12% two years running", "net debt above 3x EBIT",
@@ -142,7 +143,7 @@ def test_parsed_checklist_scenarios_and_bridge_carry_every_field():
                                         red_flags=["auditor changed twice"]))
     checks = parse.checklist(text)
     assert checks["good_management"] == {"passed": False, "note": "empire building"}
-    assert set(checks) == {"good_business", "good_management", "cheap"}
+    assert set(checks) == {"good_business", "good_management", "still_investing", "cheap"}
     assert parse.red_flags(text) == ["auditor changed twice"]
     sc = parse.scenarios(text)
     assert sc["bear"]["value"] == 42.0 and sc["bear"]["probability"] == pytest.approx(0.25)
@@ -639,3 +640,24 @@ def test_consensus_view_renders_after_the_premortem_and_parses_back():
     assert blank.startswith("**Rating**: Overweight\n\n**Executive Summary**: Buy below 46.\n\n"
                             "**Investment Thesis**: Durable franchise. Margin of safety: 18%\n\n"
                             "**Price Target**: 56.0\n\n**Time Horizon**: 1-3 years\n\n**Checklist**:")
+
+
+@pytest.mark.unit
+def test_missing_still_investing_is_a_problem_for_non_sell():
+    problems = decision_checks(_decision(still_investing=None), None, None)
+    assert problems == ["No Still investing verdict: the checklist needs all four tests."]
+    assert "all four tests" in problems[0]
+    assert decision_checks(_decision(rating=PortfolioRating.SELL, still_investing=None), None, None) == []
+
+
+@pytest.mark.unit
+def test_still_investing_required_only_for_compounder():
+    comp, infl = _SHEET + _record(), _SHEET + _record(**_INFLECTING)
+    harvesting = Verdict(passed=False, note="R&D cut from 9% to 6% of revenue")
+    assert decision_checks(_compounder(rating=PortfolioRating.OVERWEIGHT, still_investing=harvesting),
+                           None, None, worksheet=comp) == [
+        "The compounder lane needs the Still investing test to pass; it is FAIL."]
+    problems = decision_checks(_inflection(rating=PortfolioRating.OVERWEIGHT, still_investing=harvesting),
+                               None, None, worksheet=infl)
+    assert not any("Still investing" in p for p in problems)
+    assert decision_checks(_decision(still_investing=harvesting), None, None) == []   # value lane

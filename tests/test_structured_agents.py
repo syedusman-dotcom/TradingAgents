@@ -973,3 +973,22 @@ def test_fundamentals_report_carries_the_tools_consensus_section(monkeypatch):
     report = fundamentals_analyst.create_fundamentals_analyst(MagicMock())(state)["fundamentals_report"]
     assert consensus_excerpt(report) == CONSENSUS_SECTION
     assert record_excerpt(report) == "## Record and inflection\n\n- Revenue CAGR 5.0%"
+
+
+@pytest.mark.unit
+def test_still_investing_round_trip():
+    from tests.test_decision_math import _decision
+    from tradingagents.agents.schemas import Verdict
+    from value_pipeline import parse
+
+    d = _decision(still_investing=Verdict(passed=False, note="R&D cut from 9% to 6% of revenue"))
+    text = render_pm_decision(d)
+    lines = text.split("**Checklist**:")[1].strip().splitlines()[:4]
+    assert [line.split(" — ")[0] for line in lines] == [
+        "Good business", "Good management", "Still investing", "Cheap"]
+    assert "Still investing — FAIL: R&D cut from 9% to 6% of revenue" in text
+    assert parse.checklist(text)["still_investing"] == {"passed": False,
+                                                        "note": "R&D cut from 9% to 6% of revenue"}
+    assert "Still investing — not provided" in render_pm_decision(_decision(still_investing=None))
+    description = PortfolioDecision.model_fields["still_investing"].description
+    assert description.startswith("Still investing: the company is building its next decade")

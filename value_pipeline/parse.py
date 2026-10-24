@@ -97,13 +97,14 @@ def kill_criteria(decision: str) -> list[str]:
     return [m.group(1).strip() for m in re.finditer(r"^\s*\d+[.)]\s+(.+)$", section(decision, "Kill Criteria"), re.M)]
 
 
-_CHECKS = {"good business": "good_business", "good management": "good_management", "cheap": "cheap"}
+_CHECKS = {"good business": "good_business", "good management": "good_management",
+           "still investing": "still_investing", "cheap": "cheap"}
 
 
 def checklist(decision: str) -> dict[str, dict]:
     """{"good_business": {"passed": True, "note": "..."}, ...} for each test that has a verdict."""
     out = {}
-    pattern = rf"^\s*(Good business|Good management|Cheap){_DASH}(PASS|FAIL)\s*:?\s*(.*)$"
+    pattern = rf"^\s*(Good business|Good management|Still investing|Cheap){_DASH}(PASS|FAIL)\s*:?\s*(.*)$"
     for m in re.finditer(pattern, section(decision, "Checklist"), re.M | re.I):
         out[_CHECKS[m.group(1).lower()]] = {"passed": m.group(2).upper() == "PASS", "note": m.group(3).strip()}
     return out

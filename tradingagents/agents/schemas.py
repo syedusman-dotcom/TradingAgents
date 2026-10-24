@@ -291,6 +291,14 @@ class PortfolioDecision(BaseModel):
         default=None, description="Good business: durable returns on capital and a moat.")
     good_management: Verdict | None = Field(
         default=None, description="Good management: honest, shareholder-minded capital allocation.")
+    still_investing: Verdict | None = Field(
+        default=None,
+        description=(
+            "Still investing: the company is building its next decade — R&D and growth capex held or "
+            "rising, return on incremental capital above the cost of capital, and product or pipeline "
+            "evidence quoted from the filings — rather than harvesting margins by cutting them."
+        ),
+    )
     cheap: Verdict | None = Field(
         default=None,
         description=(
@@ -412,6 +420,7 @@ def render_pm_decision(decision: PortfolioDecision, price: float | None = None) 
     parts.extend(["", "**Checklist**:"])
     for label, verdict in (("Good business", decision.good_business),
                            ("Good management", decision.good_management),
+                           ("Still investing", decision.still_investing),
                            ("Cheap", decision.cheap)):
         if verdict is None:
             parts.append(f"{label} — not provided")

@@ -166,3 +166,51 @@ def test_the_sentiment_prompt_names_the_subreddits_searched(monkeypatch):
     text = _prompt_text(captured["prompt"])
     assert "r/Bitcoin, r/CryptoCurrency, r/CryptoMarkets" in text
     assert "wallstreetbets" not in text
+
+
+@pytest.mark.unit
+def test_prompts_carry_innovation_lines(monkeypatch):
+    from tradingagents.agents import create_premortem
+    from tradingagents.agents.analysts import fundamentals_analyst
+    from tradingagents.agents.schemas import PortfolioDecision, PortfolioRating
+
+    prompts = {}
+
+    def take_turn(prompt, llm, tools, messages):
+        prompts["f"] = prompt.format(messages=[])
+        return None, ""
+
+    monkeypatch.setattr(fundamentals_analyst, "take_turn", take_turn)
+    monkeypatch.setattr(fundamentals_analyst, "get_instrument_context_from_state", lambda s: "")
+    fundamentals_analyst.create_fundamentals_analyst(None)(
+        {"trade_date": "2026-10-23", "company_of_interest": "KO", "messages": []})
+    flat = " ".join(prompts["f"].split())
+    assert "Innovation and reinvestment: state the new-product, launch and pipeline evidence" in flat
+    assert "conclude 'investing' or 'harvesting'" in flat
+
+    risk = {
+        "history": "h", "aggressive_history": "a", "conservative_history": "c",
+        "neutral_history": "n", "current_aggressive_response": "",
+        "current_conservative_response": "", "current_neutral_response": "",
+        "latest_speaker": "Neutral", "count": 1,
+    }
+    state = {"company_of_interest": "NVDA", "risk_debate_state": risk,
+             "investment_plan": "plan", "trader_investment_plan": "trader plan"}
+    llm = MagicMock()
+    llm.invoke.return_value = MagicMock(content="x")
+    create_premortem(llm)(state)
+    premortem = llm.invoke.call_args.args[0]
+    assert ("4. The disruption exposure: who or what could make the product unnecessary, and the "
+            "signal visible first that it is happening.") in premortem
+    assert "about 300 words" in premortem
+
+    captured = {}
+    pm = _capturing_llm(captured, PortfolioDecision(rating=PortfolioRating.HOLD,
+                                                    executive_summary="x", investment_thesis="y"))
+    create_portfolio_manager(pm)(state)
+    text = " ".join(_prompt_text(captured["prompt"]).split())
+    assert "Still investing must PASS for the compounder lane." in text
+    assert ("one kill criterion names the reinvestment level (R&D or capex as a share of revenue) "
+            "below which the thesis is wrong") in text
+    assert "four tests: Good business, Good management, Still investing, Cheap" in text
+    assert '"Still investing — PASS: note"' in text

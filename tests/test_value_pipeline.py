@@ -1047,7 +1047,7 @@ def test_fake_decision_carries_the_checklist_sections():
     text = review.fake_run("HRB", 0, False, 50.0).decision
     assert parse.entry_price(text) == pytest.approx(50.75)
     assert len(parse.kill_criteria(text)) == 3
-    assert set(parse.checklist(text)) == {"good_business", "good_management", "cheap"}
+    assert set(parse.checklist(text)) == {"good_business", "good_management", "still_investing", "cheap"}
     legs = parse.scenarios(text)
     assert sum(legs[leg]["probability"] for leg in ("bear", "base", "bull")) == pytest.approx(1.0)
     assert parse.value_bridge(text) is not None and "**Pre-mortem Answer**: Fake" in text
@@ -1791,3 +1791,23 @@ def test_consensus_figures_read_growth_and_median_target_and_fail_open(monkeypat
 
     monkeypatch.setattr(review, "consensus", down)
     assert review._consensus_figures("HRB") == (None, None)
+
+
+@pytest.mark.unit
+def test_dry_run_results_carry_still_investing(tmp_path, monkeypatch):
+    import json
+
+    import pandas as pd
+
+    from value_pipeline import market_data, operations as ops, review
+
+    paths = Paths(tmp_path)
+    ops.init_portfolio(paths, 1000.0, on="2026-10-01")
+    monkeypatch.setattr(review, "_screen_rows", lambda paths: {"HRB": {"ticker": "HRB", "value_base": 80.33,
+                                                                        "trend": "UPTREND", "sector": "X"}})
+    monkeypatch.setattr(market_data, "latest_price", lambda t: 50.0)
+    monkeypatch.setattr(market_data, "closes_between", lambda *a, **k: pd.Series(dtype=float))
+    out = review.run(paths, DEFAULTS, yes=True, dry_run=True, today="2026-10-23", only=["HRB"])
+    row = json.loads((out.parent / "results.json").read_text())[0]
+    assert row["checklist"]["still_investing"]["passed"] is True
+    assert row["checklist"]["still_investing"]["note"].startswith("Fake:")

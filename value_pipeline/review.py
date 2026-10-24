@@ -187,6 +187,7 @@ def fake_run(ticker: str, index: int, held: bool, price: float | None) -> RunRes
         time_horizon="1-3 years",
         good_business=Verdict(passed=True, note="Fake: returns on capital above 15% for a decade."),
         good_management=Verdict(passed=index % 2 == 0, note="Fake: buybacks below the formula value."),
+        still_investing=Verdict(passed=True, note="Fake: R&D 8% of revenue and rising; launches in the 10-K."),
         cheap=Verdict(passed=bool(mos and mos >= 0.3), note=f"Fake: {mos_text}"),
         red_flags=["Fake: receivables growing faster than revenue"] if index % 3 == 2 else [],
         kill_criteria=kills,
