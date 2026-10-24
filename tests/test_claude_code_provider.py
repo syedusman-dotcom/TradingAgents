@@ -94,3 +94,23 @@ def test_run_settings_record_the_claude_code_models_for_the_report_header():
     graph.selected_analysts = ("market",)
     settings = graph.run_settings()
     assert (settings["claude_code_deep_model"], settings["claude_code_quick_model"]) == ("fable", "opus")
+
+
+def test_report_headers_name_the_claude_code_models():
+    """Both report headers show the models that produced a claude_code run, not the generic pair."""
+    from tradingagents.report_html import _run_details
+    from tradingagents.reporting import tier_model
+
+    settings = {
+        "llm_provider": "claude_code",
+        "deep_think_llm": "claude-opus-5-5",
+        "quick_think_llm": "claude-sonnet-5-5",
+        "claude_code_deep_model": "claude-fable-5-1",
+        "claude_code_quick_model": "claude-opus-5-5",
+    }
+    assert tier_model(settings, "deep") == ("claude_code", "claude-fable-5-1")
+    assert tier_model(settings, "quick") == ("claude_code", "claude-opus-5-5")
+    html = dict(_run_details({}, settings))
+    assert "claude-fable-5-1" in html["Deep model"] and "sonnet" not in html["Quick model"]
+    other = {"llm_provider": "anthropic", "deep_think_llm": "claude-fable-5-1", "quick_think_llm": "claude-opus-5-5"}
+    assert tier_model(other, "quick") == ("anthropic", "claude-opus-5-5")

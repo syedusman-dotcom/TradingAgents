@@ -17,6 +17,19 @@ def analyst_names(keys) -> list[str]:
     return ["sentiment" if key == "social" else key for key in keys or []]
 
 
+def tier_model(settings: dict, tier: str) -> tuple[str, str]:
+    """The (provider, model) that served a tier, for report headers.
+
+    Provider ``claude_code`` runs its own model pair (``claude_code_<tier>_model``), so for
+    it the generic ``<tier>_think_llm`` setting is not what produced the run.
+    """
+    s = settings.get
+    provider = s(f"{tier}_think_provider") or s("llm_provider", "?")
+    if provider == "claude_code":
+        return provider, s(f"claude_code_{tier}_model", "?")
+    return provider, s(f"{tier}_think_llm", "?")
+
+
 def _header(ticker: str, final_state: dict, settings: dict | None) -> str:
     """The report's title and what produced it: analysis date, version, models, analysts, vendors."""
     lines = [f"# Trading Analysis Report: {ticker}", ""]
@@ -27,16 +40,12 @@ def _header(ticker: str, final_state: dict, settings: dict | None) -> str:
     lines.append(f"- Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     if settings:
         s = settings.get
-        deep_provider = s("deep_think_provider") or s("llm_provider", "?")
-        quick_provider = s("quick_think_provider") or s("llm_provider", "?")
-        def model_of(tier, provider):
-            return s(f"claude_code_{tier}_model", "?") if provider == "claude_code" else s(f"{tier}_think_llm", "?")
-
+        deep_provider, deep_model = tier_model(settings, "deep")
+        quick_provider, quick_model = tier_model(settings, "quick")
         if deep_provider == quick_provider:
-            models = f"{deep_provider}, deep {model_of('deep', deep_provider)}, quick {model_of('quick', quick_provider)}"
+            models = f"{deep_provider}, deep {deep_model}, quick {quick_model}"
         else:   # each tier on its own provider (#1440)
-            models = (f"deep {deep_provider} {model_of('deep', deep_provider)}, "
-                      f"quick {quick_provider} {model_of('quick', quick_provider)}")
+            models = f"deep {deep_provider} {deep_model}, quick {quick_provider} {quick_model}"
         lines.append(f"- TradingAgents {s('version', '?')}: {models}")
         lines.append(f"- Analysts: {', '.join(analyst_names(s('analysts')))}; "
                      f"research debate rounds {s('max_debate_rounds', '?')}, "

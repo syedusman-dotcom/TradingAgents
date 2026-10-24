@@ -13,7 +13,7 @@ from importlib.resources import files
 from markdown_it import MarkdownIt
 
 from tradingagents.agents.rating import run_rating
-from tradingagents.reporting import analyst_names
+from tradingagents.reporting import analyst_names, tier_model
 
 # Ratings by direction, so the page can show which way the call leans.
 _TONE = {"Buy": "up", "Overweight": "up", "Hold": "level", "Underweight": "down", "Sell": "down"}
@@ -227,8 +227,8 @@ def _run_details(final_state: dict, settings: dict | None) -> list[tuple[str, st
     if settings:
         s = settings.get
         for tier in ("deep", "quick"):
-            provider = s(f"{tier}_think_provider") or s("llm_provider", "?")
-            details.append((f"{tier.capitalize()} model", _fields([provider, s(f"{tier}_think_llm", "?")])))
+            provider, model = tier_model(settings, tier)
+            details.append((f"{tier.capitalize()} model", _fields([provider, model])))
         details.append(("Analysts", _fields(analyst_names(s("analysts")))))
         details.append(("Debate rounds", " ".join((
             _group("research", _fields([s("max_debate_rounds", "?")])),
