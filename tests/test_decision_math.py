@@ -657,7 +657,6 @@ def test_consensus_view_renders_after_the_premortem_and_parses_back():
 def test_missing_still_investing_is_a_problem_for_non_sell():
     problems = decision_checks(_decision(still_investing=None), None, None)
     assert problems == ["No Still investing verdict: the checklist needs all four tests."]
-    assert "all four tests" in problems[0]
     assert decision_checks(_decision(rating=PortfolioRating.SELL, still_investing=None), None, None) == []
 
 
