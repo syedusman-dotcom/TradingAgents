@@ -40,6 +40,7 @@ from tradingagents.agents.decision_math import (
     COMPOUNDER_ROIC_INCL_GOODWILL,
     INFLECTION_INCREMENTAL_ROIC,
 )
+from tradingagents.dataflows.files import replace_file
 from tradingagents.dataflows.value_metrics import EQUITY_PREMIUM, MIN_DISCOUNT_RATE
 from value_pipeline import market_data, metrics, screener
 from value_pipeline.config import Paths
@@ -87,7 +88,12 @@ def _fetch_prices(ticker: str) -> pd.DataFrame | None:
     index = pd.DatetimeIndex(raw.index)
     if index.tz is not None:
         index = index.tz_localize(None)
-    adj = raw["Adj Close"] if "Adj Close" in raw else raw["Close"]
+    if "Adj Close" in raw:
+        adj = raw["Adj Close"]
+    else:
+        log.warning("%s: Yahoo sent no Adj Close; its total return uses the close, without "
+                    "dividends", ticker)
+        adj = raw["Close"]
     split = raw["Stock Splits"] if "Stock Splits" in raw else pd.Series(0.0, index=raw.index)
     hist = pd.DataFrame({"date": index.normalize(), "close": raw["Close"].to_numpy(),
                          "adj_close": adj.to_numpy(), "split": split.fillna(0.0).to_numpy()})
@@ -119,9 +125,8 @@ def price_history(ticker: str, paths: Paths, fetch: bool = True, refresh: bool =
         return cached
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".csv.tmp")
-        hist.assign(date=hist["date"].dt.strftime("%Y-%m-%d")).to_csv(tmp, index=False)
-        tmp.replace(path)
+        dated = hist.assign(date=hist["date"].dt.strftime("%Y-%m-%d"))
+        replace_file(path, lambda temp: dated.to_csv(temp, index=False))
     except OSError as exc:
         log.warning("could not cache the price history for %s: %s", ticker, exc)
     return _read_prices(path) if path.exists() else hist
@@ -243,7 +248,7 @@ def snapshot(ticker: str, as_of: str, store: dict, hist: pd.DataFrame, rate: flo
     takes. None with fewer than two fiscal years, no close in the ``WITHIN_DAYS`` up to
     ``as_of``, or ``DataUnavailable``."""
     years = years_as_of(store, as_of,
-                        split_factor=lambda end: split_factor_after(hist, end))[:SCREEN_YEARS]
+                        split_factor=lambda filed: split_factor_after(hist, filed))[:SCREEN_YEARS]
     if len(years) < 2:
         log.info("skip %s on %s: fewer than two fiscal years filed", ticker, as_of)
         return None
@@ -488,11 +493,19 @@ def _cohort_line(cohort: str, picks: list[dict], bench: dict) -> dict:
             "ended_early": sum(bool(p.get("ended_early")) for p in picks)}
 
 
-def _sentence(rule: str, hold: int, lines: list[dict], beat: int, median_excess, picks: int) -> str:
+def _sentence(rule: str, hold: int, lines: list[dict], beat: int, median_excess, picks: int,
+              dates: int) -> str:
     if not lines:
         return f"{rule}: no picks in any cohort."
-    return (f"{rule}: beat SPY in {beat} of {len(lines)} cohorts ({hold}-year hold, equal weight), "
-            f"median excess {median_excess * 100:+.1f} points; {picks} picks in all.")
+    n = len(lines)
+    return (f"{rule}: beat SPY in {beat} of {n} cohorts with picks (picked in {n} of {dates} "
+            f"cohort dates; {hold}-year hold, equal weight), median excess "
+            f"{median_excess * 100:+.1f} points; {picks} pick{'' if picks == 1 else 's'} in all.")
+
+
+def _measured_dates(bench: dict, hold: int) -> int:
+    """The cohort dates with a SPY return over ``hold``: those where a pick could count."""
+    return len({c for (c, h), b in bench.items() if h == hold and b.get("spy") is not None})
 
 
 def _summary(rule: str, hold: int, picks: list[dict], bench: dict) -> dict:
@@ -515,7 +528,8 @@ def _summary(rule: str, hold: int, picks: list[dict], bench: dict) -> dict:
                                       if line["excess_universe"] is not None),
         "all_picks_median": _median(p["ret"] for p in usable),
         "worst_cohort": worst and worst["cohort"], "picks": len(usable),
-        "sentence": _sentence(rule, hold, lines, beat, median_excess, len(usable)),
+        "sentence": _sentence(rule, hold, lines, beat, median_excess, len(usable),
+                              _measured_dates(bench, hold)),
     }
 
 
@@ -574,7 +588,8 @@ def added_dates(fetch: Callable[[str], str] | None = None) -> dict[str, str]:
     try:
         table = pd.read_html(StringIO((fetch or _wiki_html)(market_data.WIKI["sp500"])))[0]
         tickers = table["Symbol"].astype(str).str.replace(".", "-", regex=False)
-        dates = pd.to_datetime(table["Date added"], errors="coerce")
+        # The first ten characters: a footnoted cell ("2001-05-07[12]") still parses.
+        dates = pd.to_datetime(table["Date added"].astype(str).str[:10], errors="coerce")
         return {t: d.date().isoformat() for t, d in zip(tickers, dates, strict=True)
                 if pd.notna(d)}
     except Exception as exc:  # noqa: BLE001 - the dates are optional; callers fail open
@@ -610,16 +625,22 @@ def _universe(paths: Paths, cfg: dict, tickers: list[str] | None, universe_fn) -
 
 
 def _ticker_rows(ticker: str, sector, store: dict, hist, cohorts: list[str], rates: dict,
-                 added: dict, cfg: dict) -> dict[str, tuple[dict, tuple]]:
-    """The ticker's snapshot per cohort it belonged to (not joined the S&P 500 after it)."""
-    out = {}
+                 added: dict, cfg: dict) -> tuple[dict[str, tuple[dict, tuple]], dict[str, str]]:
+    """The ticker's snapshot per cohort it belonged to (not joined the S&P 500 after it), and
+    per cohort whose snapshot raised, the error (logged): one odd cohort keeps the others."""
+    out, errors = {}, {}
     for cohort in cohorts:
         if added.get(ticker, "") > cohort:
             continue
-        snap = snapshot(ticker, cohort, store, hist, rates[cohort], cfg, sector)
+        try:
+            snap = snapshot(ticker, cohort, store, hist, rates[cohort], cfg, sector)
+        except Exception as exc:  # noqa: BLE001 - one bad cohort must not stop the ticker
+            log.warning("skip %s at %s: %s", ticker, cohort, exc)
+            errors[cohort] = type(exc).__name__
+            continue
         if snap is not None:
             out[cohort] = snap
-    return out
+    return out, errors
 
 
 def _load(ticker: str, paths: Paths, cfg: dict, fetch: bool, refresh: bool,
@@ -648,6 +669,9 @@ def _join_dates(paths: Paths, fetch: bool, added_fn) -> dict[str, str]:
             cached = json.loads(path.read_text(encoding="utf-8"))
         except (ValueError, OSError) as exc:
             log.warning("unreadable join-date cache %s: %s", path, exc)
+        if not isinstance(cached, dict):
+            log.warning("join-date cache %s is not a mapping; ignored", path)
+            cached = {}
     if not fetch:
         return cached
     added = (added_fn or added_dates)()
@@ -655,7 +679,8 @@ def _join_dates(paths: Paths, fetch: bool, added_fn) -> dict[str, str]:
         return cached
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(added, sort_keys=True), encoding="utf-8")
+        text = json.dumps(added, sort_keys=True)
+        replace_file(path, lambda temp: Path(temp).write_text(text, encoding="utf-8"))
     except OSError as exc:
         log.warning("could not cache the join dates: %s", exc)
     return added
@@ -699,8 +724,9 @@ def run(paths: Paths, cfg: dict, today: date | None = None, tickers: list[str] |
     """The backtest: every cohort's rows from the statements and closes known on its date, the
     rules' picks and their returns against SPY and the universe, the summary, sensitivity, the
     bar that bound and the survivorship counts. ``fetch=False`` reads the statement and price
-    caches only (the join dates too, from their own cache). A ticker whose data is missing or whose snapshot raises is recorded in
-    ``skipped`` and the run goes on. Nothing trades; no agent is called."""
+    caches only (the join dates too, from their own cache). A ticker whose data is missing or
+    whose snapshot raises is recorded in ``skipped`` (with the cohort, when one cohort raised;
+    its other cohorts stay) and the run goes on. Nothing trades; no agent is called."""
     today = today or date.today()
     holds = list(cfg["backtest"]["holds"])
     cohorts = cohort_dates(cfg, today)
@@ -724,11 +750,18 @@ def run(paths: Paths, cfg: dict, today: date | None = None, tickers: list[str] |
             if store is None or hist is None:
                 skipped[ticker] = "no EDGAR statements" if store is None else "no price history"
                 continue
-            snaps = _ticker_rows(ticker, sector, store["facts"], hist, cohorts, rates, added, cfg)
+            snaps, errors = _ticker_rows(ticker, sector, store["facts"], hist, cohorts, rates,
+                                         added, cfg)
         except Exception as exc:  # noqa: BLE001 - one bad ticker must not stop the run
             log.warning("skip %s: %s", ticker, exc)
             skipped[ticker] = f"snapshot error ({type(exc).__name__})"
             continue
+        if errors:
+            cohort, name = next(iter(errors.items()))
+            skipped[ticker] = f"snapshot error ({name}) at {cohort}"
+            attempted = sum(added.get(ticker, "") <= c for c in cohorts)
+            if len(errors) == attempted:
+                continue                  # every cohort raised: skipped, not counted
         with_data += 1
         for cohort, (row, tup) in snaps.items():
             rows[cohort].append(row)
@@ -763,7 +796,8 @@ def run(paths: Paths, cfg: dict, today: date | None = None, tickers: list[str] |
 PICK_COLUMNS = ["cohort", "ticker", "rule", "price", "value_base", "mos_formula", "market_cap",
                 "hold", "start_date", "end_date", "ret", "spy", "universe", "excess_spy",
                 "ended_early"]
-SURVIVORSHIP = ("today's members only: N of today's S&P 500 names joined after this date and are "
+SURVIVORSHIP = ("today's members only: N of today's S&P 500 names joined the S&P 500 after this "
+                "date (some from the S&P 400, where they were already in the universe) and are "
                 "left out of this cohort; names that left either index since are not in the "
                 "sample and cannot be counted from free data; the S&P 400's join dates are not "
                 "published, so all its members stay")
@@ -931,8 +965,10 @@ def write(paths: Paths, result: dict, today: str) -> tuple[Path, Path]:
     folder.mkdir(parents=True, exist_ok=True)
     md = folder / f"backtest_{today}.md"
     csv = folder / f"backtest_{today}_picks.csv"
-    md.write_text(markdown(result), encoding="utf-8")
-    pd.DataFrame(result["picks"], columns=PICK_COLUMNS).to_csv(csv, index=False)
+    text = markdown(result)
+    replace_file(md, lambda temp: Path(temp).write_text(text, encoding="utf-8"))
+    picks = pd.DataFrame(result["picks"], columns=PICK_COLUMNS)
+    replace_file(csv, lambda temp: picks.to_csv(temp, index=False))
     return md, csv
 
 

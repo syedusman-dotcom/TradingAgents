@@ -263,7 +263,8 @@ What it cannot test or correct:
 
 - Survivorship. Only today's S&P 500 and 400 members are in the sample. A name that joined the
   S&P 500 after a cohort date is left out of that cohort (the constituents table dates every
-  join), but names that left either index since are missing and cannot be counted from free
+  join), even one promoted from the S&P 400, which was already in the two-index universe then
+  (so the exclusion removes a few names it need not), but names that left either index since are missing and cannot be counted from free
   data, and the S&P 400 publishes no join dates, so all its members stay. The report prints the
   count left out per cohort. Expect the results to read somewhat in the rules' favour.
 - Sectors are today's (EDGAR has none), used to exclude Financials, Real Estate and Utilities
@@ -274,6 +275,11 @@ What it cannot test or correct:
 - The fourth quarter is derived as the annual figure less nine months.
 - The metrics see the newest four fiscal years known at the date, as the live screen does
   (Yahoo's window); the PM's ten-year revenue CAGR uses the longer EDGAR history.
+- The Magic Formula rank is taken among the passing rows that are not in FREEFALL, while the
+  live screen ranks every passing row and then skips the falling knives, so a name's position
+  can differ by one or two.
+- Trend and drawdown read Yahoo's split-adjusted close; the live screen reads dividend-adjusted
+  closes, so a high-yield name's trend can read slightly differently.
 
 How to run: `uv run python -m value_pipeline backtest`. The first run fetches every ticker's
 EDGAR company facts and Yahoo price history (about 900 + 900 requests, 20-40 minutes) and
@@ -290,8 +296,9 @@ cohort years, `--holds 1` one hold, and `--tickers DECK,ADBE` a quick smoke run.
 evaluated only when its one-year hold has ended; a three-year result only when that hold has.
 
 How to read it. The Verdict gives one sentence per rule and hold, such as `compounder: beat SPY
-in 7 of 10 cohorts (1-year hold, equal weight), median excess +3.1 points; 42 picks in all.` A
-cohort counts when the rule picked something there: "beat" means the equal-weight basket's
+in 7 of 8 cohorts with picks (picked in 8 of 10 cohort dates; 1-year hold, equal weight),
+median excess +3.1 points; 42 picks in all.` A cohort counts when the rule picked something
+there (the cohort dates are those whose hold has a SPY return): "beat" means the equal-weight basket's
 return was above SPY's, and the excess is basket minus SPY in percentage points over the hold
 (not annualised). Read the cohort count and the picks before the excess: three cohorts or a
 dozen picks say little. Compare the references: `value` against `magic_formula` is what the
@@ -304,7 +311,9 @@ tuned to this sample. *Coverage* counts the universe, the tickers with statement
 the rows per cohort, the skipped tickers by reason and, per cohort, how many rows' newest
 fiscal year lacks revenue, EBIT or free cash flow (a filer whose tags the map does not know).
 
-The website's Backtest page shows the newest report.
+The website's Backtest page shows the newest report. `scripts/pit_probe.py` checks the
+point-in-time statements offline on the EDGAR company facts already cached under
+`~/.tradingagents/cache/sec_edgar/`: fiscal years known on four dates and the fields missing.
 
 ## Files
 

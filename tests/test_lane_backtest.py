@@ -123,6 +123,19 @@ def test_price_history_refetches_a_stale_cache_only_when_fetching(tmp_path, monk
     assert len(_FakeTicker.calls) == 3 and kept["date"].iloc[-1] == pd.Timestamp("2024-03-04")
 
 
+def test_price_history_warns_when_yahoo_has_no_adjusted_close(tmp_path, monkeypatch, caplog):
+    paths = Paths(tmp_path / "data")
+    _FakeTicker.frames = {"NOADJ": _yahoo_frame().drop(columns=["Adj Close"])}
+    _FakeTicker.calls = []
+    monkeypatch.setattr(backtest.yf, "Ticker", _FakeTicker)
+    with caplog.at_level("WARNING", logger=backtest.log.name):
+        hist = backtest.price_history("NOADJ", paths)
+    assert hist["adj_close"].tolist() == hist["close"].tolist() == [10.0, 11.0, 12.0]
+    assert any("NOADJ" in r.getMessage() and "Adj Close" in r.getMessage()
+               for r in caplog.records if r.levelname == "WARNING")
+    assert [p.name for p in (paths.cache / "backtest" / "prices").iterdir()] == ["NOADJ.csv"]
+
+
 # --- helpers -------------------------------------------------------------------------------
 
 def test_close_on_or_after_skips_a_weekend():
@@ -585,16 +598,19 @@ def test_summarize_by_hand():
     assert a["mean_excess_universe"] == pytest.approx(0.025)
     assert a["all_picks_median"] == pytest.approx(0.1)
     assert a["worst_cohort"] == C2
-    assert a["sentence"] == ("a: beat SPY in 1 of 2 cohorts (1-year hold, equal weight), "
-                             "median excess -5.0 points; 3 picks in all.")
+    assert a["sentence"] == ("a: beat SPY in 1 of 2 cohorts with picks (picked in 2 of 2 cohort "
+                             "dates; 1-year hold, equal weight), median excess -5.0 points; "
+                             "3 picks in all.")
     for name in ("b", "c"):
         s = out[name][1]
         assert s["sentence"] == f"{name}: no picks in any cohort."
         assert s["cohorts"] == [] and s["picks"] == 0 and s["beat_spy"] == 0
         assert s["median_excess_spy"] is None and s["worst_cohort"] is None
     plus = backtest.summarize([_pick("a", C1, 0.30)], BENCH, [1])
-    assert plus["a"][1]["sentence"] == ("a: beat SPY in 1 of 1 cohorts (1-year hold, equal "
-                                        "weight), median excess +15.0 points; 1 picks in all.")
+    # C3's hold has no SPY return yet: two cohort dates count, and one pick is singular.
+    assert plus["a"][1]["sentence"] == ("a: beat SPY in 1 of 1 cohorts with picks (picked in 1 "
+                                        "of 2 cohort dates; 1-year hold, equal weight), median "
+                                        "excess +15.0 points; 1 pick in all.")
 
 
 def _cohort_rows():
@@ -677,7 +693,8 @@ def _constituents_html(rows) -> str:
 
 SP500_HTML = _constituents_html([
     ("AAA", "1957-03-04"), ("BRK.B", "2010-02-16"), ("NEW", "2025-10-01"),
-    ("MID", "2023-03-20"), ("ODD", "unknown"), ("EDGE", "2020-06-30")])
+    ("MID", "2023-03-20"), ("ODD", "unknown"), ("EDGE", "2020-06-30"),
+    ("FOOT", "2001-05-07[12]")])
 
 
 def test_added_dates_reads_the_constituents_table():
@@ -689,7 +706,7 @@ def test_added_dates_reads_the_constituents_table():
 
     assert backtest.added_dates(fetch) == {
         "AAA": "1957-03-04", "BRK-B": "2010-02-16", "NEW": "2025-10-01", "MID": "2023-03-20",
-        "EDGE": "2020-06-30"}
+        "EDGE": "2020-06-30", "FOOT": "2001-05-07"}               # a footnoted cell still parses
     assert urls == [backtest.market_data.WIKI["sp500"]]
 
     def boom(url):
@@ -914,9 +931,38 @@ def test_run_narrows_to_tickers_and_fails_open(tmp_path, monkeypatch):
     assert ("BBB", "2022-06-30") not in {c[:2] for c in calls}     # joined after it
     assert [t for _, _, t in seen] == ["AAA", "BBB"]
     assert result["universe_size"] == 2
-    assert result["skipped"] == {"BBB": "snapshot error (RuntimeError)"}
+    assert result["skipped"] == {"BBB": "snapshot error (RuntimeError) at 2023-06-30"}
     assert result["with_data"] == 1                          # skipped, not also counted
     assert result["rows_per_cohort"] == {"2022-06-30": 1, "2023-06-30": 1}
+
+
+def test_one_bad_cohort_keeps_the_tickers_other_cohorts(tmp_path, monkeypatch):
+    real = backtest.snapshot
+
+    def snap(ticker, as_of, store, hist, rate, cfg, sector=None):
+        if (ticker, as_of) == ("AAA", "2022-06-30"):
+            raise ValueError("odd filing")
+        return real(ticker, as_of, store, hist, rate, cfg, sector)
+
+    monkeypatch.setattr(backtest, "snapshot", snap)
+    _, result, _ = _e2e_run(tmp_path, monkeypatch, tickers=["AAA", "BBB"])
+    assert result["rows_per_cohort"] == {"2022-06-30": 0, "2023-06-30": 2}
+    assert result["skipped"] == {"AAA": "snapshot error (ValueError) at 2022-06-30"}
+    assert result["with_data"] == 2                          # AAA has a good cohort
+
+
+def test_join_date_cache_that_is_not_a_mapping_counts_as_empty(tmp_path, monkeypatch):
+    paths, cfg = _e2e_setup(tmp_path)
+    cache = paths.cache / "backtest" / "added_dates.json"
+    cache.write_text(json.dumps(["not", "a", "mapping"]), encoding="utf-8")
+    monkeypatch.setattr(backtest, "added_dates", _no_wiki)
+    result = backtest.run(paths, cfg, today=date(2024, 10, 24), tickers=["AAA"], fetch=False,
+                          universe_fn=_e2e_universe)
+    assert result["joins_known"] is False and result["survivorship"] == {}
+    # A fetching run rewrites it whole, through a temp file.
+    got = backtest._join_dates(paths, True, _e2e_added)
+    assert got == _e2e_added() and json.loads(cache.read_text(encoding="utf-8")) == got
+    assert sorted(p.name for p in cache.parent.iterdir() if p.is_file()) == ["added_dates.json"]
 
 
 def test_run_caches_the_join_dates_and_warns_without_them(tmp_path, monkeypatch):
@@ -977,13 +1023,14 @@ def test_markdown_sections_in_order():
     heads = [line for line in text.splitlines() if line.startswith(("# ", "## "))]
     assert heads == ["# Lane-rule backtest", "## What was tested", "## Verdict", "## By cohort",
                      "## Sensitivity", "## The bar that bound", "## Coverage"]
-    assert ("today's members only: N of today's S&P 500 names joined after this date and are "
+    assert ("today's members only: N of today's S&P 500 names joined the S&P 500 after this "
+            "date (some from the S&P 400, where they were already in the universe) and are "
             "left out of this cohort; names that left either index since are not in the sample "
             "and cannot be counted from free data; the S&P 400's join dates are not published, "
             "so all its members stay") in text
     assert f"{C1}: 40" in text
-    assert ("value: beat SPY in 1 of 2 cohorts (1-year hold, equal weight), median excess "
-            "+5.0 points; 2 picks in all.") in text
+    assert ("value: beat SPY in 1 of 2 cohorts with picks (picked in 2 of 2 cohort dates; "
+            "1-year hold, equal weight), median excess +5.0 points; 2 picks in all.") in text
     assert "dislocation: no picks in any cohort." in text
     verdict = text.split("## Verdict")[1].split("## By cohort")[0]
     assert verdict.index("1-year") < verdict.index("3-year")
@@ -1007,6 +1054,7 @@ def test_write_and_latest_report(tmp_path):
     assert csv == paths.reports / "backtest" / "backtest_2026-10-24_picks.csv"
     assert md.read_text(encoding="utf-8") == backtest.markdown(result)
     assert len(pd.read_csv(csv)) == 2
+    assert sorted(p.name for p in md.parent.iterdir()) == [md.name, csv.name]   # no temp file
     backtest.write(paths, result, "2026-01-02")
     assert backtest.latest_report(paths) == ("2026-10-24", backtest.markdown(result))
 

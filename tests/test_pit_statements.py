@@ -286,8 +286,9 @@ def test_year_shares_take_the_first_filing_and_the_split_factor():
     years = pit.years_as_of(store, "2024-03-01")
     assert _year(years, "2022-12-31")["shares"] == 100.0     # the restatement is ignored
     assert _year(years, "2023-12-31")["shares"] == 200.0
+    # A 2:1 split on 2023-03-01, after the 2022 10-K (filed 2023-02-20), before the 2023 one.
     split = pit.years_as_of(store, "2024-03-01",
-                            split_factor=lambda end: 2.0 if end < "2023-01-01" else 1.0)
+                            split_factor=lambda day: 2.0 if day < "2023-03-01" else 1.0)
     assert _year(split, "2023-12-31")["shares"] == 200.0
     assert _year(split, "2022-12-31")["shares"] == 200.0
     assert _year(split, "2021-12-31")["shares"] == 200.0
@@ -496,3 +497,25 @@ def test_facts_for_keeps_the_cache_when_a_refresh_fails(tmp_path, monkeypatch):
     assert pit.facts_for("SYN", paths, refresh=True) == got
     monkeypatch.setattr(pit.sec_edgar, "cik_for", lambda t: None)    # delisted since
     assert pit.facts_for("SYN", paths, refresh=True) == got
+
+
+def test_a_split_before_the_10k_is_already_in_its_share_count():
+    """The split factor runs from the filing date: a 10-K filed after a split states the year's
+    count on the new basis already."""
+    store = _store()
+    asked = []
+
+    def split_on(day):
+        def factor(filed):
+            asked.append(filed)
+            return 2.0 if filed < day else 1.0
+        return factor
+
+    # 2:1 on 2023-02-01: after the 2022 year end, before its 10-K (2023-02-20). Not applied.
+    years = pit.years_as_of(store, "2023-03-01", split_factor=split_on("2023-02-01"))
+    assert _year(years, "2022-12-31")["shares"] == 100.0
+    assert _year(years, "2021-12-31")["shares"] == 200.0          # filed 2022-02-20
+    assert set(asked) == {"2023-02-20", "2022-02-20"}
+    # 2:1 on 2023-03-01: after the 10-K. Applied.
+    years = pit.years_as_of(store, "2023-03-01", split_factor=split_on("2023-03-01"))
+    assert _year(years, "2022-12-31")["shares"] == 200.0

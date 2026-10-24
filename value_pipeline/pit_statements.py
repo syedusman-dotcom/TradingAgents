@@ -101,8 +101,8 @@ UNITS = ("USD", "shares")
 FACT_KEYS = ("start", "end", "val", "filed", "form")
 MIN_YEAR_VALUES = 6       # the Yahoo vendor's rule: fewer means a padded, near-empty year
 MAX_QUARTERS = 8
-Q4_GAP_DAYS = (80, 100)
-MIN_YEAR_GAP_DAYS = 300   # annual ends closer than this overlap: one restates or replaces the other   # a nine-month figure ends about three months before the year end
+Q4_GAP_DAYS = (80, 100)   # a nine-month figure ends about three months before the year end
+MIN_YEAR_GAP_DAYS = 300   # annual ends closer than this overlap: one restates or replaces the other
 
 # SEC asks for no more than ten requests a second; eight leaves room.
 MIN_REQUEST_GAP = 0.125
@@ -187,31 +187,29 @@ def facts_for(ticker: str, paths: Paths, fetch: bool = True, refresh: bool = Fal
 
 
 def _first_filed(facts: dict, tags: tuple[str, ...], as_of_date: str,
-                 spans: tuple[tuple[int, int], ...], forms: tuple[str, ...] = ()) -> tuple[dict, str]:
+                 spans: tuple[tuple[int, int], ...],
+                 forms: tuple[str, ...] = ()) -> dict[tuple[str, int], dict]:
     """``_as_of``, except a period reported more than once keeps its **earliest** filing on or
     before the date: the original figure, never a later restatement (a share count recast
-    after a split would otherwise mix split bases across years)."""
-    values: Values = {}
-    chosen_unit = "USD"
+    after a split would otherwise mix split bases across years). Each period maps to that
+    fact, so the caller has its ``val`` and the ``filed`` date its basis is as of."""
+    chosen: dict[tuple[str, int], dict] = {}
     for tag in tags:
-        for unit, unit_values in ((facts.get(tag) or {}).get("units", {})).items():
+        for unit_values in ((facts.get(tag) or {}).get("units", {})).values():
             first: dict[tuple[str, int], dict] = {}
             covered: set[tuple[str, int]] = set()
             for fact in unit_values:
                 index = sec_edgar._span_index(fact, spans)
                 key = (fact["end"], index)
-                if fact["filed"] > as_of_date or index is None or key in values:
+                if fact["filed"] > as_of_date or index is None or key in chosen:
                     continue
                 if not forms or fact.get("form", "").startswith(forms):
                     covered.add(key)
                 seen = first.get(key)
                 if seen is None or fact["filed"] < seen["filed"]:
                     first[key] = fact
-            first = {key: fact for key, fact in first.items() if key in covered}
-            if first:
-                chosen_unit = unit
-                values.update({key: fact["val"] for key, fact in first.items()})
-    return dict(sorted(values.items())), chosen_unit
+            chosen.update({key: fact for key, fact in first.items() if key in covered})
+    return dict(sorted(chosen.items()))
 
 
 def _values(store: dict, tags: tuple[str, ...], as_of: str, spans, forms=()) -> Values:
@@ -253,12 +251,15 @@ def _first_present(*values: float | None) -> float:
 def years_as_of(store: dict, as_of: str,
                 split_factor: Callable[[str], float] | None = None) -> list[dict]:
     """The fiscal years filed on or before ``as_of`` as ``YEAR_FIELDS`` dicts, newest first,
-    each keyed by ``fiscal_year_end``; ``split_factor(end)`` brings a year's share count to
-    today's basis when given. Years with fewer than six values are dropped."""
+    each keyed by ``fiscal_year_end``; ``split_factor(filed)`` brings a year's share count to
+    today's basis when given, called with the filing date of the count (its first filing),
+    since splits between the year end and that filing are already in it. Years with fewer
+    than six values are dropped."""
     annual = sec_edgar._ANNUAL_FORMS
     fields = {field: _values(store, tags, as_of, _ANNUAL, annual)
               for field, tags in TAGS.items() if field != "shares"}
-    fields["shares"] = _first_filed(store, TAGS["shares"], as_of, _ANNUAL, annual)[0]
+    shares = _first_filed(store, TAGS["shares"], as_of, _ANNUAL, annual)
+    fields["shares"] = {key: fact["val"] for key, fact in shares.items()}
     parts = {tag: _values(store, (tag,), as_of, _ANNUAL, annual)
              for tag in (*DEBT_PARTS, INTANGIBLES)}
     cost = _values(store, COST_OF_REVENUE, as_of, _ANNUAL, annual)
@@ -292,7 +293,8 @@ def years_as_of(store: dict, as_of: str,
             if year[field] is not None:
                 year[field] = -abs(year[field])
         if split_factor is not None and year["shares"] is not None:
-            year["shares"] = year["shares"] * split_factor(end)
+            # From the filing date: a 10-K filed after a split already restates the count.
+            year["shares"] = year["shares"] * split_factor(shares[key]["filed"])
         if sum(v is not None for k, v in year.items() if k != "fiscal_year_end") >= MIN_YEAR_VALUES:
             years.append(year)
     return years
