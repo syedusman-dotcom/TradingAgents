@@ -277,8 +277,11 @@ What it cannot test or correct:
 
 How to run: `uv run python -m value_pipeline backtest`. The first run fetches every ticker's
 EDGAR company facts and Yahoo price history (about 900 + 900 requests, 20-40 minutes) and
-caches them for good under `data/cache/backtest/facts/` and `prices/`; later runs read the
-caches and take a minute or two. `--refresh` refetches, `--no-fetch` reads the caches only:
+caches them under `data/cache/backtest/facts/` and `prices/`; later runs read the caches and
+take a minute or two, refetching only a price history that stops more than a week before the
+newest hold end the run needs and a fact store fetched before the newest cohort date (so next
+year's cohort is not silently dropped). Coverage prints where SPY's history ends and names any
+cohort whose ended hold it does not reach. `--refresh` refetches, `--no-fetch` reads the caches only:
 statements, prices and the S&P 500 join dates (`data/cache/backtest/added_dates.json`, rewritten
 on every fetching run, and used when the fetch fails). The index lists are still read from
 Wikipedia and fall back to `data/universe.csv` when that fails. If the join dates cannot be read

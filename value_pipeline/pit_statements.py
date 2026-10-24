@@ -147,31 +147,38 @@ def _throttle() -> None:
     _last_fetch = time.monotonic()
 
 
-def facts_for(ticker: str, paths: Paths, fetch: bool = True, refresh: bool = False) -> dict | None:
-    """``{"cik", "fetched_at", "facts"}`` for the ticker, cached for good under
-    ``paths.cache/backtest/facts``; fetched when absent or ``refresh``, never with
-    ``fetch=False``. None for a non-filer, a failed fetch or nothing cached and no fetch."""
+def facts_for(ticker: str, paths: Paths, fetch: bool = True, refresh: bool = False,
+              stale_before: str | None = None) -> dict | None:
+    """``{"cik", "fetched_at", "facts"}`` for the ticker, cached under
+    ``paths.cache/backtest/facts``; fetched when absent, on ``refresh``, or when the cache was
+    fetched before ``stale_before`` (an ISO date: the newest cohort date, so a later cohort
+    sees the filings made since), never with ``fetch=False``. A failed refetch keeps the
+    cached store. None for a non-filer, a failed fetch with nothing cached, or nothing cached
+    and no fetch."""
     path = paths.cache / "backtest" / "facts" / f"{ticker}.json"
-    if path.exists() and (not refresh or not fetch):
+    cached = None
+    if path.exists():
         try:
-            return json.loads(path.read_text(encoding="utf-8"))
+            cached = json.loads(path.read_text(encoding="utf-8"))
         except (ValueError, OSError):
             log.warning("unreadable EDGAR fact store %s; refetching", path)
-    if not fetch:
-        return None
+    stale = (cached is not None and stale_before is not None
+             and str(cached.get("fetched_at", ""))[:10] < stale_before)
+    if not fetch or (cached is not None and not refresh and not stale):
+        return cached
     try:
         cik = sec_edgar.cik_for(ticker)
         if cik is None:
             log.info("%s: not a US SEC filer", ticker)
-            return None
+            return cached
         _throttle()
         raw = sec_edgar._fetch_json(sec_edgar._FACTS_URL.format(cik=cik))
     except (VendorUnavailableError, OSError) as exc:
         log.warning("%s: EDGAR companyfacts unavailable (%s)", ticker, exc)
-        return None
+        return cached
     if not isinstance(raw, dict):
         log.warning("%s: EDGAR companyfacts unreadable (%s)", ticker, type(raw).__name__)
-        return None
+        return cached
     store = {"cik": cik, "fetched_at": datetime.now().isoformat(timespec="seconds"),
              "facts": extract(raw)}
     path.parent.mkdir(parents=True, exist_ok=True)

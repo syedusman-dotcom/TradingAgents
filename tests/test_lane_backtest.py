@@ -96,6 +96,33 @@ def test_price_history_caches_csv_and_fails_open(tmp_path, monkeypatch):
     assert backtest.price_history("BAD", paths, fetch=False) is None
 
 
+def test_price_history_refetches_a_stale_cache_only_when_fetching(tmp_path, monkeypatch):
+    paths = Paths(tmp_path / "data")
+    _FakeTicker.frames = {"ABC": _yahoo_frame()}                  # ends 2024-01-04
+    _FakeTicker.calls = []
+    monkeypatch.setattr(backtest.yf, "Ticker", _FakeTicker)
+    first = backtest.price_history("ABC", paths)
+    assert len(_FakeTicker.calls) == 1
+    # Fresh: the cache reaches the date asked for.
+    backtest.price_history("ABC", paths, stale_before="2024-01-04")
+    assert len(_FakeTicker.calls) == 1
+    # Stale, but fetch=False: the cache as it is.
+    stale = backtest.price_history("ABC", paths, fetch=False, stale_before="2024-03-01")
+    pd.testing.assert_frame_equal(stale, first)
+    assert len(_FakeTicker.calls) == 1
+    # Stale and fetching: refetched and rewritten.
+    longer = _yahoo_frame()
+    longer.index = longer.index + pd.Timedelta(days=60)
+    _FakeTicker.frames["ABC"] = longer
+    got = backtest.price_history("ABC", paths, stale_before="2024-03-01")
+    assert len(_FakeTicker.calls) == 2
+    assert got["date"].iloc[-1] == pd.Timestamp("2024-03-04")
+    # A stale cache whose refetch fails is kept.
+    _FakeTicker.frames["ABC"] = RuntimeError("Yahoo down")
+    kept = backtest.price_history("ABC", paths, stale_before="2025-01-01")
+    assert len(_FakeTicker.calls) == 3 and kept["date"].iloc[-1] == pd.Timestamp("2024-03-04")
+
+
 # --- helpers -------------------------------------------------------------------------------
 
 def test_close_on_or_after_skips_a_weekend():
@@ -824,6 +851,43 @@ def test_run_counts_rows_whose_newest_year_lacks_a_field(tmp_path, monkeypatch):
     coverage = backtest.markdown(result).split("## Coverage")[1]
     assert ("- Newest year lacking a field, 2023-06-30: revenue 0, EBIT 1, free cash flow 1 "
             "(of 2 rows)") in coverage
+
+
+def test_run_asks_for_fresh_caches_and_reports_a_short_spy(tmp_path, monkeypatch):
+    paths, cfg = _e2e_setup(tmp_path)
+    asked = {"prices": {}, "facts": {}}
+    real_prices, real_facts = backtest.price_history, backtest.facts_for
+
+    def prices(ticker, paths, fetch=True, refresh=False, stale_before=None):
+        asked["prices"][ticker] = stale_before
+        return real_prices(ticker, paths, fetch=fetch, refresh=refresh, stale_before=stale_before)
+
+    def facts(ticker, paths, fetch=True, refresh=False, stale_before=None):
+        asked["facts"][ticker] = stale_before
+        return real_facts(ticker, paths, fetch=fetch, refresh=refresh, stale_before=stale_before)
+
+    monkeypatch.setattr(backtest, "price_history", prices)
+    monkeypatch.setattr(backtest, "facts_for", facts)
+    monkeypatch.setattr(backtest, "added_dates", _no_wiki)
+    short_spy = _e2e_hist(slope=0.02)
+    _write_caches(paths, "SPY", hist=short_spy[short_spy["date"] <= "2024-03-01"])
+    result = backtest.run(paths, cfg, today=date(2024, 10, 24), fetch=False,
+                          universe_fn=_e2e_universe)
+    # The newest hold end needed is today (2026-06-30 is later): a week's slack for prices.
+    assert asked["prices"]["SPY"] == "2024-10-17" and asked["prices"]["AAA"] == "2024-10-17"
+    assert asked["facts"]["AAA"] == "2023-06-30"                    # the newest cohort date
+    assert result["spy_ends"] == "2024-03-01"
+    assert result["stale_cohorts"] == ["2023-06-30"]
+    coverage = backtest.markdown(result).split("## Coverage")[1]
+    assert "- SPY history ends 2024-03-01" in coverage
+    assert ("- cohorts 2023-06-30 need --refresh: a hold has ended by today, but SPY's cached "
+            "history stops at 2024-03-01, before it") in coverage
+    # A SPY history that reaches every ended hold: no such line.
+    _write_caches(paths, "SPY", hist=_e2e_hist(slope=0.02))
+    fresh = backtest.run(paths, cfg, today=date(2024, 10, 24), fetch=False,
+                         universe_fn=_e2e_universe)
+    assert fresh["stale_cohorts"] == []
+    assert "need --refresh" not in backtest.markdown(fresh)
 
 
 def test_run_narrows_to_tickers_and_fails_open(tmp_path, monkeypatch):

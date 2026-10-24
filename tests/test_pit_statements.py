@@ -331,9 +331,9 @@ def test_facts_for_caches_and_fails_open(tmp_path, monkeypatch):
     assert not (paths.cache / "backtest" / "facts" / "DOWN.json").exists()
     assert pit.facts_for("NOTAFILER", paths) is None
     assert len(calls) == 3
-    # A response that is not a companyfacts object is a failed fetch.
+    # A response that is not a companyfacts object is a failed fetch: the cache stands.
     monkeypatch.setattr(pit.sec_edgar, "_fetch_json", lambda url: ["not", "facts"])
-    assert pit.facts_for("SYN", paths, refresh=True) is None
+    assert pit.facts_for("SYN", paths, refresh=True) == got
 
 
 def test_facts_for_unreadable_cache_fails_open(tmp_path, monkeypatch):
@@ -456,3 +456,43 @@ def test_more_capex_and_net_income_tags():
     assert _year(years, "2022-12-31")["capex"] == -30.0
     assert _year(years, "2023-12-31")["free_cash_flow"] == 350.0 - 70.0
     assert _year(years, "2023-12-31")["net_income"] == 185.0
+
+
+def test_facts_for_refetches_a_store_older_than_the_date_needed(tmp_path, monkeypatch):
+    paths = Paths(tmp_path / "data")
+    calls = []
+    monkeypatch.setattr(pit.sec_edgar, "cik_for", lambda t: "0000000001")
+    monkeypatch.setattr(pit.sec_edgar, "_fetch_json", lambda url: calls.append(url) or _raw())
+    monkeypatch.setattr(pit.time, "sleep", lambda s: None)
+    path = paths.cache / "backtest" / "facts" / "SYN.json"
+    path.parent.mkdir(parents=True)
+    old = {"cik": "0000000001", "fetched_at": "2024-01-10T09:00:00", "facts": {}}
+    path.write_text(json.dumps(old), encoding="utf-8")
+    # Fetched after the newest cohort date: fresh.
+    assert pit.facts_for("SYN", paths, stale_before="2023-06-30") == old and calls == []
+    # Fetched before it, but fetch=False: the cache as it is.
+    assert pit.facts_for("SYN", paths, fetch=False, stale_before="2024-06-30") == old
+    assert calls == []
+    # Fetched before it: refetched.
+    new = pit.facts_for("SYN", paths, stale_before="2024-06-30")
+    assert len(calls) == 1 and new["facts"] == _store()
+    assert new["fetched_at"][:10] > "2024-06-30"
+
+
+def test_facts_for_keeps_the_cache_when_a_refresh_fails(tmp_path, monkeypatch):
+    paths = Paths(tmp_path / "data")
+    monkeypatch.setattr(pit.sec_edgar, "cik_for", lambda t: "0000000001")
+    monkeypatch.setattr(pit.time, "sleep", lambda s: None)
+    monkeypatch.setattr(pit.sec_edgar, "_fetch_json", lambda url: _raw())
+    got = pit.facts_for("SYN", paths)
+
+    def down(url):
+        raise VendorUnavailableError("down")
+
+    monkeypatch.setattr(pit.sec_edgar, "_fetch_json", down)
+    assert pit.facts_for("SYN", paths, refresh=True) == got
+    assert pit.facts_for("SYN", paths, stale_before="2999-01-01") == got
+    monkeypatch.setattr(pit.sec_edgar, "_fetch_json", lambda url: ["not", "facts"])
+    assert pit.facts_for("SYN", paths, refresh=True) == got
+    monkeypatch.setattr(pit.sec_edgar, "cik_for", lambda t: None)    # delisted since
+    assert pit.facts_for("SYN", paths, refresh=True) == got

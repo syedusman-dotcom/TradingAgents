@@ -95,17 +95,24 @@ def _fetch_prices(ticker: str) -> pd.DataFrame | None:
     return hist if not hist.empty else None
 
 
-def price_history(ticker: str, paths: Paths, fetch: bool = True,
-                  refresh: bool = False) -> pd.DataFrame | None:
-    """Daily ``date, close, adj_close, split`` for the ticker, oldest first, cached for good
-    under ``cache/backtest/prices/<ticker>.csv`` (``^TNX`` as ``TNX.csv``). ``refresh``
-    refetches (keeping the cached copy if the fetch fails); ``fetch=False`` reads only the
-    cache. None, logged, when there is no history."""
+def _needs_fetch(cached: pd.DataFrame | None, refresh: bool, stale_before: str | None) -> bool:
+    """Whether a price cache is to be (re)fetched: none, a refresh, or its last date before
+    ``stale_before``."""
+    return (cached is None or refresh
+            or (stale_before is not None
+                and cached["date"].iloc[-1] < pd.Timestamp(stale_before)))
+
+
+def price_history(ticker: str, paths: Paths, fetch: bool = True, refresh: bool = False,
+                  stale_before: str | None = None) -> pd.DataFrame | None:
+    """Daily ``date, close, adj_close, split`` for the ticker, oldest first, cached under
+    ``cache/backtest/prices/<ticker>.csv`` (``^TNX`` as ``TNX.csv``). Refetched on ``refresh``
+    or when the cache's last date is before ``stale_before`` (an ISO date), keeping the cached
+    copy if the fetch fails; ``fetch=False`` reads only the cache. None, logged, when there is
+    no history."""
     path = _price_path(ticker, paths)
     cached = _read_prices(path) if path.exists() else None
-    if cached is not None and not refresh:
-        return cached
-    if not fetch:
+    if not fetch or not _needs_fetch(cached, refresh, stale_before):
         return cached
     hist = _fetch_prices(ticker)
     if hist is None:
@@ -615,12 +622,16 @@ def _ticker_rows(ticker: str, sector, store: dict, hist, cohorts: list[str], rat
     return out
 
 
-def _load(ticker: str, paths: Paths, cfg: dict, fetch: bool, refresh: bool):
-    """The ticker's fact store and price history (either None when missing); throttles after a
-    Yahoo fetch."""
-    store = facts_for(ticker, paths, fetch=fetch, refresh=refresh)
-    yahoo = fetch and (refresh or not _price_path(ticker, paths).exists())
-    hist = price_history(ticker, paths, fetch=fetch, refresh=refresh)
+def _load(ticker: str, paths: Paths, cfg: dict, fetch: bool, refresh: bool,
+          stale: tuple[str | None, str | None] = (None, None)):
+    """The ticker's fact store and price history (either None when missing); ``stale`` is the
+    ``stale_before`` of the facts and of the prices. Throttles after a Yahoo fetch."""
+    facts_stale, prices_stale = stale
+    store = facts_for(ticker, paths, fetch=fetch, refresh=refresh, stale_before=facts_stale)
+    path = _price_path(ticker, paths)
+    yahoo = fetch and _needs_fetch(_read_prices(path) if path.exists() else None, refresh,
+                                   prices_stale)
+    hist = price_history(ticker, paths, fetch=fetch, refresh=refresh, stale_before=prices_stale)
     if yahoo:
         market_data.throttle(cfg["screen"]["throttle_seconds"])
     return store, hist
@@ -650,6 +661,28 @@ def _join_dates(paths: Paths, fetch: bool, added_fn) -> dict[str, str]:
     return added
 
 
+PRICE_SLACK_DAYS = 7     # a price cache this close to the date needed is fresh enough
+
+
+def _stale_before(cohorts: list[str], holds: list[int],
+                  today: date) -> tuple[str | None, str | None]:
+    """The ``stale_before`` dates for the fact stores (the newest cohort date: its filings must
+    be in the store) and the price caches (a week before the latest hold end needed, capped at
+    ``today``); ``(None, None)`` without a cohort."""
+    if not cohorts:
+        return None, None
+    ends = [date.fromisoformat(_years_after(c, h)) for c in cohorts for h in holds]
+    needed = min(today, max(ends, default=today))
+    return max(cohorts), (needed - timedelta(days=PRICE_SLACK_DAYS)).isoformat()
+
+
+def _stale_cohorts(cohorts: list[str], holds: list[int], bench: dict, today: date) -> list[str]:
+    """The cohorts with a hold ended by ``today`` that SPY's history does not reach."""
+    return [c for c in cohorts
+            if any(_years_after(c, h) <= today.isoformat()
+                   and (bench.get((c, h)) or {}).get("spy") is None for h in holds)]
+
+
 MISSING_FIELDS = ("revenue", "ebit", "free_cash_flow")
 
 
@@ -673,8 +706,10 @@ def run(paths: Paths, cfg: dict, today: date | None = None, tickers: list[str] |
     cohorts = cohort_dates(cfg, today)
     members = _universe(paths, cfg, tickers, universe_fn)
     added = _join_dates(paths, fetch, added_fn)
-    spy = price_history(cfg["backtest"]["benchmark"], paths, fetch=fetch, refresh=refresh)
-    tnx = price_history("^TNX", paths, fetch=fetch, refresh=refresh)
+    stale = _stale_before(cohorts, holds, today)
+    spy = price_history(cfg["backtest"]["benchmark"], paths, fetch=fetch, refresh=refresh,
+                        stale_before=stale[1])
+    tnx = price_history("^TNX", paths, fetch=fetch, refresh=refresh, stale_before=stale[1])
     rates = {c: discount_rate_on(tnx, c) for c in cohorts}
     rows: dict[str, list[dict]] = {c: [] for c in cohorts}
     inputs: dict[str, dict[str, tuple]] = {c: {} for c in cohorts}
@@ -685,7 +720,7 @@ def run(paths: Paths, cfg: dict, today: date | None = None, tickers: list[str] |
         if progress:
             progress(i, len(members), ticker)
         try:
-            store, hist = _load(ticker, paths, cfg, fetch, refresh)
+            store, hist = _load(ticker, paths, cfg, fetch, refresh, stale)
             if store is None or hist is None:
                 skipped[ticker] = "no EDGAR statements" if store is None else "no price history"
                 continue
@@ -717,6 +752,9 @@ def run(paths: Paths, cfg: dict, today: date | None = None, tickers: list[str] |
         "survivorship": _joined_after(added, cohorts), "joins_known": bool(added),
         "defaults": {name: dict(rule.bars) for name, rule in rule_set.items()},
         "skipped": skipped,
+        "spy_ends": (None if spy is None or spy.empty
+                     else spy["date"].iloc[-1].date().isoformat()),
+        "stale_cohorts": _stale_cohorts(cohorts, holds, bench, today),
     }
 
 
@@ -861,6 +899,12 @@ def _coverage(result: dict) -> list[str]:
         lines.append(f"- Newest year lacking a field, {c}: " + ", ".join(
             f"{names[f]} {n}" for f, n in counts.items())
             + f" (of {result.get('rows_per_cohort', {}).get(c, 0)} rows)")
+    if "spy_ends" in result:
+        lines.append(f"- SPY history ends {result['spy_ends'] or 'nowhere (no SPY history)'}")
+    if result.get("stale_cohorts"):
+        lines.append("- cohorts " + ", ".join(result["stale_cohorts"]) + " need --refresh: a "
+                     f"hold has ended by today, but SPY's cached history stops at "
+                     f"{result.get('spy_ends')}, before it")
     lines.append(f"- Skipped: {len(result['skipped'])}")
     lines += [f"  - {reason}: {n}" for reason, n in sorted(reasons.items(),
                                                             key=lambda kv: (-kv[1], kv[0]))]
