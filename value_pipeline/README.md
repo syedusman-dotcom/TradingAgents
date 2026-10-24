@@ -263,7 +263,7 @@ To run it by hand without spending anything: `uv run python -m value_pipeline da
 
 ## Scheduling (macOS: full review every Saturday, daily check on weekdays)
 
-`scripts/monthly.sh` (the name is historical) is started by launchd every Saturday and logs to `value_pipeline/data/logs/`. It runs `run-all --yes`: the screen, the theme and dislocation scans, and the agents on holdings and candidates, about 10 to 12 runs. The free `watch` is no longer scheduled; `scripts/monthly.sh --watch` runs it by hand, and the weekday daily check covers the days between. To run the full review by hand on any day: `scripts/monthly.sh`.
+`scripts/monthly.sh` (the name is historical) is started by launchd every Saturday and logs to `value_pipeline/data/logs/`. It runs `run-all --yes`: the screen, the theme and dislocation scans, and the agents on holdings and candidates, about 10 to 12 runs. The free `watch` is no longer scheduled; `scripts/monthly.sh --watch` runs it by hand, and the weekday daily check covers the days between. If a review for today already exists (you started one by hand overnight, say), the script does not repeat it: it refreshes the watch and the calibration prices and exits. To run the full review by hand on any day: `scripts/monthly.sh`.
 
 1. Save this as `~/Library/LaunchAgents/local.value-pipeline.plist`, with your repo path:
 

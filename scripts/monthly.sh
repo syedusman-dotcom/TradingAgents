@@ -37,6 +37,14 @@ case "$mode" in
       exit 1
     fi ;;
   review)
+    # A review already written today (started by hand, or an earlier job) is not repeated:
+    # the agents would read the same data and spend the plan's quota on the same answer.
+    if [ -f "value_pipeline/data/reports/$(date +%Y-%m-%d)/ACTIONS.md" ]; then
+      echo "already reviewed today: value_pipeline/data/reports/$(date +%Y-%m-%d)/ACTIONS.md exists; refreshing the watch and calibration only" >> "$log"
+      uv run python -m value_pipeline watch --no-notify >> "$log" 2>&1 || true
+      uv run python -m value_pipeline calibration >> "$log" 2>&1 || true
+      exit 0
+    fi
     if uv run python -m value_pipeline run-all --yes >> "$log" 2>&1; then
       # The free watch after the review keeps the weekly "New ideas" list and its sidecar current.
       uv run python -m value_pipeline watch --no-notify >> "$log" 2>&1 || true
