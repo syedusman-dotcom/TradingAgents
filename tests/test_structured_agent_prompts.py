@@ -214,6 +214,8 @@ def test_prompts_carry_innovation_lines(monkeypatch):
     create_portfolio_manager(pm)(state)
     text = " ".join(_prompt_text(captured["prompt"]).split())
     assert "Still investing must PASS for the compounder lane." in text
+    assert ("When R&D is not reported or the return on incremental capital reads n/a, judge on growth "
+            "capex, acquisitions and the filings' product evidence; n/a is not a FAIL.") in text
     assert ("one kill criterion names the reinvestment level (R&D or capex as a share of revenue) "
             "below which the thesis is wrong") in text
     assert "four tests: Good business, Good management, Still investing, Cheap" in text

@@ -296,7 +296,9 @@ class PortfolioDecision(BaseModel):
         description=(
             "Still investing: the company is building its next decade — R&D and growth capex held or "
             "rising, return on incremental capital above the cost of capital, and product or pipeline "
-            "evidence quoted from the filings — rather than harvesting margins by cutting them."
+            "evidence quoted from the filings — rather than harvesting margins by cutting them. "
+            "When R&D is not reported or the return on incremental capital reads n/a, judge on growth "
+            "capex, acquisitions and the filings' product evidence; n/a is not a FAIL."
         ),
     )
     cheap: Verdict | None = Field(

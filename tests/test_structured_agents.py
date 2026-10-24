@@ -1008,3 +1008,5 @@ def test_still_investing_round_trip():
     assert "Still investing — not provided" in render_pm_decision(_decision(still_investing=None))
     description = PortfolioDecision.model_fields["still_investing"].description
     assert description.startswith("Still investing: the company is building its next decade")
+    assert description.endswith("judge on growth capex, acquisitions and the filings' product evidence; "
+                                "n/a is not a FAIL.")
