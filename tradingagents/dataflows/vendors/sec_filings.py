@@ -189,8 +189,9 @@ def _filing_url(cik: str, filing: dict, document: str) -> str:
 
 def _sections(cik: str, filing: dict) -> dict[str, str]:
     """A filing's sections, cached forever: a filed document never changes."""
-    # _v2: Item 1 (Business) added; filings cached before it are read again.
-    path = _cache_dir() / f"10k_{cik}_{filing['accession']}_v2.json"
+    # Versioned with the parser: a parser change (Item 1, Business, was the last) reads every
+    # filing's sections again.
+    path = _cache_dir() / f"10k_{cik}_{filing['accession']}_v{_PARSER_VERSION}.json"
     if path.exists():
         try:
             return json.loads(path.read_text(encoding="utf-8"))

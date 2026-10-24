@@ -451,7 +451,7 @@ def test_innovation_lines_none_found(edgar):
 def test_sections_cache_name_is_versioned(edgar, tmp_path):
     _ten_k(edgar)
     names = [p.name for p in (tmp_path / "sec_edgar").iterdir()]
-    assert names == [f"10k_{CIK}_0000021344-26-000010_v2.json"]
+    assert names == [f"10k_{CIK}_0000021344-26-000010_v{sec_filings._PARSER_VERSION}.json"]
 
 
 @pytest.mark.unit
