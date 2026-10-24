@@ -280,6 +280,12 @@ What it cannot test or correct:
   can differ by one or two.
 - Trend and drawdown read Yahoo's split-adjusted close; the live screen reads dividend-adjusted
   closes, so a high-yield name's trend can read slightly differently.
+- EDGAR tags differ by filer. Gross profit is derived as revenue less cost of sales when a filer
+  does not tag it, and the cost tag some filers use covers only part of their costs (UNH's
+  products cost, not its medical costs), so a derived gross margin can read far too high; the
+  Beneish and Piotroski checks read changes in it, which mostly cancels. EBIT is derived from
+  pre-tax income plus interest when operating income is not tagged. `scripts/pit_probe.py`
+  reports, from the cached EDGAR files, which fields the tag map reaches.
 
 How to run: `uv run python -m value_pipeline backtest`. The first run fetches every ticker's
 EDGAR company facts and Yahoo price history (about 900 + 900 requests, 20-40 minutes) and
