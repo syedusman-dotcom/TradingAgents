@@ -973,7 +973,11 @@ def test_fundamentals_report_carries_the_tools_consensus_section(monkeypatch):
 
     from tests.test_decision_math import CONSENSUS_SECTION
     from tradingagents.agents.analysts import fundamentals_analyst
-    from tradingagents.agents.decision_math import consensus_excerpt, innovation_excerpt, record_excerpt
+    from tradingagents.agents.decision_math import (
+        consensus_excerpt,
+        innovation_excerpt,
+        record_excerpt,
+    )
 
     tool_text = ("# Verified value metrics\n## Valuation worksheet (per share)\n\n- Price today 50.00\n\n"
                  "## Record and inflection\n\n- Revenue CAGR 5.0%\n\n"
