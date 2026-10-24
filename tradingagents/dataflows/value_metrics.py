@@ -756,24 +756,30 @@ def _growth_capex(y: dict) -> float | None:
     return None if capex is None or dep is None else abs(capex) - abs(dep)
 
 
-def _harvesting(years: list[dict]) -> bool | None:
-    """Whether the latest year cut R&D (a point of revenue) or ran capex below depreciation while
-    the EBIT margin rose; None when neither R&D nor capex and depreciation cover both years."""
+def _harvesting(years: list[dict]) -> tuple[bool | None, list[str]]:
+    """Whether the latest year cut R&D (a point of revenue) or ran capex below half of
+    depreciation (the accounting check's bar: Yahoo's depreciation row carries acquired-intangible
+    amortisation, so capex merely under it is common for acquirers) while the EBIT margin rose,
+    and the cuts that fired; None when neither R&D nor capex and depreciation cover both years."""
     if len(years) < 2:
-        return None
+        return None, []
     cur, prev = years[0], years[1]
     rnd_now, rnd_before = div(_rnd(cur), cur.get("revenue")), div(_rnd(prev), prev.get("revenue"))
     capex_known = _growth_capex(cur) is not None and _growth_capex(prev) is not None
     rnd_known = rnd_now is not None and rnd_before is not None
     if not rnd_known and not capex_known:
-        return None
-    cut = (rnd_known and rnd_before - rnd_now >= HARVEST_RND_CUT - 1e-9) or (capex_known and _growth_capex(cur) < 0)
-    if not cut:
-        return False
+        return None, []
+    cuts = []
+    if rnd_known and rnd_before - rnd_now >= HARVEST_RND_CUT - 1e-9:
+        cuts.append("R&D cut")
+    if capex_known and abs(num(cur["capex"])) < CAPEX_TO_DEPRECIATION_FLOOR * abs(num(cur["depreciation"])):
+        cuts.append("capex below half of depreciation")
+    if not cuts:
+        return False, []
     m_now, m_before = div(cur.get("ebit"), cur.get("revenue")), div(prev.get("ebit"), prev.get("revenue"))
     if m_now is None or m_before is None:
-        return None
-    return m_now > m_before
+        return None, []
+    return (True, cuts) if m_now > m_before else (False, [])
 
 
 def innovation(years: list[dict]) -> dict:
@@ -791,6 +797,7 @@ def innovation(years: list[dict]) -> dict:
     out = dict.fromkeys(("rnd_to_revenue", "rnd_to_revenue_avg", "rnd_cagr", "rnd_cagr_years",
                          "revenue_cagr_same_span", "gross_profit_per_rnd", "growth_capex_to_revenue",
                          "growth_spend_to_cfo", "roic_incremental_3y", "harvesting"))
+    out["harvesting_triggers"] = []
     out["rnd_reported"] = any(_rnd(y) is not None for y in years)
     if not years:
         return out
@@ -830,7 +837,7 @@ def innovation(years: list[dict]) -> dict:
         ic_now, ic_before = _invested_capital(cur), _invested_capital(base)
         if None not in (ebit_now, ebit_before, ic_now, ic_before) and ic_now - ic_before > 0:
             out["roic_incremental_3y"] = (ebit_now - ebit_before) * (1 - TAX_RATE) / (ic_now - ic_before)
-    out["harvesting"] = _harvesting(years)
+    out["harvesting"], out["harvesting_triggers"] = _harvesting(years)
     return out
 
 
@@ -1454,6 +1461,9 @@ def _innovation_section(m: dict) -> list[str]:
         "- Harvesting signal " + ("n/a" if harvesting is None else "yes" if harvesting else "no"),
         "",
     ]
+    if harvesting:
+        lines += ["Harvesting signal: " + " and ".join(inn.get("harvesting_triggers") or [])
+                  + " while the EBIT margin rose.", ""]
     if not inn.get("rnd_reported"):
         return lines + ["R&D is not reported separately; judge reinvestment from growth capex, acquisitions "
                         "and the filings' product evidence."]

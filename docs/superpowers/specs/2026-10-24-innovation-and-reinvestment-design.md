@@ -42,7 +42,7 @@ Patent counts and external product databases (no free, reliable source). A scree
 | `growth_capex_to_revenue` | mean over up to 3 years of (abs(capex) − depreciation) / revenue; may be negative |
 | `growth_spend_to_cfo` | sum over up to 3 years of (R&D + max(abs(capex) − depreciation, 0) + abs(acquisitions)) / sum of operating cash flow; R&D and acquisitions count as 0 when None; None when CFO sum ≤ 0 |
 | `roic_incremental_3y` | (EBIT latest − EBIT three years earlier) × (1 − `TAX_RATE`) / (invested capital latest − invested capital three years earlier); needs ≥ 4 years; None when the capital change ≤ 0 |
-| `harvesting` | True when, in the latest year, R&D / revenue fell ≥ 1 point from the year before **or** abs(capex) < depreciation, **and** EBIT margin rose from the year before; False when neither cut happened or the margin did not rise; None when neither R&D nor capex and depreciation are available for both years |
+| `harvesting` | True when, in the latest year, R&D / revenue fell ≥ 1 point from the year before **or** abs(capex) < 0.5 × depreciation (the accounting check's bar), **and** EBIT margin rose from the year before; False when neither cut happened or the margin did not rise; None when neither R&D nor capex and depreciation are available for both years |
 | `rnd_reported` | True when at least one year has R&D |
 
 `render_report` adds the section after `## Record and inflection`, one number per fixed label (a check may read them later; `n/a` when None):

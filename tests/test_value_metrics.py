@@ -1239,12 +1239,22 @@ def test_harvesting_signal():
     prev = _year(rnd=100, ebit=200)                                 # R&D 10% of revenue, margin 20%
     cut_margin_up = [_year(rnd=80, ebit=250), prev]
     assert vm.innovation(cut_margin_up)["harvesting"] is True
+    assert vm.innovation(cut_margin_up)["harvesting_triggers"] == ["R&D cut"]
     cut_margin_down = [_year(rnd=80, ebit=150), prev]
     assert vm.innovation(cut_margin_down)["harvesting"] is False
     no_data = [_year(capex=None, depreciation=None, ebit=250), _year(capex=None, depreciation=None)]
     assert vm.innovation(no_data)["harvesting"] is None
-    capex_only = [_year(capex=-20, ebit=250), _year()]               # capex below depreciation, no R&D
+    capex_only = [_year(capex=-15, ebit=250), _year()]               # capex below half of D&A, no R&D
     assert vm.innovation(capex_only)["harvesting"] is True
+    assert vm.innovation(capex_only)["harvesting_triggers"] == ["capex below half of depreciation"]
+    capex_cut = [_year(rnd=80, capex=-15, ebit=250), prev]          # capex cut + margin up
+    assert vm.innovation(capex_cut)["harvesting"] is True
+    assert vm.innovation(capex_cut)["harvesting_triggers"] == ["R&D cut", "capex below half of depreciation"]
+    # Capex under depreciation but not under half of it: an acquirer's amortisation, not a cut.
+    acquirer = [_year(capex=-30, ebit=250), _year()]
+    assert vm.innovation(acquirer)["harvesting"] is False
+    half = [_year(capex=-20, ebit=250), _year()]                     # exactly half: not below it
+    assert vm.innovation(half)["harvesting"] is False
     exact_point = [_year(rnd=50, ebit=250), _year(rnd=60, ebit=200)]   # 6% -> 5%: exactly one point
     assert vm.innovation(exact_point)["harvesting"] is True
     no_cut = [_year(rnd=100, ebit=250), prev]
@@ -1298,6 +1308,22 @@ def test_render_innovation_section_labels_and_na():
         assert f"- {label} n/a" in bare, label
     assert ("R&D is not reported separately; judge reinvestment from growth capex, acquisitions and "
             "the filings' product evidence.") in bare
+    assert "Harvesting signal:" not in section and "Harvesting signal:" not in bare
+
+
+@pytest.mark.unit
+def test_render_names_the_harvesting_trigger():
+    def text(years):
+        return _innovation_section(vm.render_report("X", "d", vm.company_metrics(years, 20, 2000, 100)))
+
+    prev = _year(rnd=100, ebit=200)
+    rnd_cut = text([_year(rnd=80, ebit=250), prev])
+    assert "- Harvesting signal yes" in rnd_cut
+    assert "Harvesting signal: R&D cut while the EBIT margin rose." in rnd_cut
+    assert ("Harvesting signal: capex below half of depreciation while the EBIT margin rose."
+            in text([_year(capex=-15, ebit=250), _year()]))
+    assert ("Harvesting signal: R&D cut and capex below half of depreciation while the EBIT margin rose."
+            in text([_year(rnd=80, capex=-15, ebit=250), prev]))
 
 
 @pytest.mark.unit
