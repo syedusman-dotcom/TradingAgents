@@ -19,6 +19,7 @@ from lxml import etree as lxml_etree, html as lxml_html
 from tradingagents.dataflows.config import get_config
 from tradingagents.dataflows.errors import NoMarketDataError, VendorUnavailableError
 from tradingagents.dataflows.files import replace_file
+from tradingagents.dataflows.value_metrics import fiscal_year_label
 from tradingagents.dataflows.vendors import sec_edgar
 
 _SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik}.json"
@@ -78,8 +79,9 @@ def get_financial_history(ticker: str, as_of_date: str | None = None) -> str:
 
 
 def annual_revenue(ticker: str, as_of_date: str | None = None) -> dict[str, float]:
-    """Fiscal year (the year its period ends) -> revenue in dollars, from 10-K/20-F/40-F facts filed
-    on or before the date, tagged as in the income statement; {} for a non-filer or no dollar figures."""
+    """Fiscal year (``value_metrics.fiscal_year_label`` of its period end) -> revenue in dollars,
+    from 10-K/20-F/40-F facts filed on or before the date, tagged as in the income statement; {}
+    for a non-filer or no dollar figures."""
     cik = sec_edgar.cik_for(ticker)
     if cik is None:
         return {}
@@ -92,7 +94,8 @@ def annual_revenue(ticker: str, as_of_date: str | None = None) -> dict[str, floa
         return {}
     out: dict[str, float] = {}
     for (end, _), value in sorted(values.items(), reverse=True):
-        out.setdefault(end[:4], value)    # a changed fiscal year: the later period of that year
+        # A changed fiscal year: the later period of that fiscal year.
+        out.setdefault(fiscal_year_label(end), value)
     return out
 
 

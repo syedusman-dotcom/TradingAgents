@@ -978,8 +978,38 @@ def test_sec_annual_revenue_by_fiscal_year(monkeypatch):
     monkeypatch.setattr(sec_edgar, "cik_for", lambda t: "0000000001")
     monkeypatch.setattr(sec_edgar, "_cached_json", lambda url, name: facts)
     assert sec_filings.annual_revenue("ABC") == {"2016": 70, "2015": 60, "2014": 50}
+    # A 52/53-week year ending 2022-01-01 is fiscal 2021, and 2022-12-31 is fiscal 2022.
+    facts["facts"]["us-gaap"]["Revenues"]["units"]["USD"] += [
+        fact("2021-01-03", "2022-01-01", 80, filed="2022-03-01"),
+        fact("2022-01-02", "2022-12-31", 90, filed="2023-03-01")]
+    got = sec_filings.annual_revenue("ABC")
+    assert got["2021"] == 80 and got["2022"] == 90
     monkeypatch.setattr(sec_edgar, "cik_for", lambda t: None)
     assert sec_filings.annual_revenue("ABC") == {}
+
+
+@pytest.mark.unit
+def test_fiscal_year_label_puts_an_early_january_end_in_the_year_before():
+    assert vm.fiscal_year_label("2022-01-01") == "2021"
+    assert vm.fiscal_year_label("2022-01-14") == "2021"
+    assert vm.fiscal_year_label("2022-01-15") == "2022"
+    assert vm.fiscal_year_label("2022-12-31") == "2022"
+    assert vm.fiscal_year_label("2023-06-30") == "2023"
+
+
+@pytest.mark.unit
+def test_record_labels_52_53_week_years_like_the_history():
+    """Saturday-nearest-31-December years: FY2021 ends 2022-01-01. The statements' years and the
+    SEC history must name it 2021, or FY2021 and FY2022 collide and the CAGR is wrong."""
+    ends = ["2017-12-30", "2018-12-29", "2019-12-28", "2021-01-02", "2022-01-01", "2022-12-31"]
+    revenue = {end: 1000 * 1.1 ** i for i, end in enumerate(ends)}
+    years = [_year(fiscal_year_end=end, revenue=revenue[end]) for end in reversed(ends[-4:])]
+    history = {vm.fiscal_year_label(end): v for end, v in revenue.items()}
+    rec = vm.record(years, revenue_history=history)
+    assert rec["revenue_cagr_years"] == 5 and rec["revenue_cagr"] == pytest.approx(0.10)
+    assert rec["revenue_cagr_5y"] == pytest.approx(0.10)
+    alone = vm.record(years)                               # Yahoo's four years: three intervals
+    assert alone["revenue_cagr_years"] == 3 and alone["revenue_cagr"] == pytest.approx(0.10)
 
 
 @pytest.mark.unit

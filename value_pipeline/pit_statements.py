@@ -19,12 +19,12 @@ import json
 import logging
 import time
 from collections.abc import Callable
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from pathlib import Path
 
 from tradingagents.dataflows.errors import VendorUnavailableError
 from tradingagents.dataflows.files import replace_file
-from tradingagents.dataflows.value_metrics import YEAR_FIELDS
+from tradingagents.dataflows.value_metrics import YEAR_FIELDS, fiscal_year_label
 from tradingagents.dataflows.vendors import sec_edgar
 from value_pipeline.config import Paths
 
@@ -211,12 +211,6 @@ def _distinct_ends(ends) -> list[str]:
     return kept
 
 
-def _fiscal_year_label(end: str) -> str:
-    """The fiscal year a period end names: a 52/53-week year ending in the first week of
-    January belongs to the year before."""
-    return str((date.fromisoformat(end) - timedelta(days=14)).year)
-
-
 def _fiscal_year_ends(store: dict, as_of: str) -> list[str]:
     """Annual period ends of the revenue, EBIT and total-assets facts filed in annual reports,
     newest first, overlapping periods removed by ``_distinct_ends``. The union, so a filer
@@ -360,10 +354,11 @@ def shares_as_of(store: dict, as_of: str) -> float | None:
 def revenue_history(store: dict, as_of: str) -> dict[str, float]:
     """Fiscal year -> annual revenue in dollars, filed on or before ``as_of``, for
     ``record``'s ten-year CAGR. Overlapping periods keep the later one (``_distinct_ends``)
-    and a year is labelled by ``_fiscal_year_label``, so 52/53-week years stay distinct."""
+    and a year is labelled by ``value_metrics.fiscal_year_label`` (as ``record`` labels the
+    years it merges with), so 52/53-week years stay distinct."""
     values, unit = sec_edgar._as_of(store, TAGS["revenue"], as_of, _ANNUAL,
                                     sec_edgar._ANNUAL_FORMS)
     if unit != "USD":
         return {}
     by_end = {end: value for (end, _), value in values.items()}
-    return {_fiscal_year_label(end): by_end[end] for end in _distinct_ends(by_end)}
+    return {fiscal_year_label(end): by_end[end] for end in _distinct_ends(by_end)}

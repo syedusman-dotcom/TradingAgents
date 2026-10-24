@@ -5,6 +5,7 @@ from datetime import date, timedelta
 
 import pytest
 
+from tradingagents.dataflows import value_metrics as vm
 from tradingagents.dataflows.errors import VendorUnavailableError
 from tradingagents.dataflows.value_metrics import YEAR_FIELDS
 from value_pipeline import pit_statements as pit
@@ -167,11 +168,9 @@ def test_changed_year_end_keeps_the_later_period():
     assert ends == ["2023-12-31", "2022-12-31", "2021-12-31"]
 
 
-def test_52_53_week_years_are_all_kept():
-    """A 52/53-week filer: two fiscal years end in calendar 2022 and both are real years."""
-    years = (("2020-01-05", "2021-01-02", "2020-10-03", 1000.0, 700.0),
-             ("2021-01-03", "2022-01-01", "2021-10-02", 1100.0, 780.0),
-             ("2022-01-02", "2022-12-31", "2022-10-01", 1200.0, 850.0))
+def _weeks_store(years) -> dict:
+    """A 52/53-week filer: ``(start, end, nine_month_end, revenue, nine_month_revenue)`` per
+    fiscal year, each 10-K filed 60 days after the end and each 10-Q 40 days after its end."""
     store = {tag: {"units": {"USD": []}} for tag in (
         "Revenues", "OperatingIncomeLoss", "Assets", "StockholdersEquity", "AssetsCurrent",
         "LiabilitiesCurrent")}
@@ -190,7 +189,14 @@ def test_52_53_week_years_are_all_kept():
         for tag, val in (("Assets", 2000.0), ("StockholdersEquity", 1200.0),
                          ("AssetsCurrent", 800.0), ("LiabilitiesCurrent", 400.0)):
             add(tag, {"end": end, "val": val, "filed": filed, "form": "10-K"})
+    return store
 
+
+def test_52_53_week_years_are_all_kept():
+    """A 52/53-week filer: two fiscal years end in calendar 2022 and both are real years."""
+    store = _weeks_store((("2020-01-05", "2021-01-02", "2020-10-03", 1000.0, 700.0),
+                          ("2021-01-03", "2022-01-01", "2021-10-02", 1100.0, 780.0),
+                          ("2022-01-02", "2022-12-31", "2022-10-01", 1200.0, 850.0)))
     as_of = "2023-06-01"
     assert [y["fiscal_year_end"] for y in pit.years_as_of(store, as_of)] == [
         "2022-12-31", "2022-01-01", "2021-01-02"]
@@ -199,6 +205,26 @@ def test_52_53_week_years_are_all_kept():
     assert all(q["derived"] for q in quarters)
     assert [q["revenue"] for q in quarters] == [350.0, 320.0, 300.0]
     assert pit.revenue_history(store, as_of) == {"2022": 1200.0, "2021": 1100.0, "2020": 1000.0}
+
+
+def test_52_53_week_record_gives_the_true_revenue_cagr():
+    """``record`` merges the years and the revenue history by fiscal year; both must label a
+    year ending in early January as the year before, or two years collide."""
+    ends = ["2017-12-30", "2018-12-29", "2019-12-28", "2021-01-02", "2022-01-01", "2022-12-31"]
+    rows = []
+    for i, end in enumerate(ends):
+        start = (date.fromisoformat(end) - timedelta(days=363)).isoformat()
+        nine_end = (date.fromisoformat(end) - timedelta(days=91)).isoformat()
+        rev = 1000.0 * 1.1 ** i
+        rows.append((start, end, nine_end, rev, rev * 0.7))
+    store = _weeks_store(rows)
+    as_of = "2024-06-01"
+    years = pit.years_as_of(store, as_of)[:4]
+    history = pit.revenue_history(store, as_of)
+    assert sorted(history) == [str(y) for y in range(2017, 2023)]
+    rec = vm.record(years, history)
+    assert rec["revenue_cagr_years"] == 5
+    assert rec["revenue_cagr"] == pytest.approx(0.10)
 
 
 def test_quarters_derive_q4_and_flag_it():

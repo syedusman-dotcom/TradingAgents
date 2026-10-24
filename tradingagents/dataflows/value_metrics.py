@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 import math
-from datetime import date
+from datetime import date, timedelta
 from statistics import mean, median
 
 logger = logging.getLogger(__name__)
@@ -655,14 +655,33 @@ def _date(x) -> date | None:
         return None
 
 
+def fiscal_year_label(end: str) -> str:
+    """The fiscal year a period ending on ``end`` (ISO date) is named for: the year of the date
+    two weeks earlier. A 52/53-week filer ends its year on the Saturday nearest 31 December, so
+    fiscal 2021 can end on 2022-01-01 and fiscal 2022 on 2022-12-31; labelling by the end's own
+    year would give both the name 2022, and one would overwrite the other."""
+    return str((date.fromisoformat(end[:10]) - timedelta(days=14)).year)
+
+
+def _year_key(key) -> str:
+    """A revenue series key as a fiscal-year label: a full period end through
+    ``fiscal_year_label``, a key that is already a year (or anything else) by its first four
+    characters."""
+    text = str(key or "")
+    try:
+        return fiscal_year_label(text) if len(text) >= 10 else text[:4]
+    except ValueError:
+        return text[:4]
+
+
 def _revenue_by_year(years: list[dict], revenue_history: dict | None) -> dict[int, float]:
-    """Positive revenue by fiscal year (the year its period ends): the longer history first, then
-    the statements' own figures over it."""
+    """Positive revenue by fiscal year (``fiscal_year_label`` of its period end): the longer
+    history first, then the statements' own figures over it."""
     series: dict[int, float] = {}
     rows = [(k, v) for k, v in (revenue_history or {}).items()]
     rows += [(y.get("fiscal_year_end"), y.get("revenue")) for y in years]
     for key, value in rows:
-        year, value = str(key or "")[:4], num(value)
+        year, value = _year_key(key), num(value)
         if year.isdigit() and value is not None and value > 0:
             series[int(year)] = value
     return series
@@ -682,8 +701,8 @@ def record(years: list[dict], revenue_history: dict[str, float] | None = None) -
     reinvestment, sustainable = reinvestment_and_sustainable_growth(years)
     fcf_cagr, fcf_span = _fcf_cagr(years)
     series = _revenue_by_year(years, revenue_history)
-    yahoo_years = {int(str(y.get("fiscal_year_end"))[:4]) for y in years
-                   if str(y.get("fiscal_year_end") or "")[:4].isdigit()}
+    yahoo_years = {int(label) for label in (_year_key(y.get("fiscal_year_end")) for y in years)
+                   if label.isdigit()}
     cagr = span = source = None
     by_span = {}
     if series:
