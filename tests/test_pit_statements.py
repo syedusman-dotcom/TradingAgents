@@ -1,6 +1,7 @@
 """Point-in-time statements from EDGAR companyfacts (no network; a synthetic filer)."""
 
 import json
+from datetime import date, timedelta
 
 import pytest
 
@@ -166,6 +167,40 @@ def test_changed_year_end_keeps_the_later_period():
     assert ends == ["2023-12-31", "2022-12-31", "2021-12-31"]
 
 
+def test_52_53_week_years_are_all_kept():
+    """A 52/53-week filer: two fiscal years end in calendar 2022 and both are real years."""
+    years = (("2020-01-05", "2021-01-02", "2020-10-03", 1000.0, 700.0),
+             ("2021-01-03", "2022-01-01", "2021-10-02", 1100.0, 780.0),
+             ("2022-01-02", "2022-12-31", "2022-10-01", 1200.0, 850.0))
+    store = {tag: {"units": {"USD": []}} for tag in (
+        "Revenues", "OperatingIncomeLoss", "Assets", "StockholdersEquity", "AssetsCurrent",
+        "LiabilitiesCurrent")}
+
+    def add(tag, fact):
+        store[tag]["units"]["USD"].append(fact)
+
+    for start, end, nine_end, rev, nine_rev in years:
+        filed = (date.fromisoformat(end) + timedelta(days=60)).isoformat()
+        nine_filed = (date.fromisoformat(nine_end) + timedelta(days=40)).isoformat()
+        for tag, annual, nine in (("Revenues", rev, nine_rev),
+                                  ("OperatingIncomeLoss", rev / 10, nine_rev / 10)):
+            add(tag, {"start": start, "end": end, "val": annual, "filed": filed, "form": "10-K"})
+            add(tag, {"start": start, "end": nine_end, "val": nine, "filed": nine_filed,
+                      "form": "10-Q"})
+        for tag, val in (("Assets", 2000.0), ("StockholdersEquity", 1200.0),
+                         ("AssetsCurrent", 800.0), ("LiabilitiesCurrent", 400.0)):
+            add(tag, {"end": end, "val": val, "filed": filed, "form": "10-K"})
+
+    as_of = "2023-06-01"
+    assert [y["fiscal_year_end"] for y in pit.years_as_of(store, as_of)] == [
+        "2022-12-31", "2022-01-01", "2021-01-02"]
+    quarters = pit.quarters_as_of(store, as_of)
+    assert [q["fiscal_year_end"] for q in quarters] == ["2022-12-31", "2022-01-01", "2021-01-02"]
+    assert all(q["derived"] for q in quarters)
+    assert [q["revenue"] for q in quarters] == [350.0, 320.0, 300.0]
+    assert pit.revenue_history(store, as_of) == {"2022": 1200.0, "2021": 1100.0, "2020": 1000.0}
+
+
 def test_quarters_derive_q4_and_flag_it():
     quarters = pit.quarters_as_of(_store(), "2024-03-01")
     assert [q["fiscal_year_end"] for q in quarters] == [
@@ -261,3 +296,13 @@ def test_facts_for_caches_and_fails_open(tmp_path, monkeypatch):
     assert not (paths.cache / "backtest" / "facts" / "DOWN.json").exists()
     assert pit.facts_for("NOTAFILER", paths) is None
     assert len(calls) == 3
+    # A response that is not a companyfacts object is a failed fetch.
+    monkeypatch.setattr(pit.sec_edgar, "_fetch_json", lambda url: ["not", "facts"])
+    assert pit.facts_for("SYN", paths, refresh=True) is None
+
+
+def test_facts_for_unreadable_cache_fails_open(tmp_path, monkeypatch):
+    paths = Paths(tmp_path / "data")
+    (paths.cache / "backtest" / "facts" / "SYN.json").mkdir(parents=True)   # read raises OSError
+    monkeypatch.setattr(pit.sec_edgar, "_fetch_json", lambda url: pytest.fail("fetched"))
+    assert pit.facts_for("SYN", paths, fetch=False) is None

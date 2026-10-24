@@ -19,7 +19,7 @@ import json
 import logging
 import time
 from collections.abc import Callable
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from tradingagents.dataflows.errors import VendorUnavailableError
@@ -86,7 +86,8 @@ UNITS = ("USD", "shares")
 FACT_KEYS = ("start", "end", "val", "filed", "form")
 MIN_YEAR_VALUES = 6       # the Yahoo vendor's rule: fewer means a padded, near-empty year
 MAX_QUARTERS = 8
-Q4_GAP_DAYS = (80, 100)   # a nine-month figure ends about three months before the year end
+Q4_GAP_DAYS = (80, 100)
+MIN_YEAR_GAP_DAYS = 300   # annual ends closer than this overlap: one restates or replaces the other   # a nine-month figure ends about three months before the year end
 
 # SEC asks for no more than ten requests a second; eight leaves room.
 MIN_REQUEST_GAP = 0.125
@@ -138,7 +139,7 @@ def facts_for(ticker: str, paths: Paths, fetch: bool = True, refresh: bool = Fal
     if path.exists() and (not refresh or not fetch):
         try:
             return json.loads(path.read_text(encoding="utf-8"))
-        except ValueError:
+        except (ValueError, OSError):
             log.warning("unreadable EDGAR fact store %s; refetching", path)
     if not fetch:
         return None
@@ -151,6 +152,9 @@ def facts_for(ticker: str, paths: Paths, fetch: bool = True, refresh: bool = Fal
         raw = sec_edgar._fetch_json(sec_edgar._FACTS_URL.format(cik=cik))
     except (VendorUnavailableError, OSError) as exc:
         log.warning("%s: EDGAR companyfacts unavailable (%s)", ticker, exc)
+        return None
+    if not isinstance(raw, dict):
+        log.warning("%s: EDGAR companyfacts unreadable (%s)", ticker, type(raw).__name__)
         return None
     store = {"cik": cik, "fetched_at": datetime.now().isoformat(timespec="seconds"),
              "facts": extract(raw)}
@@ -191,18 +195,33 @@ def _values(store: dict, tags: tuple[str, ...], as_of: str, spans, forms=()) -> 
     return sec_edgar._as_of(store, tags, as_of, spans, forms)[0]
 
 
+def _distinct_ends(ends) -> list[str]:
+    """Annual period ends, newest first, without overlapping duplicates: an end fewer than
+    ``MIN_YEAR_GAP_DAYS`` before the last kept one is a restated or changed-year-end period
+    and the later one wins. A 52/53-week filer's years (2022-01-01, then 2022-12-31) are
+    about 364 days apart and all kept, which a one-per-calendar-year rule would not do."""
+    kept: list[str] = []
+    for end in sorted(set(ends), reverse=True):
+        if not kept or _days_between(end, kept[-1]) >= MIN_YEAR_GAP_DAYS:
+            kept.append(end)
+    return kept
+
+
+def _fiscal_year_label(end: str) -> str:
+    """The fiscal year a period end names: a 52/53-week year ending in the first week of
+    January belongs to the year before."""
+    return str((date.fromisoformat(end) - timedelta(days=14)).year)
+
+
 def _fiscal_year_ends(store: dict, as_of: str) -> list[str]:
-    """Period ends of the annual revenue (else EBIT) facts, newest first, one per calendar
-    year: after a changed fiscal year end the later period of that year wins."""
+    """Period ends of the annual revenue (else EBIT) facts, newest first, overlapping
+    periods removed by ``_distinct_ends``."""
     ends = {end for end, _ in _values(store, TAGS["revenue"], as_of, _ANNUAL,
                                       sec_edgar._ANNUAL_FORMS)}
     if not ends:
         ends = {end for end, _ in _values(store, TAGS["ebit"], as_of, _ANNUAL,
                                           sec_edgar._ANNUAL_FORMS)}
-    by_year: dict[str, str] = {}
-    for end in sorted(ends, reverse=True):
-        by_year.setdefault(end[:4], end)
-    return sorted(by_year.values(), reverse=True)
+    return _distinct_ends(ends)
 
 
 def _goodwill(goodwill: float | None, intangibles: float | None) -> float | None:
@@ -316,13 +335,12 @@ def shares_as_of(store: dict, as_of: str) -> float | None:
 
 
 def revenue_history(store: dict, as_of: str) -> dict[str, float]:
-    """Fiscal year (the year its period ends) -> annual revenue in dollars, filed on or before
-    ``as_of``, as ``sec_filings.annual_revenue`` builds it; the later period wins a year."""
+    """Fiscal year -> annual revenue in dollars, filed on or before ``as_of``, for
+    ``record``'s ten-year CAGR. Overlapping periods keep the later one (``_distinct_ends``)
+    and a year is labelled by ``_fiscal_year_label``, so 52/53-week years stay distinct."""
     values, unit = sec_edgar._as_of(store, TAGS["revenue"], as_of, _ANNUAL,
                                     sec_edgar._ANNUAL_FORMS)
     if unit != "USD":
         return {}
-    out: dict[str, float] = {}
-    for (end, _), value in sorted(values.items(), reverse=True):
-        out.setdefault(end[:4], value)
-    return out
+    by_end = {end: value for (end, _), value in values.items()}
+    return {_fiscal_year_label(end): by_end[end] for end in _distinct_ends(by_end)}
