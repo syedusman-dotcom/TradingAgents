@@ -14,6 +14,7 @@ with None.
 
 from __future__ import annotations
 
+import json
 import logging
 import statistics
 from collections.abc import Callable
@@ -625,19 +626,43 @@ def _load(ticker: str, paths: Paths, cfg: dict, fetch: bool, refresh: bool):
     return store, hist
 
 
+def _join_dates(paths: Paths, fetch: bool, added_fn) -> dict[str, str]:
+    """The S&P 500 join dates, cached at ``cache/backtest/added_dates.json``: read from the cache
+    with ``fetch=False``, else fetched and the cache rewritten (the cache when the fetch comes
+    back empty). ``{}`` when neither has any."""
+    path = paths.cache / "backtest" / "added_dates.json"
+    cached: dict[str, str] = {}
+    if path.exists():
+        try:
+            cached = json.loads(path.read_text(encoding="utf-8"))
+        except (ValueError, OSError) as exc:
+            log.warning("unreadable join-date cache %s: %s", path, exc)
+    if not fetch:
+        return cached
+    added = (added_fn or added_dates)()
+    if not added:
+        return cached
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(added, sort_keys=True), encoding="utf-8")
+    except OSError as exc:
+        log.warning("could not cache the join dates: %s", exc)
+    return added
+
+
 def run(paths: Paths, cfg: dict, today: date | None = None, tickers: list[str] | None = None,
         refresh: bool = False, fetch: bool = True, progress=None,
         universe_fn=market_data.universe, added_fn=None) -> dict:
     """The backtest: every cohort's rows from the statements and closes known on its date, the
     rules' picks and their returns against SPY and the universe, the summary, sensitivity, the
     bar that bound and the survivorship counts. ``fetch=False`` reads the statement and price
-    caches only. A ticker whose data is missing or whose snapshot raises is recorded in
+    caches only (the join dates too, from their own cache). A ticker whose data is missing or whose snapshot raises is recorded in
     ``skipped`` and the run goes on. Nothing trades; no agent is called."""
     today = today or date.today()
     holds = list(cfg["backtest"]["holds"])
     cohorts = cohort_dates(cfg, today)
     members = _universe(paths, cfg, tickers, universe_fn)
-    added = (added_fn or added_dates)()
+    added = _join_dates(paths, fetch, added_fn)
     spy = price_history(cfg["backtest"]["benchmark"], paths, fetch=fetch, refresh=refresh)
     tnx = price_history("^TNX", paths, fetch=fetch, refresh=refresh)
     rates = {c: discount_rate_on(tnx, c) for c in cohorts}
@@ -654,12 +679,12 @@ def run(paths: Paths, cfg: dict, today: date | None = None, tickers: list[str] |
             if store is None or hist is None:
                 skipped[ticker] = "no EDGAR statements" if store is None else "no price history"
                 continue
-            with_data += 1
             snaps = _ticker_rows(ticker, sector, store["facts"], hist, cohorts, rates, added, cfg)
         except Exception as exc:  # noqa: BLE001 - one bad ticker must not stop the run
             log.warning("skip %s: %s", ticker, exc)
-            skipped[ticker] = str(exc) or type(exc).__name__
+            skipped[ticker] = f"snapshot error ({type(exc).__name__})"
             continue
+        with_data += 1
         for cohort, (row, tup) in snaps.items():
             rows[cohort].append(row)
             inputs[cohort][ticker] = tup
@@ -678,7 +703,9 @@ def run(paths: Paths, cfg: dict, today: date | None = None, tickers: list[str] |
         "summary": summarize(picks, bench, holds, names=list(rule_set)),
         "sensitivity": sensitivity(rule_set, rows, bench),
         "bound": bound_by_price(rule_set, rows, bench, holds),
-        "survivorship": _joined_after(added, cohorts), "skipped": skipped,
+        "survivorship": _joined_after(added, cohorts), "joins_known": bool(added),
+        "defaults": {name: dict(rule.bars) for name, rule in rule_set.items()},
+        "skipped": skipped,
     }
 
 
@@ -691,6 +718,22 @@ SURVIVORSHIP = ("today's members only: N of today's S&P 500 names joined after t
                 "left out of this cohort; names that left either index since are not in the "
                 "sample and cannot be counted from free data; the S&P 400's join dates are not "
                 "published, so all its members stay")
+
+
+NO_JOINS = ("today's members only: the S&P 500 join dates could not be read, so names that "
+            "joined after a cohort date are still in that cohort — a look-ahead that flatters "
+            "the result")
+BAR_MEANINGS = {
+    "premium": "price at most premium × worksheet base",
+    "min_return": "yield + earned growth + negative reversion at least this",
+    "mos": "formula margin of safety at least this",
+    "top_n": "Magic Formula rank within the top n",
+    "incremental_roic": "at least this",
+}
+
+
+def _joins_known(result: dict) -> bool:
+    return result.get("joins_known", bool(result.get("survivorship")))
 
 
 def _ret(x) -> str:
@@ -706,8 +749,11 @@ def _tested(result: dict) -> list[str]:
     span = f"{cohorts[0]} to {cohorts[-1]}" if cohorts else "none (no hold has ended)"
     holds = " and ".join(str(h) for h in result["holds"])
     holds += " year" if result["holds"] == [1] else " years"
-    counts = ("; ".join(f"{c}: {n}" for c, n in surv.items()) if surv
-              else "not available (the join dates could not be read)")
+    if _joins_known(result):
+        survivorship = (f"Survivorship — {SURVIVORSHIP}. N per cohort: "
+                        + "; ".join(f"{c}: {n}" for c, n in surv.items()) + ".")
+    else:
+        survivorship = f"Survivorship — {NO_JOINS}."
     return ["## What was tested", "",
             f"The screen's lane rules ({', '.join(result['summary'])}) replayed on "
             f"{len(cohorts)} cohort dates ({span}), each pick held {holds} with dividends "
@@ -715,13 +761,14 @@ def _tested(result: dict) -> list[str]:
             "each cohort sees only the statements filed on or before its date (EDGAR) and the "
             "closes dated on or before it; returns start at the first close on or after it. The "
             "metrics see the newest four fiscal years known then, as the live screen does. "
-            "Sectors are today's (EDGAR has none), a mild look-ahead. Survivorship — "
-            f"{SURVIVORSHIP}. N per cohort: {counts}.", ""]
+            "Sectors are today's (EDGAR has none), a mild look-ahead. " + survivorship, ""]
 
 
 def verdict(result: dict) -> str:
     """The ``## Verdict`` section: each rule's sentence, one hold after another."""
     lines = ["## Verdict", ""]
+    if not _joins_known(result):
+        lines += [f"**Warning:** {NO_JOINS}.", ""]
     for h in result["holds"]:
         lines += [f"**{h}-year hold**", ""]
         lines += [f"- {by_hold[h]['sentence']}" for by_hold in result["summary"].values()]
@@ -750,17 +797,26 @@ def _by_cohort(result: dict) -> list[str]:
 
 def _sensitivity(result: dict) -> list[str]:
     lines = ["## Sensitivity", "",
-             "One bar moved at a time, the others at their defaults; one-year hold.", ""]
+             "One bar moved at a time, the others at their defaults; one-year hold. "
+             "\\* marks the rule's default.", ""]
+    lines += [f"- {bar}: {meaning}" for bar, meaning in BAR_MEANINGS.items()] + [""]
+    defaults = result.get("defaults", {})
     by_rule: dict[str, list[dict]] = {}
     for point in result["sensitivity"]:
         by_rule.setdefault(point["rule"], []).append(point)
     for name, points in by_rule.items():
         lines += [f"### {name}", "", "| Bar | Value | Picks | Beat SPY | Mean excess (pts) |",
                   "|---|--:|--:|--:|--:|"]
-        lines += [f"| {p['bar']} | {p['value']:g} | {p['n']} | {p['beat_spy']} of {p['cohorts']} "
+        lines += [f"| {p['bar']} | {_bar_value(p, defaults)} | {p['n']} | {p['beat_spy']} of {p['cohorts']} "
                   f"| {_points(p['mean_excess_spy'])} |" for p in points]
         lines.append("")
     return lines
+
+
+def _bar_value(point: dict, defaults: dict) -> str:
+    default = defaults.get(point["rule"], {}).get(point["bar"])
+    is_default = default is not None and abs(point["value"] - default) < TOLERANCE
+    return f"{point['value']:g}" + (" \\*" if is_default else "")
 
 
 def _bound(result: dict) -> list[str]:

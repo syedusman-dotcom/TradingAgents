@@ -746,8 +746,14 @@ def _e2e_setup(tmp_path):
     _write_caches(paths, "NOHIST", store=_e2e_store())
     _write_caches(paths, "NOFACTS", hist=_e2e_hist())
     _write_caches(paths, "SPY", hist=_e2e_hist(slope=0.02))
+    added = paths.cache / "backtest" / "added_dates.json"
+    added.write_text(json.dumps(_e2e_added()), encoding="utf-8")   # the cached join dates
     cfg = _bt_cfg(first_year=2022, last_year=2023)
     return paths, cfg
+
+
+def _no_wiki(fetch=None):
+    pytest.fail("fetch=False reads the cached join dates, never Wikipedia")
 
 
 def _e2e_added():
@@ -757,7 +763,7 @@ def _e2e_added():
 
 def _e2e_run(tmp_path, monkeypatch, **kw):
     paths, cfg = _e2e_setup(tmp_path)
-    monkeypatch.setattr(backtest, "added_dates", lambda fetch=None: _e2e_added())
+    monkeypatch.setattr(backtest, "added_dates", _no_wiki)
     monkeypatch.setattr(backtest.market_data, "throttle", lambda s: pytest.fail("no Yahoo fetch"))
     seen = []
     result = backtest.run(paths, cfg, today=date(2024, 10, 24), fetch=False,
@@ -789,6 +795,8 @@ def test_run_end_to_end_with_patched_caches(tmp_path, monkeypatch):
     assert result["summary"]["magic_formula"][1]["beat_spy"] == 2     # rising faster than SPY
     assert result["sensitivity"] and backtest.BOUND in result["bound"]
     assert result["survivorship"] == {"2022-06-30": 1, "2023-06-30": 0}
+    assert result["joins_known"] is True
+    assert result["defaults"]["value"] == backtest.rules(_bt_cfg())["value"].bars
     aaa = next(p for p in result["picks"] if p["ticker"] == "AAA")
     assert aaa["start_date"] == "2022-06-30"
 
@@ -824,8 +832,41 @@ def test_run_narrows_to_tickers_and_fails_open(tmp_path, monkeypatch):
     assert ("BBB", "2022-06-30") not in {c[:2] for c in calls}     # joined after it
     assert [t for _, _, t in seen] == ["AAA", "BBB"]
     assert result["universe_size"] == 2
-    assert result["skipped"] == {"BBB": "bad facts"}
+    assert result["skipped"] == {"BBB": "snapshot error (RuntimeError)"}
+    assert result["with_data"] == 1                          # skipped, not also counted
     assert result["rows_per_cohort"] == {"2022-06-30": 1, "2023-06-30": 1}
+
+
+def test_run_caches_the_join_dates_and_warns_without_them(tmp_path, monkeypatch):
+    paths, cfg = _e2e_setup(tmp_path)
+    cache = paths.cache / "backtest" / "added_dates.json"
+    cache.unlink()
+    monkeypatch.setattr(backtest.yf, "Ticker", _FakeTicker)          # ^TNX is not cached
+    _FakeTicker.frames = {"^TNX": RuntimeError("offline")}
+    monkeypatch.setattr(backtest, "added_dates", _no_wiki)
+
+    def go(added_fn, fetch=True):
+        return backtest.run(paths, cfg, today=date(2024, 10, 24), tickers=["AAA", "BBB"],
+                            fetch=fetch, universe_fn=_e2e_universe, added_fn=added_fn)
+
+    # Fetched: the dates are used and cached.
+    result = go(_e2e_added)
+    assert result["rows_per_cohort"] == {"2022-06-30": 1, "2023-06-30": 2}
+    assert json.loads(cache.read_text(encoding="utf-8")) == _e2e_added()
+    # A failed fetch falls back to the cache.
+    assert go(lambda: {})["rows_per_cohort"] == {"2022-06-30": 1, "2023-06-30": 2}
+    # Neither: BBB stays in every cohort, and the report says so plainly.
+    cache.unlink()
+    bare = go(lambda: {})
+    assert bare["joins_known"] is False and bare["survivorship"] == {}
+    assert bare["rows_per_cohort"] == {"2022-06-30": 2, "2023-06-30": 2}
+    assert not cache.exists()
+    text = backtest.markdown(bare)
+    tested = text.split("## What was tested")[1].split("## Verdict")[0]
+    assert backtest.NO_JOINS in tested and backtest.SURVIVORSHIP not in text
+    verdict = text.split("## Verdict")[1].split("## By cohort")[0]
+    assert verdict.strip().startswith(f"**Warning:** {backtest.NO_JOINS}.")
+    assert "Warning" not in backtest.markdown(result)
 
 
 def _fake_result() -> dict:
@@ -839,9 +880,12 @@ def _fake_result() -> dict:
             "with_data": 850, "rows_per_cohort": {C1: 600, C2: 640}, "picks": picks,
             "summary": summary,
             "sensitivity": [{"rule": "value", "bar": "mos", "value": 0.3, "n": 2, "beat_spy": 1,
-                             "cohorts": 2, "mean_excess_spy": 0.025}],
+                             "cohorts": 2, "mean_excess_spy": 0.025},
+                            {"rule": "value", "bar": "mos", "value": 0.4, "n": 1, "beat_spy": 1,
+                             "cohorts": 1, "mean_excess_spy": 0.15}],
             "bound": backtest.summarize([], BENCH, holds, names=[backtest.BOUND]),
-            "survivorship": {C1: 40, C2: 30},
+            "survivorship": {C1: 40, C2: 30}, "joins_known": True,
+            "defaults": {"value": {"top_n": 30, "mos": 0.3}},
             "skipped": {"X": "no EDGAR statements", "Y": "no EDGAR statements",
                         "Z": "no price history"}}
 
@@ -862,11 +906,14 @@ def test_markdown_sections_in_order():
     verdict = text.split("## Verdict")[1].split("## By cohort")[0]
     assert verdict.index("1-year") < verdict.index("3-year")
     assert "| Cohort |" in text and "+15.0" in text            # C1's excess over SPY
-    assert "| mos | 0.3 |" in text.replace("0.30", "0.3")
+    assert "| mos | 0.3 \\* | 2 | 1 of 2 | +2.5 |" in text      # the default, marked
+    assert "| mos | 0.4 | 1 | 1 of 1 | +15.0 |" in text
+    assert "- premium: price at most premium × worksheet base" in text
+    assert "- mos: formula margin of safety at least this" in text
     assert "no EDGAR statements: 2" in text and "900" in text and "850" in text
     assert backtest.verdict(_fake_result()) in text
-    empty = backtest.markdown({**_fake_result(), "survivorship": {}})
-    assert "not available" in empty
+    empty = backtest.markdown({**_fake_result(), "survivorship": {}, "joins_known": False})
+    assert backtest.NO_JOINS in empty and "**Warning:**" in empty
 
 
 def test_write_and_latest_report(tmp_path):
@@ -888,7 +935,7 @@ def test_cli_backtest_no_fetch(tmp_path, monkeypatch, capsys):
     from value_pipeline import cli
 
     paths, _ = _e2e_setup(tmp_path)
-    monkeypatch.setattr(backtest, "added_dates", lambda fetch=None: _e2e_added())
+    monkeypatch.setattr(backtest, "added_dates", _no_wiki)
     monkeypatch.setattr(backtest, "run", partial(backtest.run, universe_fn=_e2e_universe))
     cli.main(["--data-dir", str(paths.root), "backtest", "--no-fetch", "--tickers", "AAA,BBB",
               "--from", "2022", "--to", "2023", "--holds", "1"])

@@ -278,8 +278,11 @@ What it cannot test or correct:
 How to run: `uv run python -m value_pipeline backtest`. The first run fetches every ticker's
 EDGAR company facts and Yahoo price history (about 900 + 900 requests, 20-40 minutes) and
 caches them for good under `data/cache/backtest/facts/` and `prices/`; later runs read the
-caches and take a minute or two. `--refresh` refetches, `--no-fetch` reads the caches only
-(the index lists and join dates are still read from Wikipedia). `--from`/`--to` pick the
+caches and take a minute or two. `--refresh` refetches, `--no-fetch` reads the caches only:
+statements, prices and the S&P 500 join dates (`data/cache/backtest/added_dates.json`, rewritten
+on every fetching run, and used when the fetch fails). The index lists are still read from
+Wikipedia and fall back to `data/universe.csv` when that fails. If the join dates cannot be read
+at all, late joiners stay in every cohort, and the report says so at the top of the Verdict. `--from`/`--to` pick the
 cohort years, `--holds 1` one hold, and `--tickers DECK,ADBE` a quick smoke run. A cohort is
 evaluated only when its one-year hold has ended; a three-year result only when that hold has.
 
@@ -309,6 +312,7 @@ value_pipeline/data/            (gitignored: your holdings)
   cache/<TICKER>.json           Yahoo data, refreshed after 7 days
   cache/prices/<TICKER>.json    closes on past days, for calibration (kept; past closes do not change)
   cache/backtest/facts|prices/  EDGAR company facts and Yahoo price histories for the backtest (kept)
+  cache/backtest/added_dates.json  the S&P 500 join dates the backtest last read
   universe.csv                  last index membership fetched
   screens/screen_<date>.csv     every screened ticker with all metrics
   reports/<date>/ACTIONS.md|html, results.json, committee.json, <TICKER>/complete_report.html
