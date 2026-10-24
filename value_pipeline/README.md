@@ -298,7 +298,8 @@ bound* is the compounders the price bars turned away, and how they did. The Sens
 moves one bar at a time over a fixed grid (the others at their defaults, one-year hold): a rule
 whose result flips between neighbouring values is noise, not an edge, and a bar is not to be
 tuned to this sample. *Coverage* counts the universe, the tickers with statements and prices,
-the rows per cohort and the skipped tickers by reason.
+the rows per cohort, the skipped tickers by reason and, per cohort, how many rows' newest
+fiscal year lacks revenue, EBIT or free cash flow (a filer whose tags the map does not know).
 
 The website's Backtest page shows the newest report.
 

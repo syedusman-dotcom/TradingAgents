@@ -33,8 +33,10 @@ log = logging.getLogger(__name__)
 # Per field, the us-gaap tags filers use for it, best first; a period keeps the first tag
 # that reports it and values are never added across tags (as in ``_as_of``).
 TAGS: dict[str, tuple[str, ...]] = {
+    # SalesRevenueGoodsNet / SalesRevenueServicesNet: the usual total before ASC 606 (2018).
     "revenue": ("Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax",
-                "SalesRevenueNet", "RevenuesNetOfInterestExpense"),
+                "SalesRevenueNet", "RevenuesNetOfInterestExpense", "SalesRevenueGoodsNet",
+                "SalesRevenueServicesNet"),
     "gross_profit": ("GrossProfit",),
     "ebit": ("OperatingIncomeLoss",),
     "net_income": ("NetIncomeLoss", "ProfitLoss"),
@@ -214,13 +216,12 @@ def _fiscal_year_label(end: str) -> str:
 
 
 def _fiscal_year_ends(store: dict, as_of: str) -> list[str]:
-    """Period ends of the annual revenue (else EBIT) facts, newest first, overlapping
-    periods removed by ``_distinct_ends``."""
-    ends = {end for end, _ in _values(store, TAGS["revenue"], as_of, _ANNUAL,
-                                      sec_edgar._ANNUAL_FORMS)}
-    if not ends:
-        ends = {end for end, _ in _values(store, TAGS["ebit"], as_of, _ANNUAL,
-                                          sec_edgar._ANNUAL_FORMS)}
+    """Annual period ends of the revenue, EBIT and total-assets facts filed in annual reports,
+    newest first, overlapping periods removed by ``_distinct_ends``. The union, so a filer
+    that moves to a tag the map lacks keeps the years its other lines still report."""
+    ends: set[str] = set()
+    for tags in (TAGS["revenue"], TAGS["ebit"], TAGS["total_assets"]):
+        ends |= {end for end, _ in _values(store, tags, as_of, _ANNUAL, sec_edgar._ANNUAL_FORMS)}
     return _distinct_ends(ends)
 
 

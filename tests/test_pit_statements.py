@@ -315,3 +315,43 @@ def test_facts_for_unreadable_cache_fails_open(tmp_path, monkeypatch):
     (paths.cache / "backtest" / "facts" / "SYN.json").mkdir(parents=True)   # read raises OSError
     monkeypatch.setattr(pit.sec_edgar, "_fetch_json", lambda url: pytest.fail("fetched"))
     assert pit.facts_for("SYN", paths, fetch=False) is None
+
+
+def _switching_store(goods_tag="SalesRevenueGoodsNet") -> dict:
+    """A filer on a pre-ASC 606 revenue tag through FY2017 and the new one from FY2018."""
+    years = range(2013, 2019)
+    raw = {
+        goods_tag: _annual({y: 1000.0 + y for y in years if y <= 2017}),
+        "RevenueFromContractWithCustomerExcludingAssessedTax": _annual({2018: 3018.0}),
+        "OperatingIncomeLoss": _annual(dict.fromkeys(years, 200.0)),
+        "NetIncomeLoss": _annual(dict.fromkeys(years, 150.0)),
+        "Assets": _balance(dict.fromkeys(years, 2000.0)),
+        "StockholdersEquity": _balance(dict.fromkeys(years, 1200.0)),
+        "AssetsCurrent": _balance(dict.fromkeys(years, 800.0)),
+        "LiabilitiesCurrent": _balance(dict.fromkeys(years, 400.0)),
+    }
+    return pit.extract({"facts": {"us-gaap": raw}})
+
+
+def test_pre_asc_606_revenue_tags_keep_every_year():
+    years = pit.years_as_of(_switching_store(), "2019-06-30")
+    assert [y["fiscal_year_end"][:4] for y in years] == [str(y) for y in range(2018, 2012, -1)]
+    assert all(y["revenue"] is not None for y in years)
+    assert _year(years, "2015-12-31")["revenue"] == 3015.0
+    assert _year(years, "2018-12-31")["revenue"] == 3018.0
+    services = pit.years_as_of(_switching_store("SalesRevenueServicesNet"), "2019-06-30")
+    assert _year(services, "2016-12-31")["revenue"] == 3016.0
+    assert pit.revenue_history(_switching_store(), "2019-06-30")["2014"] == 3014.0
+
+
+def test_fiscal_years_are_the_union_over_revenue_ebit_and_assets():
+    """A tag switch to a revenue tag the map lacks never deletes the years EBIT and the balance
+    sheet still report."""
+    store = _switching_store("SomeUnmappedRevenueTag")
+    years = pit.years_as_of(store, "2019-06-30")
+    assert [y["fiscal_year_end"][:4] for y in years] == [str(y) for y in range(2018, 2012, -1)]
+    assert _year(years, "2016-12-31")["revenue"] is None
+    assert _year(years, "2016-12-31")["ebit"] == 200.0
+    # A year known only from the balance sheet still counts when it has six values.
+    del store["OperatingIncomeLoss"]
+    assert len(pit.years_as_of(store, "2019-06-30")) == 6

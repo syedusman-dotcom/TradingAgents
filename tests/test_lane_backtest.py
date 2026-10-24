@@ -808,6 +808,24 @@ def test_run_end_to_end_with_patched_caches(tmp_path, monkeypatch):
     assert len(picks) == len(result["picks"])
 
 
+def test_run_counts_rows_whose_newest_year_lacks_a_field(tmp_path, monkeypatch):
+    paths, cfg = _e2e_setup(tmp_path)
+    store = _e2e_store()
+    del store["NetCashProvidedByUsedInOperatingActivities"]       # no free cash flow
+    store["OperatingIncomeLoss"]["units"]["USD"] = [               # no EBIT for 2022
+        f for f in store["OperatingIncomeLoss"]["units"]["USD"] if f["end"] != "2022-12-31"]
+    _write_caches(paths, "AAA", store)
+    monkeypatch.setattr(backtest, "added_dates", _no_wiki)
+    result = backtest.run(paths, cfg, today=date(2024, 10, 24), fetch=False,
+                          universe_fn=_e2e_universe)
+    assert result["missing_fields"] == {
+        "2022-06-30": {"revenue": 0, "ebit": 0, "free_cash_flow": 1},
+        "2023-06-30": {"revenue": 0, "ebit": 1, "free_cash_flow": 1}}
+    coverage = backtest.markdown(result).split("## Coverage")[1]
+    assert ("- Newest year lacking a field, 2023-06-30: revenue 0, EBIT 1, free cash flow 1 "
+            "(of 2 rows)") in coverage
+
+
 def test_run_narrows_to_tickers_and_fails_open(tmp_path, monkeypatch):
     def boom(*a, **k):
         raise RuntimeError("bad facts")

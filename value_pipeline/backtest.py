@@ -650,6 +650,16 @@ def _join_dates(paths: Paths, fetch: bool, added_fn) -> dict[str, str]:
     return added
 
 
+MISSING_FIELDS = ("revenue", "ebit", "free_cash_flow")
+
+
+def _missing_fields(inputs: dict[str, tuple]) -> dict[str, int]:
+    """How many of a cohort's rows have a newest fiscal year without each of
+    ``MISSING_FIELDS``: the tag map's gaps, shown in the report's coverage."""
+    newest = [tup[0][0] for tup in inputs.values() if tup[0]]
+    return {field: sum(year.get(field) is None for year in newest) for field in MISSING_FIELDS}
+
+
 def run(paths: Paths, cfg: dict, today: date | None = None, tickers: list[str] | None = None,
         refresh: bool = False, fetch: bool = True, progress=None,
         universe_fn=market_data.universe, added_fn=None) -> dict:
@@ -700,6 +710,7 @@ def run(paths: Paths, cfg: dict, today: date | None = None, tickers: list[str] |
         "generated": today.isoformat(), "cohorts": cohorts, "holds": holds,
         "universe_size": len(members), "with_data": with_data,
         "rows_per_cohort": {c: len(rows[c]) for c in cohorts}, "picks": picks,
+        "missing_fields": {c: _missing_fields(inputs[c]) for c in cohorts},
         "summary": summarize(picks, bench, holds, names=list(rule_set)),
         "sensitivity": sensitivity(rule_set, rows, bench),
         "bound": bound_by_price(rule_set, rows, bench, holds),
@@ -845,6 +856,11 @@ def _coverage(result: dict) -> list[str]:
     if result.get("rows_per_cohort"):
         lines.append("- Rows per cohort: " + "; ".join(
             f"{c}: {n}" for c, n in result["rows_per_cohort"].items()))
+    names = {"revenue": "revenue", "ebit": "EBIT", "free_cash_flow": "free cash flow"}
+    for c, counts in (result.get("missing_fields") or {}).items():
+        lines.append(f"- Newest year lacking a field, {c}: " + ", ".join(
+            f"{names[f]} {n}" for f, n in counts.items())
+            + f" (of {result.get('rows_per_cohort', {}).get(c, 0)} rows)")
     lines.append(f"- Skipped: {len(result['skipped'])}")
     lines += [f"  - {reason}: {n}" for reason, n in sorted(reasons.items(),
                                                             key=lambda kv: (-kv[1], kv[0]))]
