@@ -37,7 +37,7 @@ Judge the debate as a disciplined value investor. Score the company on three tes
 - Buy requires all three to pass AND a margin of safety of at least ~30% AND no serious distress or accounting red flag.
 - Overweight: all three pass but margin of safety ~15-30%, or the trend check is DOWNTREND.
 - Hold: a good company at a fair price, or evidence too thin.
-- Underweight/Sell: a test clearly fails, the stock is above intrinsic value, or the original thesis is broken.
+- Underweight/Sell: Good business, Good management or Cheap clearly fails, the stock is above intrinsic value, or the original thesis is broken.
 - Never rate Buy in FREEFALL; wait for BASING.
 Think in a 1-3 year horizon. Conflicting arguments alone are not a reason to Hold; the debate always contains conflict, so decide which side the evidence supports. Weigh the bull and bear cases on their merits, independent of which side spoke first or last.
 

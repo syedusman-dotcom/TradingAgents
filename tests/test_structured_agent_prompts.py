@@ -79,6 +79,8 @@ def test_research_manager_prompt_states_constraint():
     assert ("Also judge Still investing (R&D and growth capex held or rising, product evidence from the "
             "filings) and say whether the company is investing or harvesting; it does not change these "
             "bars.") in " ".join(_prompt_text(captured["prompt"]).split())
+    assert ("Underweight/Sell: Good business, Good management or Cheap clearly fails, the stock is above "
+            "intrinsic value") in " ".join(_prompt_text(captured["prompt"]).split())
 
 
 @pytest.mark.unit
