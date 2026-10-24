@@ -120,7 +120,8 @@ summary of them. `get_quarterly_report` fetches management's discussion and anal
 liquidity) from the latest 10-Q on SEC EDGAR; `get_earnings_release` fetches the latest
 earnings release (exhibit 99.1 of the 8-K reporting results). They cover US filers only: for a European, UK, Canadian, Japanese or Korean
 name the tools say so and the analysts carry on with Yahoo's statements and news. The analysts
-are told to quote these over any other source and to name a number's source.
+are told these are verified sources, to quote them with the filing date and to name a number's
+source.
 
 The worksheet gains two blocks. `## Last eight quarters (newest first)` shows revenue, margins
 and cash flow quarter by quarter, so a turn in the trend is visible without opening the
@@ -220,13 +221,13 @@ often the price ended below the bear case or above the bull case against the pro
 agents gave those cases. One verdict line per lane, such as `compounder: 3 decisions, none
 past 90 days yet`.
 
-The command fetches the closes it needs from Yahoo once and caches them in
+The command fetches the closes it needs from Yahoo, one request per ticker, and caches them in
 `data/cache/prices/`; the page reads only that cache, so it is cheap to reload and blank until
 the command (or a later run of it) has fetched the closes. The Saturday script runs the command
 after the watch, so the page stays current. It stays empty until a decision is a month old (the
-30-day close does not exist before then); `--horizon` picks which of the four horizons the
-scores and verdicts use. A few decisions say little: read the
-counts before the shares.
+30-day close does not exist before then). `--horizon` only picks which of the four horizons
+the decisions table shows; the scores and verdicts always use 180 days (365 days for "reached
+value"). A few decisions say little: read the counts before the shares.
 
 ## Files
 

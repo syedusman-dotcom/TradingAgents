@@ -97,6 +97,46 @@ def test_horizons_use_the_last_close_on_or_before(tmp_path, monkeypatch):
 
 
 @pytest.mark.unit
+def test_same_day_rerun_counts_once_and_the_newest_stands(tmp_path):
+    paths = Paths(tmp_path / "data")
+    _write(paths, "2025-01-10", [{"ticker": "ADBE", "rating": "Hold", "error": None,
+                                  "price": 100.0, "intrinsic_value": 110.0},
+                                 {"ticker": "CI", "rating": "Sell", "error": None, "price": 50.0}])
+    _write(paths, "2025-01-10-2", [{"ticker": "ADBE", "rating": "Buy", "error": None,
+                                    "price": 101.0, "intrinsic_value": 130.0}])
+    rows = calibration.rows(paths, today=date(2026, 10, 24), price_fn=_price_fn)
+    assert [(r["folder"], r["ticker"]) for r in rows] == [
+        ("2025-01-10-2", "ADBE"), ("2025-01-10", "CI")]
+    assert (rows[0]["rating"], rows[0]["price"], rows[0]["value"]) == ("Buy", 101.0, 130.0)
+
+
+@pytest.mark.unit
+def test_default_prices_fetch_one_series_per_ticker(tmp_path, monkeypatch):
+    calls = []
+
+    def closes(ticker, start, end=None):
+        calls.append((ticker, start, end))
+        days = pd.date_range("2024-11-20", "2026-01-31", freq="D")
+        return pd.Series([PRICES.get(ticker, 30.0)] * len(days), index=[d.date() for d in days])
+
+    monkeypatch.setattr(market_data, "closes_between", closes)
+    paths = _reviews(tmp_path)
+    rows = calibration.rows(paths, today=date(2026, 1, 20))
+    assert sorted(calls) == [("ADBE", "2025-01-30", "2026-01-20"),
+                             ("CI", "2025-01-30", "2026-01-20"),
+                             ("G", "2024-11-21", "2026-01-20")]
+    adbe = rows[0]
+    assert all(adbe[f"h{n}"]["price"] == 125.0 for n in calibration.HORIZONS)
+    assert rows[2]["price"] == 33.0   # G's price then, from the same series
+    cached = json.loads((paths.cache / "prices" / "ADBE.json").read_text())
+    assert set(cached) == {"2025-02-09", "2025-04-10", "2025-07-09", "2026-01-10"}
+    # A second refresh finds everything cached and fetches nothing.
+    calls.clear()
+    calibration.rows(paths, today=date(2026, 1, 20))
+    assert calls == []
+
+
+@pytest.mark.unit
 def test_future_horizons_are_none(tmp_path):
     asked = []
 
@@ -176,9 +216,10 @@ def _web(tmp_path, paths):
 
 @pytest.mark.unit
 def test_calibration_page_renders_empty_and_populated(tmp_path, monkeypatch):
-    # The page reads the price cache only; a live fetch would fail this test.
+    # The page reads the price cache only: Yahoo is never asked.
+    live = []
     monkeypatch.setattr(market_data, "closes_between",
-                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("live call")))
+                        lambda *a, **k: live.append(a) or pd.Series(dtype=float))
     paths = Paths(tmp_path / "data")
     client = _web(tmp_path, paths)
     r = client.get("/calibration")
@@ -196,6 +237,7 @@ def test_calibration_page_renders_empty_and_populated(tmp_path, monkeypatch):
     assert r.status_code == 200 and "No decisions old enough yet" not in r.text
     assert "ADBE" in r.text and "+25%" in r.text and "compounder: 1 decision" in r.text
     assert 'id="calibration"' in r.text
+    assert live == []
 
 
 @pytest.mark.unit

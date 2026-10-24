@@ -208,6 +208,44 @@ def close_on_or_before(ticker: str, day: str, cache_dir: Path | None = None,
     return price
 
 
+
+def fill_close_cache(ticker: str, days, cache_dir: Path | None = None,
+                     today: date | None = None) -> None:
+    """Cache the close on or before each past day in ``days`` from one Yahoo request.
+
+    One ``closes_between`` call from ten days before the earliest uncached day to ``today``
+    replaces a call per day; ``close_on_or_before`` then finds them in the cache. Days already
+    cached, today or later, or with no close in the ten days up to them are left alone.
+    Fail-open: a failed request caches nothing.
+    """
+    cache = (cache_dir or Paths().cache / "prices") / f"{ticker}.json"
+    try:
+        known = json.loads(cache.read_text(encoding="utf-8")) if cache.exists() else {}
+    except (OSError, ValueError):
+        known = {}
+    stop = min(today or date.today(), date.today())
+    wanted = sorted({d for d in days if d not in known and date.fromisoformat(d) < stop})
+    if not wanted:
+        return
+    start = (date.fromisoformat(wanted[0]) - timedelta(days=10)).isoformat()
+    try:
+        s = closes_between(ticker, start, (today or date.today()).isoformat())
+    except Exception as exc:  # noqa: BLE001 - Yahoo raises many types
+        log.warning("no closes for %s from %s: %s", ticker, start, exc)
+        return
+    added = False
+    for d in wanted:
+        day = date.fromisoformat(d)
+        window = [float(v) for k, v in s.items() if day - timedelta(days=10) <= k <= day]
+        if window:
+            known[d], added = window[-1], True
+    if added:
+        try:
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            cache.write_text(json.dumps(known, sort_keys=True), encoding="utf-8")
+        except OSError as exc:
+            log.warning("could not cache the closes for %s: %s", ticker, exc)
+
 def throttle(seconds: float) -> None:
     if seconds > 0:
         time.sleep(seconds)

@@ -58,43 +58,67 @@ def price_fn_for(paths: Paths, fetch: bool = True):
 def rows(paths: Paths, today: date | None = None, price_fn=None) -> list[dict]:
     """One row per decision in every real review, newest review first.
 
-    ``price_fn(ticker, day) -> float | None`` gives the close on or before a day (by default the
-    cached Yahoo close). Each ``h30``..``h365`` is None while that day is still in the future
-    or no close is known. A row without a recorded price takes the close on the review day.
+    ``price_fn(ticker, day) -> float | None`` gives the close on or before a day. By default it
+    is the cached Yahoo close, and every close still missing is fetched first with one request
+    per ticker. Each ``h30``..``h365`` is None while that day is still in the future or no close
+    is known. A row without a recorded price takes the close on the review day. A ticker
+    reviewed twice on one day counts once: the newest re-run stands.
     """
     today = today or date.today()
-    price_fn = price_fn or price_fn_for(paths)
-    out = []
-    for folder in review_dirs(paths):
+    decisions, seen = [], set()
+    for folder in review_dirs(paths):   # newest first, so a same-day re-run comes first
         f = folder / "results.json"
         try:
             results = json.loads(f.read_text(encoding="utf-8")) if f.exists() else []
         except (OSError, ValueError):
             continue
         day = folder.name[:10]
-        reviewed = date.fromisoformat(day)
         for r in results:
             if not isinstance(r, dict) or r.get("error") or not r.get("ticker"):
                 continue
-            ticker, sc = r["ticker"], r.get("scenarios")
-            price = _num(r.get("price"))
-            if price is None and reviewed <= today:
-                price = price_fn(ticker, day)
-            value, bear = _num(r.get("intrinsic_value")), _leg(sc, "bear", "value")
-            entry = _num(r.get("entry_price"))
-            row = {"date": day, "folder": folder.name, "ticker": ticker, "name": r.get("name"),
-                   "lane": r.get("lane"), "rating": r.get("rating"), "price": price, "value": value,
-                   "formula_value": _num(r.get("formula_value")), "bear": bear,
-                   "base": _leg(sc, "base", "value"), "bull": _leg(sc, "bull", "value"),
-                   "bear_probability": _leg(sc, "bear", "probability"),
-                   "bull_probability": _leg(sc, "bull", "probability"),
-                   "entry_price": entry, "expected_return": _num(r.get("expected_return"))}
-            for n in HORIZONS:
-                at = reviewed + timedelta(days=n)
-                later = price_fn(ticker, at.isoformat()) if at <= today else None
-                row[f"h{n}"] = _horizon(price, later, value, bear, entry)
-            out.append(row)
+            if (day, r["ticker"]) in seen:
+                continue
+            seen.add((day, r["ticker"]))
+            decisions.append((folder.name, day, r))
+    if price_fn is None:
+        _prefetch(paths, decisions, today)
+        price_fn = price_fn_for(paths)
+    out = []
+    for folder, day, r in decisions:
+        reviewed = date.fromisoformat(day)
+        ticker, sc = r["ticker"], r.get("scenarios")
+        price = _num(r.get("price"))
+        if price is None and reviewed <= today:
+            price = price_fn(ticker, day)
+        value, bear = _num(r.get("intrinsic_value")), _leg(sc, "bear", "value")
+        entry = _num(r.get("entry_price"))
+        row = {"date": day, "folder": folder, "ticker": ticker, "name": r.get("name"),
+               "lane": r.get("lane"), "rating": r.get("rating"), "price": price, "value": value,
+               "formula_value": _num(r.get("formula_value")), "bear": bear,
+               "base": _leg(sc, "base", "value"), "bull": _leg(sc, "bull", "value"),
+               "bear_probability": _leg(sc, "bear", "probability"),
+               "bull_probability": _leg(sc, "bull", "probability"),
+               "entry_price": entry, "expected_return": _num(r.get("expected_return"))}
+        for n in HORIZONS:
+            at = reviewed + timedelta(days=n)
+            later = price_fn(ticker, at.isoformat()) if at <= today else None
+            row[f"h{n}"] = _horizon(price, later, value, bear, entry)
+        out.append(row)
     return out
+
+
+def _prefetch(paths: Paths, decisions: list, today: date) -> None:
+    """Every (ticker, day) the rows will ask for, fetched as one series per ticker."""
+    needed: dict[str, set[str]] = {}
+    for _, day, r in decisions:
+        reviewed = date.fromisoformat(day)
+        days = needed.setdefault(r["ticker"], set())
+        if _num(r.get("price")) is None and reviewed <= today:
+            days.add(day)
+        days.update((reviewed + timedelta(days=n)).isoformat() for n in HORIZONS
+                    if reviewed + timedelta(days=n) <= today)
+    for ticker, days in sorted(needed.items()):
+        market_data.fill_close_cache(ticker, days, cache_dir=paths.cache / "prices", today=today)
 
 
 # --- scores ----------------------------------------------------------------------------------
