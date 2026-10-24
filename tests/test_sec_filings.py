@@ -293,15 +293,15 @@ def test_part_ii_item_2_is_never_taken_for_the_mdna(edgar):
 @pytest.mark.unit
 def test_an_empty_extraction_is_cached_and_a_new_parser_version_rereads(edgar, monkeypatch):
     docs, fetched = edgar
-    assert sec_filings._PARSER_VERSION == 3
+    assert sec_filings._PARSER_VERSION == 4
     docs["000002134426000041/q2.htm"] = _html(BANK_10Q)
     assert "could not be located" in sec_filings.latest_10q_mdna("KO", "2026-08-01")
     [cached] = sec_filings._cache_dir().glob("10q_*")
-    assert cached.name.endswith("_v3.txt") and cached.read_text() == ""
+    assert cached.name.endswith("_v4.txt") and cached.read_text() == ""
     reads = len(fetched)
     assert "could not be located" in sec_filings.latest_10q_mdna("KO", "2026-08-01")
     assert len(fetched) == reads   # the empty result is served from the cache
-    monkeypatch.setattr(sec_filings, "_PARSER_VERSION", 4)
+    monkeypatch.setattr(sec_filings, "_PARSER_VERSION", 5)
     docs["000002134426000041/q2.htm"] = _html(MDNA_10Q)
     assert "Net revenue rose 6%" in sec_filings.latest_10q_mdna("KO", "2026-08-01")
 
@@ -380,7 +380,7 @@ Rates.
 
 def _ten_k(edgar, text=TEN_K):
     docs, _ = edgar
-    docs["000002134426000010/k.htm"] = _html(text.replace("–", "&#8211;"))  # as EDGAR encodes it
+    docs["000002134426000010/k.htm"] = _html(text)   # raw UTF-8, no charset declared
     return sec_filings.get_annual_report("KO", "2026-03-01")
 
 
@@ -408,9 +408,12 @@ def test_business_heading_does_not_match_item_1a():
 @pytest.mark.unit
 def test_innovation_lines_kept_beyond_the_cut(edgar):
     assert sec_filings.BUSINESS_CHARS == 6_000
+    early = "We launched a sparkling water brand in 2024."
     late = "In 2025 we introduced a new product line of zero-sugar drinks."
-    text = TEN_K.replace("Item 1A. Risk Factors\nDemand",
-                         "Distribution filler. " * 400 + "\n" + late + "\nItem 1A. Risk Factors\nDemand")
+    text = TEN_K.replace("We make drinks and sell them in 200 countries.",
+                         "We make drinks and sell them in 200 countries.\n" + early).replace(
+        "Item 1A. Risk Factors\nDemand",
+        "Distribution filler. " * 400 + "\n" + late + "\nItem 1A. Risk Factors\nDemand")
     out = _ten_k(edgar, text)
     order = [out.index(h) for h in ("## Business (Item 1)", "## Products and innovation lines",
                                     "## Risk factors (Item 1A)",
@@ -420,6 +423,7 @@ def test_innovation_lines_kept_beyond_the_cut(edgar):
     assert late not in business and "more characters not shown]" in business
     innovation = rest.split("## Risk factors (Item 1A)")[0]
     assert late in innovation and "Distribution filler" not in innovation
+    assert early in business and early not in innovation      # inside the cut: not repeated
     assert "6,000" in out.splitlines()[1]
 
 
@@ -435,3 +439,16 @@ def test_sections_cache_name_is_versioned(edgar, tmp_path):
     _ten_k(edgar)
     names = [p.name for p in (tmp_path / "sec_edgar").iterdir()]
     assert names == [f"10k_{CIK}_0000021344-26-000010_v2.json"]
+
+
+@pytest.mark.unit
+def test_an_undeclared_charset_is_read_as_utf8():
+    document = "<html><body><p>ITEM 1 – BUSINESS</p><p>We make drinks’ bottles.</p></body></html>"
+    text = sec_filings._plain_text(document.encode("utf-8"))
+    assert text.splitlines() == ["ITEM 1 – BUSINESS", "We make drinks’ bottles."]
+    assert sec_filings._plain_text(document.encode("cp1252")).splitlines()[0] == "ITEM 1 \x96 BUSINESS"
+    declared = document.replace("<html>", '<html><head><meta charset="windows-1252"></head>')
+    assert sec_filings._plain_text(declared.encode("cp1252")).splitlines()[0] == "ITEM 1 – BUSINESS"
+    body = text.replace("We make", "We make " + "drinks. " * 80) + "\nItem 1A. Risk Factors"
+    found = sec_filings.section_spans(body)
+    assert "Business (Item 1)" in found

@@ -112,10 +112,25 @@ def section_spans(text: str) -> dict[str, str]:
 _BLOCKS = ("p", "div", "br", "tr", "li", "h1", "h2", "h3", "h4", "h5", "h6", "table")
 
 
+# A charset or XML encoding declared near the top of the document; lxml honours it.
+_DECLARED_ENCODING = re.compile(rb"charset\s*=|<\?xml[^>]*encoding", re.I)
+
+
+def _decoded(document: bytes) -> bytes | str:
+    """The document as lxml should read it: as declared when it declares a charset, else UTF-8
+    (lxml would assume latin-1 and garble an en dash), else the bytes for latin-1."""
+    if _DECLARED_ENCODING.search(document[:4096]):
+        return document
+    try:
+        return document.decode("utf-8")
+    except UnicodeDecodeError:
+        return document
+
+
 def _parse(document: bytes):
     """An HTML tree; an empty or unparseable document is EDGAR failing to serve it."""
     try:
-        return lxml_html.fromstring(document)
+        return lxml_html.fromstring(_decoded(document))
     except (lxml_etree.ParserError, ValueError) as exc:
         raise VendorUnavailableError(f"SEC EDGAR returned an unreadable document ({exc})") from exc
 
@@ -198,7 +213,7 @@ def get_annual_report(ticker: str, as_of_date: str | None = None) -> str:
     lines = [f"# Annual report (10-K) for {ticker.upper()}, filed {filing['filed']}",
              "Management's own words, as filed. Cite it for what the company is building, for risks "
              f"and for why results moved; the Business section is cut to its first {BUSINESS_CHARS:,} "
-             f"characters and followed by its product and innovation paragraphs, kept whole; each "
+             f"characters and followed by its product and innovation paragraphs past the cut, kept whole; each "
              f"other section is cut to its first {SECTION_CHARS:,} characters.", ""]
     if not found:
         lines.append("The filing's business, risk factors and discussion sections could not be located in its text.")
@@ -223,10 +238,12 @@ _INNOVATION = re.compile(r"\b(" + "|".join(re.escape(w) for w in INNOVATION_WORD
 
 
 def _innovation_lines(business: str) -> list[str]:
-    """The Business section's paragraphs naming a product, launch, pipeline or R&D, in order."""
-    found = []
+    """The Business section's paragraphs naming a product, launch, pipeline or R&D that end past
+    ``BUSINESS_CHARS`` (those inside the cut are already shown), in order."""
+    found, end = [], -1
     for paragraph in business.split("\n"):
-        if _INNOVATION.search(paragraph) and paragraph not in found:
+        end += len(paragraph) + 1
+        if end > BUSINESS_CHARS and _INNOVATION.search(paragraph) and paragraph not in found:
             found.append(paragraph)
     return found
 
@@ -237,7 +254,7 @@ def _cut(body: str, limit: int) -> str:
 
 
 # Part of every extracted-text cache key: raise it when extraction changes, so filings are re-read.
-_PARSER_VERSION = 3
+_PARSER_VERSION = 4    # 4: an undeclared charset is read as UTF-8
 
 
 def _cached_text(name: str, build) -> str:
