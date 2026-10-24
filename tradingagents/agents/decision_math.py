@@ -301,6 +301,12 @@ def record_excerpt(report: str) -> str:
     return _section_excerpt(report, "## Record and inflection", last=True)
 
 
+def innovation_excerpt(report: str) -> str:
+    """The report's ``## Innovation and reinvestment`` section; the last one, since the tool's is
+    appended after the analyst's prose. Empty when the report has none."""
+    return _section_excerpt(report, "## Innovation and reinvestment", last=True)
+
+
 # Each ``- Label value`` line of the Record and inflection section holds one number or n/a.
 _RECORD_LABELS = {
     "roic_years_above_20": "ROIC years above 20%",

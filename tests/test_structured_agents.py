@@ -708,6 +708,20 @@ def test_pm_prompt_without_a_worksheet_has_no_worksheet_block():
         {**_make_pm_state(), "fundamentals_report": "## Ratios\nx"})
     assert "**Valuation worksheet (formula value):**" not in captured["prompt"]
     assert "Answer the pre-mortem explicitly" not in captured["prompt"]
+    assert "**Innovation and reinvestment:**" not in captured["prompt"]
+
+
+@pytest.mark.unit
+def test_pm_prompt_carries_the_innovation_section():
+    from tests.test_decision_math import _good_decision
+
+    prompts = []
+    llm, _ = _sequenced_pm_llm(prompts, [_good_decision()])
+    report = ("## Valuation worksheet (per share; 5-year averages)\n- **Range base 80.33**\n"
+              "## Innovation and reinvestment\n\n- R&D / revenue 12.0%\n- Harvesting signal no\n## Peers\ny")
+    create_portfolio_manager(llm)({**_make_pm_state(), "fundamentals_report": report})
+    assert ("**Innovation and reinvestment:**\n## Innovation and reinvestment\n\n- R&D / revenue 12.0%\n"
+            "- Harvesting signal no\n") in prompts[0]
 
 
 @pytest.mark.unit
@@ -959,10 +973,11 @@ def test_fundamentals_report_carries_the_tools_consensus_section(monkeypatch):
 
     from tests.test_decision_math import CONSENSUS_SECTION
     from tradingagents.agents.analysts import fundamentals_analyst
-    from tradingagents.agents.decision_math import consensus_excerpt, record_excerpt
+    from tradingagents.agents.decision_math import consensus_excerpt, innovation_excerpt, record_excerpt
 
     tool_text = ("# Verified value metrics\n## Valuation worksheet (per share)\n\n- Price today 50.00\n\n"
-                 "## Record and inflection\n\n- Revenue CAGR 5.0%\n\n" + CONSENSUS_SECTION)
+                 "## Record and inflection\n\n- Revenue CAGR 5.0%\n\n"
+                 "## Innovation and reinvestment\n\n- R&D / revenue 12.0%\n\n" + CONSENSUS_SECTION)
     messages = [AIMessage(content="", tool_calls=[{"name": "get_value_metrics", "args": {}, "id": "1"}]),
                 ToolMessage(content=tool_text, name="get_value_metrics", tool_call_id="1")]
     prose = "## 3. Is it cheap? Yes"
@@ -973,6 +988,7 @@ def test_fundamentals_report_carries_the_tools_consensus_section(monkeypatch):
     report = fundamentals_analyst.create_fundamentals_analyst(MagicMock())(state)["fundamentals_report"]
     assert consensus_excerpt(report) == CONSENSUS_SECTION
     assert record_excerpt(report) == "## Record and inflection\n\n- Revenue CAGR 5.0%"
+    assert innovation_excerpt(report) == "## Innovation and reinvestment\n\n- R&D / revenue 12.0%"
 
 
 @pytest.mark.unit

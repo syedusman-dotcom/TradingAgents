@@ -18,6 +18,7 @@ from tradingagents.agents.context import (
 from tradingagents.agents.decision_math import (
     consensus_excerpt,
     decision_checks,
+    innovation_excerpt,
     record_excerpt,
     worksheet_base,
     worksheet_excerpt,
@@ -61,6 +62,7 @@ def create_portfolio_manager(llm):
         report = state.get("fundamentals_report", "")
         excerpt = worksheet_excerpt(report)
         record = record_excerpt(report)
+        innovation = innovation_excerpt(report)
         consensus = consensus_excerpt(report)
         base = worksheet_base(excerpt)
         price = worksheet_price(excerpt)
@@ -70,6 +72,7 @@ def create_portfolio_manager(llm):
         worksheet_block = (
             f"**Valuation worksheet (formula value):**\n{excerpt}\n" if excerpt else ""
         ) + (f"**Record and inflection (the lanes' numbers):**\n{record}\n" if record else "") + (
+            f"**Innovation and reinvestment:**\n{innovation}\n" if innovation else "") + (
             f"**Consensus (Yahoo estimates):**\n{consensus}\n" if consensus else "")
 
         prompt = f"""As the Portfolio Manager, synthesize the risk analysts' debate and deliver the final trading decision.

@@ -616,6 +616,17 @@ def test_worksheet_consensus_reads_the_five_labels():
 
 
 @pytest.mark.unit
+def test_innovation_excerpt_returns_exactly_the_section():
+    from tradingagents.agents.decision_math import innovation_excerpt
+
+    section = "## Innovation and reinvestment\n\n- R&D / revenue 12.0%\n- Harvesting signal no"
+    report = ("prose\n## Innovation and reinvestment\n- analyst copy\n## Record and inflection\n- x\n\n"
+              + section + "\n\n" + CONSENSUS_SECTION)
+    assert innovation_excerpt(report) == section
+    assert innovation_excerpt("no section") == ""
+
+
+@pytest.mark.unit
 def test_decision_checks_ask_for_a_consensus_view_only_when_the_worksheet_has_estimates():
     problem = ("The worksheet shows consensus estimates; say where your thesis differs from them and why "
                "(Consensus field)")
