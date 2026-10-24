@@ -123,6 +123,13 @@ name the tools say so and the analysts carry on with Yahoo's statements and news
 are told these are verified sources, to quote them with the filing date and to name a number's
 source.
 
+`get_annual_report` gives the fundamentals analyst the latest 10-K in the same way: the Business
+section (Item 1, its first 6,000 characters), then `## Products and innovation lines` (the
+paragraphs past that cut that mention new products, launches, innovation, research and
+development, a pipeline, patents or a roadmap, kept whole, or "None past the cut."), then Risk factors and
+management's discussion (MD&A). The analyst quotes the Business section for what the company is
+building, with the filing date.
+
 The worksheet gains two blocks. `## Last eight quarters (newest first)` shows revenue, margins
 and cash flow quarter by quarter, so a turn in the trend is visible without opening the
 filings. `## Consensus (Yahoo estimates)` shows what analysts expect for growth and the price
@@ -144,17 +151,23 @@ Four checks look for profits that are not backed by cash: the accruals ratio (ne
 
 The report shows where five years of free cash went (dividends, buybacks, acquisitions, debt paid down) and what the company paid per share it bought back, next to the average share price that year. Management that buys back stock below its value is creating wealth for you; buying back near the top is not.
 
+### Innovation and reinvestment
+
+The worksheet's `## Innovation and reinvestment` section asks whether the company is building its next decade or harvesting the last one: R&D / revenue (latest and five-year average), R&D growth against revenue growth over the same span, gross profit added per R&D dollar, growth capex (capex beyond depreciation) / revenue over three years, growth spend (R&D + growth capex + acquisitions) / operating cash flow over three years, the return on incremental capital over three years, and a harvesting signal. R&D comes from Yahoo's income statement when the company reports it; when it does not (DECK, HRB) the R&D lines read `n/a` and the section says to judge reinvestment from growth capex, acquisitions and the filings. The harvesting signal is `yes` when the latest year cut R&D by a point of revenue or ran capex below depreciation while the EBIT margin rose. Any number that cannot be computed reads `n/a`. The fundamentals analyst sets these numbers against the product evidence in the 10-K's Business section and the latest 10-Q, and concludes "investing" or "harvesting".
+
 ### Expected return
 
 Each stock gets a 7-year expected annual return: what it pays out (dividends and buybacks as a yield), plus the growth its returns on capital can fund (capped by the base rate and at 10%), plus or minus the multiple moving back to a normal EV/EBIT (at most ±5 points a year). The normal multiple is the sector's median in the screen and the company's own history in the agents' report, so the two figures can differ. The screen still picks candidates by Magic Formula rank; `er_rank` sits next to it, ACTIONS shows each stock's expected return, and the investment committee ranks the reviewed stocks by it.
 
 ### Pre-mortem
 
-After the risk debate, one extra step imagines it is three years later and the position has lost 40%, and writes down the most likely cause, the evidence visible today, and the one metric that would show it first. The Portfolio Manager has to answer it before deciding.
+After the risk debate, one extra step imagines it is three years later and the position has lost 40%, and writes down the most likely cause, the evidence visible today, the one metric that would show it first, and the disruption exposure: who or what could make the product unnecessary, and the first visible sign that it is happening. The Portfolio Manager has to answer it before deciding.
 
 ### The decision checklist
 
-The Portfolio Manager's decision is no longer just a rating and a thesis. It gives a PASS or FAIL with a reason for each test (good business, good management, cheap), any serious red flags, 3 to 6 kill criteria (verifiable facts that would prove the thesis wrong and mean selling), an entry price to buy at or below, bear/base/bull scenarios whose probabilities add up to 100% with the expected value and the upside against the downside, a value bridge that starts at the worksheet's formula value and shows every adjustment that takes it to the price target, and its answer to the pre-mortem. The decision is checked in code (the bridge adds up, the probabilities sum to 1, an entry price is there unless it is a Sell); if something is off, the Portfolio Manager gets one chance to fix it, and anything still wrong is printed under **Unresolved Checks**.
+The Portfolio Manager's decision is no longer just a rating and a thesis. It gives a PASS or FAIL with a reason for each test (good business, good management, still investing, cheap), any serious red flags, 3 to 6 kill criteria (verifiable facts that would prove the thesis wrong and mean selling), an entry price to buy at or below, bear/base/bull scenarios whose probabilities add up to 100% with the expected value and the upside against the downside, a value bridge that starts at the worksheet's formula value and shows every adjustment that takes it to the price target, and its answer to the pre-mortem. The decision is checked in code (the bridge adds up, the probabilities sum to 1, an entry price is there unless it is a Sell); if something is off, the Portfolio Manager gets one chance to fix it, and anything still wrong is printed under **Unresolved Checks**.
+
+Still investing passes when R&D and growth capex are held or rising, the return on incremental capital is above the cost of capital, and the filings show products or a pipeline; a PASS needs a quoted filing or a number. It must PASS for the compounder lane. Elsewhere it is advisory: a FAIL does not stop the rating, but the thesis must say what is being harvested and for how long the margin can last, and one kill criterion names the reinvestment level (R&D or capex as a share of revenue) below which the thesis is wrong. Older decisions without the line still load and show their three tests.
 
 ### Investment committee
 
@@ -168,10 +181,10 @@ ACTIONS now shows company names next to tickers, the expected return of each new
 
 A decision names the lane its evidence supports; the Portfolio Manager picks value first, compounder when the record qualifies, inflection only with verified demand evidence. The numeric parts of each bar are checked in code.
 
-- **Value**: the original rules (cheap on five-year averages, the three verdicts, margin of safety).
+- **Value**: the original rules (cheap on five-year averages, the good business, good management and cheap verdicts, margin of safety; still investing is judged but does not bar the rating).
 - **Compounder**: a business that has earned high returns for years and keeps growing its cash. Buy needs ROIC including goodwill ≥ 15% in every counted year (at least four; acquisitions count as capital), revenue growth ≥ 8%/yr over 10 years (5 when 10 are unavailable, flagged), free cash flow growing ≥ 5%/yr over ≥ 3 years; the price's implied growth no higher than the earned growth (revenue CAGR capped at the cohort base rate) or the sustainable growth, whichever is higher; expected return = yield + earned growth + reversion (≤ 0) ≥ 12%; upside/downside ≥ 1.5 and a price ≤ 1.15× the worksheet base. A company that returns all its cash in buybacks has a sustainable growth of 0% but can still qualify on its free cash flow and earned growth.
 - **Inflection**: a business whose earnings are stepping up now. Buy needs TTM EBIT ≥ 1.5× the five-year average, revenue growth in the latest quarter ≥ 10 points above the last fiscal year's (Yahoo serves five quarters, too few to compare two quarters' year-on-year growth), incremental ROIC ≥ 20%, verified demand evidence (customer capex, backlog or pricing, with a source), a weighted margin of safety ≥ 20% on the run-rate value, upside/downside ≥ 2, a bear case of at least 30%, no FREEFALL, and a demand indicator among the kill criteria. The worksheet shows the run-rate value (TTM earnings growing for three years, then the worksheet's 3% base growth) only when TTM EBIT is ≥ 1.3× the five-year average or the acceleration is ≥ 10 points; otherwise it says `not shown` and the stock is valued on the worksheet base.
-- **Verdicts**: a compounder or inflection Buy or Overweight allows no red flag; both need good business and good management to pass; the Cheap test is replaced by the lane's own price bars (for the compounder: price ≤ 1.15× base, expected return ≥ 12%, upside/downside ≥ 1.5), so Cheap may be FAIL. A `--tickers` or holding row built off the screen gets the same hard filters and lane hints, so its pipeline note names the hint. The inflection lane's margin-of-safety and upside/downside bars apply to an Overweight too. The value lane's `**Lane**:` line carries no numbers: its bars are the checklist and the scenarios.
+- **Verdicts**: a compounder or inflection Buy or Overweight allows no red flag; both need good business and good management to pass, and a compounder also needs still investing to pass (an inflection is investing by definition, and its demand evidence covers it); the Cheap test is replaced by the lane's own price bars (for the compounder: price ≤ 1.15× base, expected return ≥ 12%, upside/downside ≥ 1.5), so Cheap may be FAIL. A `--tickers` or holding row built off the screen gets the same hard filters and lane hints, so its pipeline note names the hint. The inflection lane's margin-of-safety and upside/downside bars apply to an Overweight too. The value lane's `**Lane**:` line carries no numbers: its bars are the checklist and the scenarios.
 - **Caps**: a lane Buy is sized at half the target weight (Overweight a quarter); compounders stop at 30% and inflection names at 20% of the portfolio (`sizing.lane_caps`, `sizing.lane_size_factor`).
 
 The screen's `Lane hint` column (and the Screen page's filter) points at names worth a look; it is a hint, not the lane:
