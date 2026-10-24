@@ -8,6 +8,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 BUY_RATINGS = {"Buy", "Overweight"}
+# A lane in ``sizing.lane_buy_only`` buys and adds on a Buy only: its Overweight is watched, not sized
+# (the 2026-10-24 backtest: compounder Buys beat SPY, compounder Overweights lost to it).
+BUY_ONLY_REASON = "; Overweight in a Buy-only lane: watch, no buy or add"
 
 
 @dataclass
@@ -165,9 +168,13 @@ def plan(decisions: list[Decision], cash: float, sizing: dict,
     A lane buy is sized at ``lane_size_factor`` of a value buy and stops at ``lane_caps``.
     """
     actions = [base_action(d) for d in decisions]
+    buy_only = set(sizing.get("lane_buy_only", ()))
     for a in actions:
         if a.decision.unsizable:
             a.flags.append(f"quoted in {a.decision.currency}: size by hand")
+        if a.decision.lane in buy_only and a.decision.rating == "Overweight" and a.action == "BUY":
+            a.action = "SKIP"
+            a.reason += BUY_ONLY_REASON
     held_value = sum(d.held_shares * (d.price_usd or 0.0) for d in decisions if d.held) + \
         sum(o[1] for o in others)
     total_value = cash + held_value
@@ -223,6 +230,9 @@ def plan(decisions: list[Decision], cash: float, sizing: dict,
         if a.action == "BUY":
             wants.append((0 if d.rating == "Buy" else 2, a, target_value * size_factor(d)))
         elif a.held and a.action == "KEEP" and d.rating in BUY_RATINGS and not unresolved(d):
+            if d.lane in buy_only and d.rating == "Overweight":
+                a.reason += BUY_ONLY_REASON
+                continue
             if d.trend == "FREEFALL":
                 a.reason += "; no adding in FREEFALL"
                 continue

@@ -1371,6 +1371,25 @@ def test_lane_buy_is_sized_at_half_and_capped_by_the_lane_cap():
 
 
 @pytest.mark.unit
+def test_buy_only_lane_watches_an_overweight_and_still_buys_a_buy():
+    sizing = {**SIZING, "lane_buy_only": ["compounder"]}
+    new_ow = Decision("OW", "Overweight", price=10.0, lane="compounder", margin_of_safety=0.2)
+    new_buy = Decision("BUY", "Buy", price=10.0, lane="compounder", margin_of_safety=0.3)
+    held_ow = Decision("OWN", "Overweight", price=10.0, held_shares=1, lane="compounder")
+    value_ow = Decision("VAL", "Overweight", price=10.0, lane="value")
+    actions, _ = plan([new_ow, new_buy, held_ow, value_ow], cash=10_000.0, sizing=sizing)
+    by = {a.ticker: a for a in actions}
+    assert by["OW"].action == "SKIP" and by["OW"].amount is None
+    assert by["OW"].reason == "Rated Overweight; Overweight in a Buy-only lane: watch, no buy or add"
+    assert by["BUY"].action == "BUY" and by["BUY"].amount == pytest.approx(500.5)   # half of 10% of 10,010
+    assert by["OWN"].action == "KEEP" and by["OWN"].amount is None and "watch, no buy or add" in by["OWN"].reason
+    assert by["VAL"].action == "BUY" and by["VAL"].amount == pytest.approx(500.5)   # a value Overweight: half size
+    # Without the setting the compounder Overweight is bought at a quarter of the target, as before.
+    actions, _ = plan([new_ow], cash=10_000.0, sizing=SIZING)
+    assert actions[0].action == "BUY" and actions[0].amount == pytest.approx(250.0)
+
+
+@pytest.mark.unit
 def test_unresolved_lane_claim_sizes_as_hold():
     new = Decision("INF", "Buy", price=10.0, lane="inflection", lane_unresolved=True)
     held = Decision("OWN", "Overweight", price=10.0, held_shares=1, lane="compounder", lane_unresolved=True)

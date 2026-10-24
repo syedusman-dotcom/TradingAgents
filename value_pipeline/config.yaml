@@ -43,17 +43,23 @@ sizing:
   overweight_size_factor: 0.5 # Overweight gets half the target size
   min_trade_amount: 25        # don't suggest buys smaller than this (USD)
   max_sector_weight: 0.30     # buys and adds stop at 30% of the portfolio in one sector
-  lane_caps: {compounder: 0.30, inflection: 0.20}       # buys and adds stop at these shares per lane
+  lane_caps: {compounder: 0.30, inflection: 0}          # buys and adds stop at these shares per lane
   lane_size_factor: {compounder: 0.5, inflection: 0.5}  # a lane buy is this fraction of the target size
+  # Lanes that buy and add on a Buy rating only; their Overweights are watched, not sized. The
+  # 2026-10-24 backtest: compounder Buys (price <= 1.15x base, return >= 12%) beat SPY in 4 of 8
+  # years by +10 points on average; compounder Overweights (1.25x, 10%) lost by 2.5 points.
+  lane_buy_only: [compounder]
 
 # Investment lanes beyond value (compounder, inflection) and the dislocation scan: where
 # discovery looks, and how many candidates of each it adds to a review.
-# lanes:
-#   themes: []                 # e.g. ["AI infrastructure", "grid equipment"]
-#   tickers: []                # names to always consider
-#   inflection_candidates: 3
-#   compounder_candidates: 2
-#   dislocation_candidates: 3  # quality names down 25%+ from the high (or 20%+ in a month), numbers intact
+# Since 2026-10-24 the review is value plus strict compounder Buys: no inflection or dislocation
+# candidates (the backtest found inflection high-variance and dislocation flat over a year).
+lanes:
+  themes: []                 # e.g. ["AI infrastructure", "grid equipment"]
+  tickers: []                # names to always consider
+  inflection_candidates: 0
+  compounder_candidates: 2
+  dislocation_candidates: 0  # quality names down 25%+ from the high (or 20%+ in a month), numbers intact
 
 # The lane-rule backtest (python -m value_pipeline backtest): the screen's lane rules replayed on
 # what was filed by each past cohort date, held for fixed terms, against SPY and the universe.

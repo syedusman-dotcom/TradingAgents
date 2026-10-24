@@ -56,6 +56,7 @@ DEFAULTS: dict = {
         "max_sector_weight": 0.30,
         "lane_caps": {"compounder": 0.30, "inflection": 0.20},
         "lane_size_factor": {"compounder": 0.5, "inflection": 0.5},
+        "lane_buy_only": [],
     },
     "lanes": {"themes": [], "tickers": [], "inflection_candidates": 3, "compounder_candidates": 2,
               "dislocation_candidates": 3},
