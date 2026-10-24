@@ -41,6 +41,7 @@ def create_news_analyst(llm):
             " one-off events that may have made the stock temporarily cheap (the reason it is cheap, and whether it looks temporary or permanent)."
             " When the pipeline note or the snapshot shows a 3-month fall of 20% or more or a drawdown of 25% or more from the 52-week high, classify the cause: company-specific deterioration, sector-wide sentiment, or macro, with sources."
             " `get_earnings_release` and `get_quarterly_report` are verified sources: a quoted sentence with its filing date counts as verified demand evidence and as evidence for the cause of a fall."
+            " Prefer `get_earnings_release`; call `get_quarterly_report` only when the release lacks demand or backlog lines."
             " They answer only for US SEC filers; if they say so, do not retry them."
             " Use macro tools only for factors that change the company's long-term earnings power (rates for lenders/real estate, commodity prices for producers)."
             " Ignore day-to-day market noise."

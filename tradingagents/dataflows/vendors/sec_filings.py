@@ -28,6 +28,13 @@ NOT_A_US_FILER = (
     "Not a US SEC filer: use get_fundamentals, get_income_statement, get_balance_sheet and "
     "get_cashflow (Yahoo) and the annual report on the company's investor site."
 )
+# For an SEC filer with no 10-Q or 8-K at all: a foreign private issuer (TSM, ASML) files
+# 20-F and 6-K instead, so there is nothing to retry.
+NO_QUARTERLY_FILINGS = (
+    "This company files 20-F/6-K with the SEC, not 10-Q or 8-K earnings releases: no quarterly "
+    "report or earnings release exists; use the statements and the annual report on the "
+    "company's site."
+)
 
 # Each section is cut to this many characters (~3,000 tokens) so the report
 # informs the analyst without crowding out the numbers.
@@ -200,18 +207,16 @@ def _cut(body: str, limit: int) -> str:
 
 
 # Part of every extracted-text cache key: raise it when extraction changes, so filings are re-read.
-_PARSER_VERSION = 2
+_PARSER_VERSION = 3
 
 
 def _cached_text(name: str, build) -> str:
-    """Text extracted from a filing, cached forever (a filed document never changes) unless empty,
-    so a later parser can find what this one missed."""
+    """Text extracted from a filing, cached forever (a filed document never changes), an empty
+    result too; a new ``_PARSER_VERSION`` reads every filing again."""
     path = _cache_dir() / f"{name}_v{_PARSER_VERSION}.txt"
     if path.exists():
         return path.read_text(encoding="utf-8")
     text = build()
-    if not text:
-        return text
     path.parent.mkdir(parents=True, exist_ok=True)
     replace_file(path, lambda temp: Path(temp).write_text(text, encoding="utf-8"))
     return text
@@ -264,6 +269,8 @@ def latest_10q_mdna(ticker: str, as_of_date: str | None = None) -> str:
     if cik is None:
         return NOT_A_US_FILER
     filings = _filings(cik, as_of_date, "10-Q")
+    if not filings and not _filings(cik, "9999-12-31", "10-Q"):
+        return NO_QUARTERLY_FILINGS
     if not filings:
         raise NoMarketDataError(ticker, ticker, f"no 10-Q filed by {as_of_date}")
     filing = filings[0]
@@ -301,7 +308,11 @@ def _outlook_beyond_cut(text: str) -> list[str]:
                 and not _SAFE_HARBOR.search(paragraph) and paragraph not in found):
             found.append(paragraph)
     return found
+
+
 _EXHIBIT_99 = re.compile(r"ex.?99.*\.(htm|html|txt)$", re.I)
+# Exhibit 99.1 itself (the press release), ahead of 99.2 and later (slides, CFO commentary).
+_EXHIBIT_99_1 = re.compile(r"(99[._-]?1|991|99d1)(?!\d)", re.I)
 
 
 def _exhibit_by_type(cik: str, filing: dict, names: list[str]) -> str | None:
@@ -322,7 +333,9 @@ def _exhibit_by_type(cik: str, filing: dict, names: list[str]) -> str | None:
 def _release_text(cik: str, filing: dict) -> str:
     index = sec_edgar._fetch_json(_filing_url(cik, filing, "index.json"))
     names = [item.get("name", "") for item in (index.get("directory") or {}).get("item") or []]
-    exhibit = (next((n for n in names if _EXHIBIT_99.search(n)), None)
+    exhibits = [n for n in names if _EXHIBIT_99.search(n)]
+    exhibit = (next((n for n in exhibits if _EXHIBIT_99_1.search(n)), None)
+               or next(iter(exhibits), None)
                or _exhibit_by_type(cik, filing, names))
     if exhibit is None:
         return ""
@@ -341,6 +354,8 @@ def latest_earnings_release(ticker: str, as_of_date: str | None = None) -> str:
     if cik is None:
         return NOT_A_US_FILER
     filings = [f for f in _filings(cik, as_of_date, "8-K") if "2.02" in f["items"]]
+    if not filings and not _filings(cik, "9999-12-31", "8-K"):
+        return NO_QUARTERLY_FILINGS
     if not filings:
         raise NoMarketDataError(ticker, ticker, f"no earnings 8-K (Item 2.02) filed by {as_of_date}")
     filing = filings[0]

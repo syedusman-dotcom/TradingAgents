@@ -291,15 +291,58 @@ def test_part_ii_item_2_is_never_taken_for_the_mdna(edgar):
 
 
 @pytest.mark.unit
-def test_an_empty_extraction_is_not_cached_and_the_key_carries_the_parser_version(edgar):
-    docs, _ = edgar
+def test_an_empty_extraction_is_cached_and_a_new_parser_version_rereads(edgar, monkeypatch):
+    docs, fetched = edgar
+    assert sec_filings._PARSER_VERSION == 3
     docs["000002134426000041/q2.htm"] = _html(BANK_10Q)
     assert "could not be located" in sec_filings.latest_10q_mdna("KO", "2026-08-01")
-    assert not list(sec_filings._cache_dir().glob("10q_*"))
+    [cached] = sec_filings._cache_dir().glob("10q_*")
+    assert cached.name.endswith("_v3.txt") and cached.read_text() == ""
+    reads = len(fetched)
+    assert "could not be located" in sec_filings.latest_10q_mdna("KO", "2026-08-01")
+    assert len(fetched) == reads   # the empty result is served from the cache
+    monkeypatch.setattr(sec_filings, "_PARSER_VERSION", 4)
     docs["000002134426000041/q2.htm"] = _html(MDNA_10Q)
     assert "Net revenue rose 6%" in sec_filings.latest_10q_mdna("KO", "2026-08-01")
-    [cached] = sec_filings._cache_dir().glob("10q_*")
-    assert f"_v{sec_filings._PARSER_VERSION}" in cached.name
+
+
+FOREIGN = {"filings": {"recent": {
+    "form": ["6-K", "20-F", "6-K"],
+    "filingDate": ["2026-07-17", "2026-04-15", "2026-04-17"],
+    "accessionNumber": ["0001046179-26-000050", "0001046179-26-000030", "0001046179-26-000031"],
+    "primaryDocument": ["k6.htm", "f20.htm", "k6b.htm"],
+    "reportDate": ["", "2025-12-31", ""],
+    "items": ["", "", ""],
+}}}
+
+
+@pytest.mark.unit
+def test_a_20f_filer_gets_a_sentence_from_both_tools_not_an_error(edgar, monkeypatch):
+    from tradingagents.agents import tools
+
+    _, fetched = edgar
+    monkeypatch.setattr(sec_filings.sec_edgar, "_cached_json", lambda url, name: FOREIGN)
+    assert sec_filings.latest_10q_mdna("TSM", "2026-10-23") == sec_filings.NO_QUARTERLY_FILINGS
+    assert sec_filings.latest_earnings_release("TSM", "2026-10-23") == (
+        sec_filings.NO_QUARTERLY_FILINGS)
+    assert sec_filings.NO_QUARTERLY_FILINGS.startswith(
+        "This company files 20-F/6-K with the SEC, not 10-Q or 8-K earnings releases")
+    assert fetched == []
+    state = {"ticker": "TSM", "trade_date": "2026-10-23"}
+    assert tools.get_quarterly_report.func(**state) == sec_filings.NO_QUARTERLY_FILINGS
+    assert tools.get_earnings_release.func(**state) == sec_filings.NO_QUARTERLY_FILINGS
+
+
+@pytest.mark.unit
+def test_exhibit_99_1_is_taken_before_99_2(edgar):
+    docs, _ = edgar
+    docs["000002134426000040/index.json"] = (
+        b'{"directory": {"item": [{"name": "e2.htm"}, {"name": "ex99-2.htm"},'
+        b' {"name": "ex99-1.htm"}]}}')
+    docs["000002134426000040/ex99-2.htm"] = _html("CFO commentary slides.")
+    docs["000002134426000040/ex99-1.htm"] = _html("Acme second-quarter results.")
+    out = sec_filings.latest_earnings_release("KO", "2026-07-25")
+    assert "Acme second-quarter results." in out and "CFO commentary" not in out
 
 
 @pytest.mark.unit
