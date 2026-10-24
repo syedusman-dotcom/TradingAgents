@@ -406,3 +406,53 @@ def test_a_stale_or_placeholder_cover_count_is_not_used():
     alone = {pit.SHARES_DEI: {"units": {"shares": [
         {"end": "2019-03-18", "val": 5.0, "filed": "2019-03-18", "form": "10-12B"}]}}}
     assert pit.shares_as_of_dated(alone, "2020-01-01") == ("2019-03-18", 5.0)
+
+
+def test_gross_profit_derived_from_revenue_less_cost_when_not_filed():
+    raw = _raw()
+    g = raw["facts"]["us-gaap"]
+    g["CostOfRevenue"] = _annual({2021: 600.0, 2022: 640.0, 2023: 700.0})
+    g["CostOfGoodsAndServicesSold"] = _annual({2023: 690.0})      # the first cost tag wins
+    g["GrossProfit"] = _annual({2022: 999.0})                     # filed: preferred
+    years = pit.years_as_of(pit.extract(raw), "2024-03-01")
+    assert _year(years, "2023-12-31")["gross_profit"] == 1300.0 - 690.0
+    assert _year(years, "2022-12-31")["gross_profit"] == 999.0
+    assert _year(years, "2021-12-31")["gross_profit"] == 1000.0 - 600.0
+    # Neither GrossProfit nor a cost line: None.
+    assert _year(pit.years_as_of(_store(), "2024-03-01"), "2023-12-31")["gross_profit"] is None
+
+
+def test_ebit_derived_from_pretax_income_plus_interest_when_not_filed():
+    raw = _raw()
+    g = raw["facts"]["us-gaap"]
+    pretax = "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest"
+    g[pretax] = _annual({2021: 170.0, 2022: 180.0, 2023: 230.0})
+    g["InterestExpense"] = _annual({2021: 10.0, 2022: 12.0})
+    g["OperatingIncomeLoss"]["units"]["USD"] = [                 # filed for 2023 only
+        f for f in g["OperatingIncomeLoss"]["units"]["USD"] if f["end"] == "2023-12-31"]
+    years = pit.years_as_of(pit.extract(raw), "2024-03-01")
+    assert _year(years, "2023-12-31")["ebit"] == 260.0           # filed: preferred
+    assert _year(years, "2022-12-31")["ebit"] == 180.0 + 12.0
+    assert _year(years, "2021-12-31")["ebit"] == 170.0 + 10.0
+    # Without interest expense nothing is derived; an older pre-tax tag also serves.
+    del g["InterestExpense"]
+    assert _year(pit.years_as_of(pit.extract(raw), "2024-03-01"), "2022-12-31")["ebit"] is None
+    del g[pretax]
+    g["IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments"] = _annual({2022: 150.0})
+    g["InterestExpenseBorrowings"] = _annual({2022: 5.0})      # H&R Block's tag
+    assert _year(pit.years_as_of(pit.extract(raw), "2024-03-01"), "2022-12-31")["ebit"] == 155.0
+
+
+def test_more_capex_and_net_income_tags():
+    raw = _raw()
+    g = raw["facts"]["us-gaap"]
+    del g["PaymentsToAcquirePropertyPlantAndEquipment"]
+    del g["ProfitLoss"]
+    g["PaymentsForCapitalImprovements"] = _annual({2023: 70.0})
+    g["PaymentsToAcquireOtherPropertyPlantAndEquipment"] = _annual({2022: 30.0})
+    g["NetIncomeLossAvailableToCommonStockholdersBasic"] = _annual({2023: 185.0})
+    years = pit.years_as_of(pit.extract(raw), "2024-03-01")
+    assert _year(years, "2023-12-31")["capex"] == -70.0
+    assert _year(years, "2022-12-31")["capex"] == -30.0
+    assert _year(years, "2023-12-31")["free_cash_flow"] == 350.0 - 70.0
+    assert _year(years, "2023-12-31")["net_income"] == 185.0

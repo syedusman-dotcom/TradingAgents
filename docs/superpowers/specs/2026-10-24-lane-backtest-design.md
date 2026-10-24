@@ -44,8 +44,8 @@ A compact, permanent per-ticker fact store and the functions that turn it into t
 | revenue | `Revenues`, `RevenueFromContractWithCustomerExcludingAssessedTax`, `SalesRevenueNet`, `RevenuesNetOfInterestExpense`, `SalesRevenueGoodsNet`, `SalesRevenueServicesNet` (the last two: the usual pre-ASC 606 totals, added in the final fix wave) |
 | gross_profit | `GrossProfit` |
 | ebit | `OperatingIncomeLoss` |
-| net_income | `NetIncomeLoss`, `ProfitLoss` |
-| interest_expense | `InterestExpense`, `InterestExpenseNonoperating`, `InterestExpenseDebt`, `InterestPaidNet` |
+| net_income | `NetIncomeLoss`, `ProfitLoss`, `NetIncomeLossAvailableToCommonStockholdersBasic` |
+| interest_expense | `InterestExpense`, `InterestExpenseNonoperating`, `InterestExpenseDebt`, `InterestExpenseBorrowings`, `InterestPaidNet` |
 | total_assets | `Assets` |
 | current_assets | `AssetsCurrent` |
 | current_liabilities | `LiabilitiesCurrent` |
@@ -57,7 +57,7 @@ A compact, permanent per-ticker fact store and the functions that turn it into t
 | total_liabilities | `Liabilities` |
 | shares | `CommonStockSharesOutstanding`, `WeightedAverageNumberOfDilutedSharesOutstanding` (dei `EntityCommonStockSharesOutstanding` first; see shares below) |
 | operating_cash_flow | `NetCashProvidedByUsedInOperatingActivities`, `NetCashProvidedByUsedInOperatingActivitiesContinuingOperations` |
-| capex | `PaymentsToAcquirePropertyPlantAndEquipment`, `PaymentsToAcquireProductiveAssets` |
+| capex | `PaymentsToAcquirePropertyPlantAndEquipment`, `PaymentsToAcquireProductiveAssets`, `PaymentsToAcquireOtherPropertyPlantAndEquipment`, `PaymentsForCapitalImprovements` |
 | dividends_paid | `PaymentsOfDividendsCommonStock`, `PaymentsOfDividends` |
 | buybacks | `PaymentsForRepurchaseOfCommonStock` |
 | stock_based_comp | `ShareBasedCompensation`, `AllocatedShareBasedCompensationExpense` |
@@ -70,7 +70,7 @@ A compact, permanent per-ticker fact store and the functions that turn it into t
 
 Debt parts (not fields): `LongTermDebtCurrent`, `ShortTermBorrowings`, `DebtCurrent`, `CommercialPaper`.
 
-**Derived fields** (after the per-tag pick, per period): `total_debt = long_term_debt + (LongTermDebtCurrent or DebtCurrent or 0) + (ShortTermBorrowings or CommercialPaper or 0)` (None when long_term_debt is None); `free_cash_flow = operating_cash_flow − |capex|` (None when either is None); `total_liabilities = total_assets − equity` when `Liabilities` is missing and both exist. **Signs follow the Yahoo vendor:** capex, dividends_paid, buybacks and acquisitions are stored negative (EDGAR reports payments positive).
+**Derived fields** (after the per-tag pick, per period): `total_debt = long_term_debt + (LongTermDebtCurrent or DebtCurrent or 0) + (ShortTermBorrowings or CommercialPaper or 0)` (None when long_term_debt is None); `free_cash_flow = operating_cash_flow − |capex|` (None when either is None); `total_liabilities = total_assets − equity` when `Liabilities` is missing and both exist; `gross_profit = revenue − cost` (`CostOfGoodsAndServicesSold`, `CostOfRevenue`, `CostOfGoodsSold`, `CostOfServices`, first found) when `GrossProfit` is missing; `ebit = pre-tax income from continuing operations (`IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest`, else the older `…MinorityInterestAndIncomeLossFromEquityMethodInvestments`) + |interest_expense|` when `OperatingIncomeLoss` is missing and both exist (final fix wave; the quarters still read `OperatingIncomeLoss` only). **Signs follow the Yahoo vendor:** capex, dividends_paid, buybacks and acquisitions are stored negative (EDGAR reports payments positive).
 
 **Compact store.** `extract(facts: dict) -> dict`: from one companyfacts JSON keep, for every tag in `TAGS`, the debt parts and `dei:EntityCommonStockSharesOutstanding`, the list of `{start?, end, val, filed, form}` for USD (or `shares`) units — nothing else. Written as `paths.cache / "backtest" / "facts" / f"{ticker}.json"` (a few hundred KB), with `{"cik", "fetched_at", "facts": {...}}`. `facts_for(ticker, paths, fetch=True, refresh=False) -> dict | None`: the cached compact store; fetches with `sec_edgar._fetch_json` (SEC rate: sleep so that no more than 8 requests start per second *(my call)*) when absent or `refresh`; None for a non-filer or a failed fetch (logged, never raised).
 

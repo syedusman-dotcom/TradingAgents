@@ -39,9 +39,9 @@ TAGS: dict[str, tuple[str, ...]] = {
                 "SalesRevenueServicesNet"),
     "gross_profit": ("GrossProfit",),
     "ebit": ("OperatingIncomeLoss",),
-    "net_income": ("NetIncomeLoss", "ProfitLoss"),
+    "net_income": ("NetIncomeLoss", "ProfitLoss", "NetIncomeLossAvailableToCommonStockholdersBasic"),
     "interest_expense": ("InterestExpense", "InterestExpenseNonoperating", "InterestExpenseDebt",
-                         "InterestPaidNet"),
+                         "InterestExpenseBorrowings", "InterestPaidNet"),
     "total_assets": ("Assets",),
     "current_assets": ("AssetsCurrent",),
     "current_liabilities": ("LiabilitiesCurrent",),
@@ -58,7 +58,8 @@ TAGS: dict[str, tuple[str, ...]] = {
     "shares": ("CommonStockSharesOutstanding", "WeightedAverageNumberOfDilutedSharesOutstanding"),
     "operating_cash_flow": ("NetCashProvidedByUsedInOperatingActivities",
                             "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations"),
-    "capex": ("PaymentsToAcquirePropertyPlantAndEquipment", "PaymentsToAcquireProductiveAssets"),
+    "capex": ("PaymentsToAcquirePropertyPlantAndEquipment", "PaymentsToAcquireProductiveAssets",
+              "PaymentsToAcquireOtherPropertyPlantAndEquipment", "PaymentsForCapitalImprovements"),
     "dividends_paid": ("PaymentsOfDividendsCommonStock", "PaymentsOfDividends"),
     "buybacks": ("PaymentsForRepurchaseOfCommonStock",),
     "stock_based_comp": ("ShareBasedCompensation", "AllocatedShareBasedCompensationExpense"),
@@ -75,6 +76,16 @@ TAGS: dict[str, tuple[str, ...]] = {
 
 # Short-term debt, added to long-term debt for ``total_debt``; not fields of their own.
 DEBT_PARTS = ("LongTermDebtCurrent", "DebtCurrent", "ShortTermBorrowings", "CommercialPaper")
+# Cost of revenue, for ``gross_profit = revenue - cost`` when ``GrossProfit`` is not filed
+# (about half of filers); first found per period wins.
+COST_OF_REVENUE = ("CostOfGoodsAndServicesSold", "CostOfRevenue", "CostOfGoodsSold",
+                   "CostOfServices")
+# Pre-tax income from continuing operations, for ``ebit = pre-tax income + interest expense``
+# when ``OperatingIncomeLoss`` is not filed (H&R Block, Fox); the second is the older name.
+PRETAX_INCOME = (
+    "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
+    "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments",  # noqa: E501
+)
 # The cover-page share count, stored beside the us-gaap tags under this key.
 SHARES_DEI = "dei:EntityCommonStockSharesOutstanding"
 # A cover count this far from the newest annual count (as a ratio) is a placeholder.
@@ -115,7 +126,8 @@ def extract(facts: dict) -> dict:
     form`` and its units to USD and shares, in companyfacts' shape so ``_as_of`` reads it."""
     body = facts.get("facts") or {}
     us_gaap = body.get("us-gaap") or {}
-    wanted = {tag for tags in TAGS.values() for tag in tags} | set(DEBT_PARTS) | {INTANGIBLES}
+    wanted = ({tag for tags in TAGS.values() for tag in tags} | set(DEBT_PARTS) | {INTANGIBLES}
+              | set(COST_OF_REVENUE) | set(PRETAX_INCOME))
     out = {}
     for tag in sorted(wanted):
         compact = _compact(us_gaap.get(tag) or {})
@@ -242,6 +254,8 @@ def years_as_of(store: dict, as_of: str,
     fields["shares"] = _first_filed(store, TAGS["shares"], as_of, _ANNUAL, annual)[0]
     parts = {tag: _values(store, (tag,), as_of, _ANNUAL, annual)
              for tag in (*DEBT_PARTS, INTANGIBLES)}
+    cost = _values(store, COST_OF_REVENUE, as_of, _ANNUAL, annual)
+    pretax = _values(store, PRETAX_INCOME, as_of, _ANNUAL, annual)
 
     years = []
     for end in _fiscal_year_ends(store, as_of):
@@ -257,6 +271,11 @@ def years_as_of(store: dict, as_of: str,
                                  parts["DebtCurrent"].get(key))
                 + _first_present(parts["ShortTermBorrowings"].get(key),
                                  parts["CommercialPaper"].get(key)))
+        if year["gross_profit"] is None and year["revenue"] is not None and key in cost:
+            year["gross_profit"] = year["revenue"] - cost[key]
+        if (year["ebit"] is None and key in pretax
+                and year["interest_expense"] is not None):
+            year["ebit"] = pretax[key] + abs(year["interest_expense"])
         if year["operating_cash_flow"] is not None and year["capex"] is not None:
             year["free_cash_flow"] = year["operating_cash_flow"] - abs(year["capex"])
         if (year["total_liabilities"] is None and year["total_assets"] is not None
