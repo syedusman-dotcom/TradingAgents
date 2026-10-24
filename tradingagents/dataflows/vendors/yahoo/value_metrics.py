@@ -60,6 +60,7 @@ ROWS: dict[str, tuple[str, ...]] = {
     "sga": ("Selling General And Administration",),
     "acquisitions": ("Purchase Of Business",),
     "goodwill": ("Goodwill And Other Intangible Assets", "Goodwill"),
+    "rnd": ("Research And Development",),
 }
 assert set(ROWS) == set(YEAR_FIELDS)
 

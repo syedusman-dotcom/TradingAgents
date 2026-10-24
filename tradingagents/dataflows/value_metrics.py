@@ -21,7 +21,7 @@ YEAR_FIELDS = (
     "long_term_debt", "total_debt", "equity", "retained_earnings", "total_liabilities",
     "shares", "operating_cash_flow", "free_cash_flow",
     "capex", "dividends_paid", "buybacks", "stock_based_comp",
-    "receivables", "depreciation", "sga", "acquisitions", "goodwill",
+    "receivables", "depreciation", "sga", "acquisitions", "goodwill", "rnd",
 )
 
 def num(x) -> float | None:
@@ -737,6 +737,101 @@ def _invested_capital(period: dict) -> float | None:
     return max(0.0, ca - (num(period.get("cash")) or 0.0) - cl) + ppe
 
 
+# --- innovation and reinvestment ---------------------------------------------
+
+INNOVATION_AVG_YEARS = 5
+INNOVATION_SPEND_YEARS = 3
+INCREMENTAL_YEARS = 3          # the return on incremental capital runs from three years back
+HARVEST_RND_CUT = 0.01         # R&D / revenue falling a point in a year reads as a cut
+
+
+def _rnd(y: dict) -> float | None:
+    v = num(y.get("rnd"))
+    return None if v is None else abs(v)
+
+
+def _growth_capex(y: dict) -> float | None:
+    """Capex beyond depreciation (capex is stored negative); None without both."""
+    capex, dep = num(y.get("capex")), num(y.get("depreciation"))
+    return None if capex is None or dep is None else abs(capex) - abs(dep)
+
+
+def _harvesting(years: list[dict]) -> bool | None:
+    """Whether the latest year cut R&D (a point of revenue) or ran capex below depreciation while
+    the EBIT margin rose; None when neither R&D nor capex and depreciation cover both years."""
+    if len(years) < 2:
+        return None
+    cur, prev = years[0], years[1]
+    rnd_now, rnd_before = div(_rnd(cur), cur.get("revenue")), div(_rnd(prev), prev.get("revenue"))
+    capex_known = _growth_capex(cur) is not None and _growth_capex(prev) is not None
+    rnd_known = rnd_now is not None and rnd_before is not None
+    if not rnd_known and not capex_known:
+        return None
+    cut = (rnd_known and rnd_now <= rnd_before - HARVEST_RND_CUT) or (capex_known and _growth_capex(cur) < 0)
+    if not cut:
+        return False
+    m_now, m_before = div(cur.get("ebit"), cur.get("revenue")), div(prev.get("ebit"), prev.get("revenue"))
+    if m_now is None or m_before is None:
+        return None
+    return m_now > m_before
+
+
+def innovation(years: list[dict]) -> dict:
+    """What the business spends on its future and what that spending returned (years newest
+    first; every value None when not computable). R&D (``rnd``) is Yahoo's "Research And
+    Development" row, absent for companies that do not break it out.
+
+    ``rnd_cagr`` spans the newest to the oldest year with positive R&D, at least ``MIN_CAGR_SPAN``
+    intervals (``rnd_cagr_years``), as ``record``'s revenue CAGR; ``revenue_cagr_same_span`` and
+    ``gross_profit_per_rnd`` (gross profit added over that span per dollar of R&D spent in it,
+    the latest year's excluded) run over the same years. Growth spend is R&D + capex beyond
+    depreciation (floored at 0) + acquisitions, over operating cash flow, for the last three years."""
+    out = dict.fromkeys(("rnd_to_revenue", "rnd_to_revenue_avg", "rnd_cagr", "rnd_cagr_years",
+                         "revenue_cagr_same_span", "gross_profit_per_rnd", "growth_capex_to_revenue",
+                         "growth_spend_to_cfo", "roic_incremental_3y", "harvesting"))
+    out["rnd_reported"] = any(_rnd(y) is not None for y in years)
+    if not years:
+        return out
+    out["rnd_to_revenue"] = div(_rnd(years[0]), years[0].get("revenue"))
+    ratios = [r for r in (div(_rnd(y), y.get("revenue")) for y in years[:INNOVATION_AVG_YEARS])
+              if r is not None]
+    out["rnd_to_revenue_avg"] = mean(ratios) if ratios else None
+
+    positive = [i for i, y in enumerate(years) if (_rnd(y) or 0) > 0]
+    if positive and positive[-1] - positive[0] >= MIN_CAGR_SPAN:
+        new, old = positive[0], positive[-1]
+        span = old - new
+        out["rnd_cagr"] = (_rnd(years[new]) / _rnd(years[old])) ** (1 / span) - 1
+        out["rnd_cagr_years"] = span
+        rev_new, rev_old = num(years[new].get("revenue")), num(years[old].get("revenue"))
+        if rev_new and rev_old and rev_new > 0 and rev_old > 0:
+            out["revenue_cagr_same_span"] = (rev_new / rev_old) ** (1 / span) - 1
+        gp_new, gp_old = num(years[new].get("gross_profit")), num(years[old].get("gross_profit"))
+        spent = sum(_rnd(y) or 0.0 for y in years[new + 1:old + 1])
+        if gp_new is not None and gp_old is not None and spent:
+            out["gross_profit_per_rnd"] = (gp_new - gp_old) / spent
+
+    recent = years[:INNOVATION_SPEND_YEARS]
+    capex_ratios = [r for r in (div(_growth_capex(y), y.get("revenue")) for y in recent) if r is not None]
+    out["growth_capex_to_revenue"] = mean(capex_ratios) if capex_ratios else None
+    counted = [y for y in recent if num(y.get("operating_cash_flow")) is not None
+               and _growth_capex(y) is not None]
+    cfo = sum(num(y["operating_cash_flow"]) for y in counted)
+    if counted and cfo > 0:
+        spend = sum((_rnd(y) or 0.0) + max(_growth_capex(y), 0.0) + abs(num(y.get("acquisitions")) or 0.0)
+                    for y in counted)
+        out["growth_spend_to_cfo"] = spend / cfo
+
+    if len(years) > INCREMENTAL_YEARS:
+        cur, base = years[0], years[INCREMENTAL_YEARS]
+        ebit_now, ebit_before = num(cur.get("ebit")), num(base.get("ebit"))
+        ic_now, ic_before = _invested_capital(cur), _invested_capital(base)
+        if None not in (ebit_now, ebit_before, ic_now, ic_before) and ic_now - ic_before > 0:
+            out["roic_incremental_3y"] = (ebit_now - ebit_before) * (1 - TAX_RATE) / (ic_now - ic_before)
+    out["harvesting"] = _harvesting(years)
+    return out
+
+
 TTM_SPAN_DAYS = (250, 300)   # first to fourth quarter end of four consecutive quarters
 
 
@@ -1048,6 +1143,7 @@ def company_metrics(years: list[dict], price, market_cap, shares,
     return {
         "record": rec,
         "inflection": inf,
+        "innovation": innovation(years),
         "quarter_trend": quarter_trend(quarters),
         "consensus": consensus,
         "run_rate": run_rate,
@@ -1247,6 +1343,7 @@ def render_report(symbol: str, as_of: str, m: dict, currency: str | None = None)
     else:
         lines.append("Formula valuation: not computable (no price, or averaged FCF and EBIT are not positive).")
     lines += _record_section(m)
+    lines += _innovation_section(m)
     lines += _consensus_section(m)
     return "\n".join(lines)
 
@@ -1333,6 +1430,44 @@ def _record_section(m: dict) -> list[str]:
     else:
         lines.append("Run-rate: not computable (no price, or run-rate owner earnings and EBIT are not positive).")
     return lines
+
+
+def _innovation_section(m: dict) -> list[str]:
+    """``- Label value`` lines, one number each or n/a (the R&D growth line also names its span),
+    then one plain-English line on R&D against revenue and the return on incremental capital."""
+    inn = m.get("innovation") or {}
+    cagr, span = inn.get("rnd_cagr"), inn.get("rnd_cagr_years")
+    same = inn.get("revenue_cagr_same_span")
+    harvesting = inn.get("harvesting")
+    lines = [
+        "", "## Innovation and reinvestment", "",
+        f"- R&D / revenue {_pct(inn.get('rnd_to_revenue'))}",
+        f"- R&D / revenue 5-year average {_pct(inn.get('rnd_to_revenue_avg'))}",
+        "- R&D growth " + ("n/a" if cagr is None else f"{cagr:.1%}/yr over {span} years"),
+        f"- Revenue growth over the same span {_fmt(same, '.1%', '/yr')}",
+        f"- Gross profit added per R&D dollar {_fmt(inn.get('gross_profit_per_rnd'), '.1f')}",
+        f"- Growth capex / revenue (3-year average) {_pct(inn.get('growth_capex_to_revenue'))}",
+        f"- Growth spend / operating cash flow (3-year) {_fmt(inn.get('growth_spend_to_cfo'), '.0%')}",
+        f"- Return on incremental capital (3-year) {_fmt(inn.get('roic_incremental_3y'), '.0%')}",
+        "- Harvesting signal " + ("n/a" if harvesting is None else "yes" if harvesting else "no"),
+        "",
+    ]
+    if not inn.get("rnd_reported"):
+        return lines + ["R&D is not reported separately; judge reinvestment from growth capex, acquisitions "
+                        "and the filings' product evidence."]
+    if cagr is not None and same is not None:
+        pace = "faster than" if cagr > same else "slower than" if cagr < same else "as fast as"
+        first = f"R&D grew {pace} revenue ({cagr:.1%}/yr against {same:.1%}/yr over {span} years)"
+    else:
+        first = "R&D growth against revenue is not computable (fewer than four years of R&D)"
+    incremental = inn.get("roic_incremental_3y")
+    if incremental is None:
+        second = "the return on incremental capital is not computable"
+    else:
+        rate = (m.get("valuation") or {}).get("discount_rate") or discount_rate(m.get("treasury_10y"))
+        side = "above" if incremental > rate else "below" if incremental < rate else "at"
+        second = f"the return on incremental capital, {incremental:.0%}, is {side} the {rate:.1%} cost of capital"
+    return lines + [f"{first}; {second}."]
 
 
 def _quarter_section(m: dict) -> list[str]:

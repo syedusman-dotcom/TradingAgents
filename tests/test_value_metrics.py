@@ -806,7 +806,7 @@ def test_report_has_record_and_inflection_lines():
     assert m["run_rate"]["decay_to"] == 0.03   # the worksheet's base growth, whatever the cohort
     assert m["record"]["roic_years_above_20"] == 5 and m["inflection"]["quarters_available"] == 9
     report = vm.render_report("ABC", "2026-10-23", m)
-    section = report.split("## Record and inflection", 1)[1]
+    section = report.split("## Record and inflection", 1)[1].split("\n## ", 1)[0]
     lines = [ln for ln in section.splitlines() if ln.startswith("- ")]
     values = dict(ln[2:].rsplit(" ", 1) for ln in lines)
     assert list(values) == list(RECORD_LABELS)
@@ -1175,3 +1175,134 @@ def test_vendor_leaves_out_consensus_targets_when_currencies_differ(monkeypatch)
     report = yahoo_vm.get_value_metrics("TSM", "2026-10-11")
     assert "- Consensus price target median n/a" in report
     assert "- Consensus revenue growth next year 6.2%" in report
+
+
+# --- innovation and reinvestment ----------------------------------------------------------------
+
+def _innovation_years():
+    """Five years newest first: R&D growing 10%/yr, revenue 8%/yr, gross margin 50%."""
+    ebit = {0: 300, 3: 200}
+    spend = {0: {"capex": -80, "depreciation": 40, "acquisitions": -30, "operating_cash_flow": 300},
+             1: {"capex": -50, "depreciation": 40, "acquisitions": None, "operating_cash_flow": 250},
+             2: {"capex": -30, "depreciation": 40, "acquisitions": 0, "operating_cash_flow": 200}}
+    return [_year(fiscal_year_end=f"{2025 - i}-12-31", revenue=1000 * 1.08 ** (4 - i),
+                  gross_profit=500 * 1.08 ** (4 - i), rnd=100 * 1.1 ** (4 - i), ebit=ebit.get(i, 250),
+                  net_ppe=900 if i == 0 else 500, **spend.get(i, {})) for i in range(5)]
+
+
+@pytest.mark.unit
+def test_innovation_full_data():
+    years = _innovation_years()
+    inn = vm.innovation(years)
+    rnd = [y["rnd"] for y in years]
+    rev = [y["revenue"] for y in years]
+    assert inn["rnd_reported"] is True
+    assert inn["rnd_to_revenue"] == pytest.approx(rnd[0] / rev[0])
+    assert inn["rnd_to_revenue_avg"] == pytest.approx(sum(r / v for r, v in zip(rnd, rev, strict=True)) / 5)
+    assert inn["rnd_cagr"] == pytest.approx(0.10) and inn["rnd_cagr_years"] == 4
+    assert inn["revenue_cagr_same_span"] == pytest.approx(0.08)
+    gp = [y["gross_profit"] for y in years]
+    assert inn["gross_profit_per_rnd"] == pytest.approx((gp[0] - gp[4]) / sum(rnd[1:5]))
+    assert inn["growth_capex_to_revenue"] == pytest.approx((40 / rev[0] + 10 / rev[1] - 10 / rev[2]) / 3)
+    # R&D + growth capex floored at 0 + acquisitions (None counts 0), over operating cash flow.
+    assert inn["growth_spend_to_cfo"] == pytest.approx((sum(rnd[:3]) + 40 + 30 + 10 + 0) / 750)
+    # (300 - 200) x 0.79 / (1100 - 700): capital = 600 - 100 - 300 + net PPE.
+    assert inn["roic_incremental_3y"] == pytest.approx(100 * (1 - vm.TAX_RATE) / 400)
+    assert inn["harvesting"] is False             # R&D share rose and capex is above depreciation
+
+
+@pytest.mark.unit
+def test_innovation_without_rnd():
+    years = [{k: v for k, v in y.items() if k != "rnd"} for y in _innovation_years()]
+    inn = vm.innovation(years)
+    assert inn["rnd_reported"] is False
+    for key in ("rnd_to_revenue", "rnd_to_revenue_avg", "rnd_cagr", "rnd_cagr_years",
+                "revenue_cagr_same_span", "gross_profit_per_rnd"):
+        assert inn[key] is None, key
+    rev = [y["revenue"] for y in years]
+    assert inn["growth_capex_to_revenue"] == pytest.approx((40 / rev[0] + 10 / rev[1] - 10 / rev[2]) / 3)
+    assert inn["growth_spend_to_cfo"] == pytest.approx((40 + 30 + 10) / 750)
+    assert vm.innovation([])["rnd_reported"] is False
+
+
+@pytest.mark.unit
+def test_innovation_needs_four_years_for_incremental_return():
+    years = _innovation_years()
+    assert vm.innovation(years[:3])["roic_incremental_3y"] is None
+    assert vm.innovation(years[:3])["rnd_cagr"] is None              # two intervals: under the span
+    flat = [{**y, "net_ppe": 500} for y in years]                    # capital did not grow
+    assert vm.innovation(flat)["roic_incremental_3y"] is None
+
+
+@pytest.mark.unit
+def test_harvesting_signal():
+    prev = _year(rnd=100, ebit=200)                                 # R&D 10% of revenue, margin 20%
+    cut_margin_up = [_year(rnd=80, ebit=250), prev]
+    assert vm.innovation(cut_margin_up)["harvesting"] is True
+    cut_margin_down = [_year(rnd=80, ebit=150), prev]
+    assert vm.innovation(cut_margin_down)["harvesting"] is False
+    no_data = [_year(capex=None, depreciation=None, ebit=250), _year(capex=None, depreciation=None)]
+    assert vm.innovation(no_data)["harvesting"] is None
+    capex_only = [_year(capex=-20, ebit=250), _year()]               # capex below depreciation, no R&D
+    assert vm.innovation(capex_only)["harvesting"] is True
+    no_cut = [_year(rnd=100, ebit=250), prev]
+    assert vm.innovation(no_cut)["harvesting"] is False
+
+
+INNOVATION_LABELS = (
+    "R&D / revenue", "R&D / revenue 5-year average", "R&D growth", "Revenue growth over the same span",
+    "Gross profit added per R&D dollar", "Growth capex / revenue (3-year average)",
+    "Growth spend / operating cash flow (3-year)", "Return on incremental capital (3-year)",
+    "Harvesting signal",
+)
+
+
+def _innovation_section(report: str) -> str:
+    return report.split("## Innovation and reinvestment", 1)[1].split("\n## ", 1)[0]
+
+
+@pytest.mark.unit
+def test_render_innovation_section_labels_and_na():
+    years = _innovation_years()
+    m = vm.company_metrics(years, 20, 2000, 100, consensus=CONSENSUS)
+    text = vm.render_report("X", "2026-10-24", m)
+    assert (text.index("## Record and inflection") < text.index("## Innovation and reinvestment")
+            < text.index("## Consensus (Yahoo estimates)"))
+    section = _innovation_section(text)
+    lines = [ln[2:] for ln in section.splitlines() if ln.startswith("- ")]
+    assert [max((lb for lb in INNOVATION_LABELS if ln.startswith(lb + " ")), key=len)
+            for ln in lines] == list(INNOVATION_LABELS)
+    inn = m["innovation"]
+    for line in (f"- R&D / revenue {inn['rnd_to_revenue']:.1%}",
+                 f"- R&D / revenue 5-year average {inn['rnd_to_revenue_avg']:.1%}",
+                 "- R&D growth 10.0%/yr over 4 years",
+                 "- Revenue growth over the same span 8.0%/yr",
+                 f"- Gross profit added per R&D dollar {inn['gross_profit_per_rnd']:.1f}",
+                 f"- Growth capex / revenue (3-year average) {inn['growth_capex_to_revenue']:.1%}",
+                 f"- Growth spend / operating cash flow (3-year) {inn['growth_spend_to_cfo']:.0%}",
+                 "- Return on incremental capital (3-year) 20%",
+                 "- Harvesting signal no"):
+        assert line in section, line
+    rate = m["valuation"]["discount_rate"]
+    assert (f"R&D grew faster than revenue (10.0%/yr against 8.0%/yr over 4 years); the return on "
+            f"incremental capital, 20%, is above the {rate:.1%} cost of capital.") in section
+
+    bare = _innovation_section(vm.render_report("X", "d", vm.company_metrics(
+        [_year(capex=None), _year(capex=None)], 20, 2000, 100)))
+    for label in ("R&D / revenue", "R&D / revenue 5-year average", "R&D growth",
+                  "Revenue growth over the same span", "Gross profit added per R&D dollar",
+                  "Growth capex / revenue (3-year average)", "Return on incremental capital (3-year)",
+                  "Harvesting signal"):
+        assert f"- {label} n/a" in bare, label
+    assert ("R&D is not reported separately; judge reinvestment from growth capex, acquisitions and "
+            "the filings' product evidence.") in bare
+
+
+@pytest.mark.unit
+def test_yahoo_rows_cover_rnd():
+    assert yahoo_vm.ROWS["rnd"] == ("Research And Development",)
+    assert "rnd" in vm.YEAR_FIELDS
+    rows = {"Total Revenue": 1000.0, "Gross Profit": 400.0, "Net Income": 150.0, "Total Assets": 2000.0,
+            "Operating Cash Flow": 220.0, "Research And Development": 170.0}
+    frame = pd.DataFrame({pd.Timestamp("2025-12-31"): list(rows.values())}, index=list(rows))
+    assert yahoo_vm.statement_years(frame)[0]["rnd"] == 170.0
