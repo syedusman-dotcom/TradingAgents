@@ -355,3 +355,28 @@ def test_fiscal_years_are_the_union_over_revenue_ebit_and_assets():
     # A year known only from the balance sheet still counts when it has six values.
     del store["OperatingIncomeLoss"]
     assert len(pit.years_as_of(store, "2019-06-30")) == 6
+
+
+def test_a_stale_or_placeholder_cover_count_is_not_used():
+    store = _store()
+    # A registration statement's placeholder count of 1, dated before the newest fiscal year.
+    store[pit.SHARES_DEI] = {"units": {"shares": [
+        {"end": "2019-03-18", "val": 1.0, "filed": "2019-03-18", "form": "10-12B"}]}}
+    assert pit.shares_as_of_dated(store, "2024-03-01") == ("2023-12-31", 200.0)
+    # Dated after the newest year end but far from the annual count: still a placeholder.
+    store[pit.SHARES_DEI]["units"]["shares"].append(
+        {"end": "2024-02-10", "val": 1.0, "filed": "2024-02-20", "form": "10-K"})
+    assert pit.shares_as_of_dated(store, "2024-03-01") == ("2023-12-31", 200.0)
+    # Within 0.5x-2x of the annual count and not stale: the cover count wins.
+    store[pit.SHARES_DEI]["units"]["shares"].append(
+        {"end": "2024-02-11", "val": 390.0, "filed": "2024-02-21", "form": "10-K"})
+    assert pit.shares_as_of_dated(store, "2024-03-01") == ("2024-02-11", 390.0)
+    # Stale: dated before the newest year end known, though its size is fine.
+    stale = _store()
+    stale[pit.SHARES_DEI] = {"units": {"shares": [
+        {"end": "2023-11-01", "val": 199.0, "filed": "2024-02-25", "form": "10-K"}]}}
+    assert pit.shares_as_of_dated(stale, "2024-03-01") == ("2023-12-31", 200.0)
+    # No fiscal year and no annual count known: the cover count stands alone.
+    alone = {pit.SHARES_DEI: {"units": {"shares": [
+        {"end": "2019-03-18", "val": 5.0, "filed": "2019-03-18", "form": "10-12B"}]}}}
+    assert pit.shares_as_of_dated(alone, "2020-01-01") == ("2019-03-18", 5.0)

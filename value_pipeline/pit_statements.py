@@ -77,6 +77,8 @@ TAGS: dict[str, tuple[str, ...]] = {
 DEBT_PARTS = ("LongTermDebtCurrent", "DebtCurrent", "ShortTermBorrowings", "CommercialPaper")
 # The cover-page share count, stored beside the us-gaap tags under this key.
 SHARES_DEI = "dei:EntityCommonStockSharesOutstanding"
+# A cover count this far from the newest annual count (as a ratio) is a placeholder.
+DEI_BAND = (0.5, 2.0)
 # Added to goodwill when both are filed, to match Yahoo's "Goodwill And Other Intangible Assets".
 INTANGIBLES = "IntangibleAssetsNetExcludingGoodwill"
 
@@ -324,18 +326,29 @@ def shares_as_of_dated(store: dict, as_of: str) -> tuple[str, float] | None:
     """The share count known on ``as_of`` and the date it is counted at (its fact's ``end``), on
     the filing's own basis: the latest cover-page count, else the latest annual shares
     outstanding, else diluted weighted average shares. The date is what a split adjustment
-    starts from: splits after it are not in the count."""
-    candidates = (
-        ((SHARES_DEI,), ()),
-        (("CommonStockSharesOutstanding",), sec_edgar._ANNUAL_FORMS),
-        (("WeightedAverageNumberOfDilutedSharesOutstanding",), sec_edgar._ANNUAL_FORMS),
-    )
-    for tags, forms in candidates:
-        values = _values(store, tags, as_of, _ANNUAL, forms)
+    starts from: splits after it are not in the count.
+
+    The cover count is trusted only when it is dated no earlier than the newest fiscal year
+    end known and lies within ``DEI_BAND`` of the newest annual count (when there is one): a
+    registration statement's placeholder (FOX's ``1``) or a stale cover would otherwise price
+    the company at a few dollars."""
+    annual = None
+    for tag in ("CommonStockSharesOutstanding", "WeightedAverageNumberOfDilutedSharesOutstanding"):
+        values = _values(store, (tag,), as_of, _ANNUAL, sec_edgar._ANNUAL_FORMS)
         if values:
-            key = max(values)
-            return key[0], float(values[key])
-    return None
+            (end, _), count = max(values.items())
+            annual = end, float(count)
+            break
+    dei = _values(store, (SHARES_DEI,), as_of, _ANNUAL)
+    if dei:
+        (end, _), count = max(dei.items())
+        ends = _fiscal_year_ends(store, as_of)
+        fresh = not ends or end >= ends[0]
+        sane = annual is None or (annual[1] > 0
+                                  and DEI_BAND[0] <= count / annual[1] <= DEI_BAND[1])
+        if fresh and sane:
+            return end, float(count)
+    return annual
 
 
 def shares_as_of(store: dict, as_of: str) -> float | None:
