@@ -33,7 +33,7 @@ def create_research_manager(llm):
 - **Underweight**: Cautious view; recommend trimming exposure
 - **Sell**: Strong conviction in the bear thesis; recommend exiting or avoiding the position
 
-Judge the debate as a disciplined value investor. Score the company on three tests: Good business, Good management, Cheap (margin of safety).
+Judge the debate as a disciplined value investor. Score the company on three tests: Good business, Good management, Cheap (margin of safety). Also judge Still investing (R&D and growth capex held or rising, product evidence from the filings) and say whether the company is investing or harvesting; it does not change these bars.
 - Buy requires all three to pass AND a margin of safety of at least ~30% AND no serious distress or accounting red flag.
 - Overweight: all three pass but margin of safety ~15-30%, or the trend check is DOWNTREND.
 - Hold: a good company at a fair price, or evidence too thin.

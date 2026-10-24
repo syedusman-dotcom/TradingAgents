@@ -96,7 +96,8 @@ def create_fundamentals_analyst(llm):
             " interest coverage and current ratio from `get_value_metrics`. Flag accounting red flags: receivables or inventory growing much faster than revenue,"
             " falling cash conversion, frequent one-off charges."
             "\n\nSay plainly when data is missing or conflicting instead of guessing."
-            " End with a Markdown table: Good business (score 1-5), Good management (1-5), Cheap (margin of safety %),"
+            " End with a Markdown table: Good business (score 1-5), Good management (1-5), Still investing (investing/harvesting),"
+            " Cheap (margin of safety %),"
             " F-Score, Z-Score, key red flags."
             + get_language_instruction()
         )

@@ -76,6 +76,9 @@ def test_research_manager_prompt_states_constraint():
         },
     })
     assert NO_EXTERNAL_TOOLS in _prompt_text(captured["prompt"])
+    assert ("Also judge Still investing (R&D and growth capex held or rising, product evidence from the "
+            "filings) and say whether the company is investing or harvesting; it does not change these "
+            "bars.") in " ".join(_prompt_text(captured["prompt"]).split())
 
 
 @pytest.mark.unit
@@ -187,6 +190,7 @@ def test_prompts_carry_innovation_lines(monkeypatch):
     flat = " ".join(prompts["f"].split())
     assert "Innovation and reinvestment: state the new-product, launch and pipeline evidence" in flat
     assert "conclude 'investing' or 'harvesting'" in flat
+    assert "Good management (1-5), Still investing (investing/harvesting), Cheap (margin of safety %)" in flat
 
     risk = {
         "history": "h", "aggressive_history": "a", "conservative_history": "c",
@@ -214,3 +218,4 @@ def test_prompts_carry_innovation_lines(monkeypatch):
             "below which the thesis is wrong") in text
     assert "four tests: Good business, Good management, Still investing, Cheap" in text
     assert '"Still investing — PASS: note"' in text
+    assert "Underweight/Sell: Good business, Good management or Cheap clearly fails, the stock" in text

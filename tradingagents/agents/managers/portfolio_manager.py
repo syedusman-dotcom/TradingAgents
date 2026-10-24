@@ -101,7 +101,7 @@ Ground every conclusion in specific evidence from the analysts. Decide as a disc
 - Buy requires Good business, Good management and Cheap to pass AND a probability-weighted margin of safety of at least 30% AND an upside/downside of at least 3 AND no serious distress or accounting red flag.
 - Overweight: those three pass with a probability-weighted margin of safety of at least 15% and an upside/downside of at least 2, or the trend check is DOWNTREND.
 - Hold: a good company at a fair price, or evidence too thin. A Hold on a name not held must give the entry price at which both the margin of safety and the upside/downside bars are met.
-- Underweight/Sell: a test clearly fails, the stock is above intrinsic value, or the original thesis is broken.
+- Underweight/Sell: Good business, Good management or Cheap clearly fails, the stock is above intrinsic value, or the original thesis is broken.
 - Never rate Buy in FREEFALL; wait for BASING.
 Lanes: pick the lane the evidence supports: value first; compounder when the record qualifies; inflection only with verified demand evidence from the news report; state the lane's numbers in `**Lane**:`.
 - Value: the bars above. For the compounder and inflection lanes the Cheap test is replaced by the lane's own price bars, so Cheap may be FAIL (its note states the lane's price test).
