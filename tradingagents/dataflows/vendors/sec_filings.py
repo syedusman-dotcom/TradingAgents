@@ -50,8 +50,10 @@ _ITEM = r"^\s*item\s*"
 _SEP = r"\s*[.:\-–—]?\s*"
 SECTIONS = (
     ("Business (Item 1)",
-     _ITEM + r"1" + _SEP + r"business\.?\s*$",
-     _ITEM + r"1a\b"),
+     # "Item 1. Business", "Items 1 and 2. Business and Properties", "Item 1. Description of
+     # Business"; never 1A, 1B or 10 (the 1 is followed by the separator or "and 2").
+     _ITEM + r"s?\s*1(\s*(and|&)\s*2)?" + _SEP + r"(description\s+of\s+)?business\b[^\n]{0,40}$",
+     _ITEM + r"(1a|3)\b"),
     ("Risk factors (Item 1A)",
      _ITEM + r"1a" + _SEP + r"risk\s+factors\.?\s*$",
      _ITEM + r"(1b|1c|2)\b"),
@@ -113,7 +115,7 @@ _BLOCKS = ("p", "div", "br", "tr", "li", "h1", "h2", "h3", "h4", "h5", "h6", "ta
 
 
 # A charset or XML encoding declared near the top of the document; lxml honours it.
-_DECLARED_ENCODING = re.compile(rb"charset\s*=|<\?xml[^>]*encoding", re.I)
+_DECLARED_ENCODING = re.compile(rb"<meta\b[^>]*charset\s*=|<\?xml[^>]*encoding", re.I)
 
 
 def _decoded(document: bytes) -> bytes | str:
@@ -225,7 +227,7 @@ def get_annual_report(ticker: str, as_of_date: str | None = None) -> str:
             innovation = _innovation_lines(body)
             lines += [f"## {title}", "", _cut(body, BUSINESS_CHARS), "",
                       "## Products and innovation lines", "",
-                      _cut("\n".join(innovation), OUTLOOK_CHARS) if innovation else "None found.", ""]
+                      _cut("\n".join(innovation), OUTLOOK_CHARS) if innovation else "None past the cut.", ""]
         else:
             lines += [f"## {title}", "", _cut(body, SECTION_CHARS), ""]
     return "\n".join(lines)

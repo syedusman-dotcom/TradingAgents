@@ -398,11 +398,24 @@ def test_business_section_is_the_body_and_stops_at_1a():
 def test_business_heading_does_not_match_item_1a():
     import re
     start = sec_filings.SECTIONS[0][1]
-    for heading in ("Item 1. Business", "Item 1. Business.", "ITEM 1 – BUSINESS", "Item 1: Business"):
+    for heading in ("Item 1. Business", "Item 1. Business.", "ITEM 1 – BUSINESS", "Item 1: Business",
+                    "Item 1 and 2. Business and Properties", "Items 1 and 2. Business and Properties",
+                    "ITEMS 1 & 2. BUSINESS AND PROPERTIES", "Item 1. Business Overview",
+                    "Item 1. Description of Business"):
         assert re.search(start, heading, re.I | re.M), heading
     for heading in ("Item 1A. Risk Factors", "Item 1A. Business Risks", "Item 1B. Business",
-                    "Item 10. Directors", "Item 1. Business 4"):
+                    "Item 1C. Cybersecurity", "Item 10. Directors", "Item 10. Business Conduct",
+                    "Item 12. Business Relationships", "Item 2. Properties",
+                    "See Item 1. Business for more."):
         assert not re.search(start, heading, re.I | re.M), heading
+
+
+@pytest.mark.unit
+def test_a_combined_items_1_and_2_section_stops_at_item_3():
+    text = ("Items 1 and 2. Business and Properties\n" + "We drill wells. " * 60
+            + "\nItem 3. Legal Proceedings\nNone.\n")
+    business = sec_filings.section_spans(text)["Business (Item 1)"]
+    assert business.startswith("We drill wells.") and "Legal" not in business
 
 
 @pytest.mark.unit
@@ -431,7 +444,7 @@ def test_innovation_lines_kept_beyond_the_cut(edgar):
 def test_innovation_lines_none_found(edgar):
     out = _ten_k(edgar)
     innovation = out.split("## Products and innovation lines")[1].split("## Risk factors")[0]
-    assert innovation.strip() == "None found."
+    assert innovation.strip() == "None past the cut."
 
 
 @pytest.mark.unit
@@ -451,4 +464,6 @@ def test_an_undeclared_charset_is_read_as_utf8():
     assert sec_filings._plain_text(declared.encode("cp1252")).splitlines()[0] == "ITEM 1 – BUSINESS"
     body = text.replace("We make", "We make " + "drinks. " * 80) + "\nItem 1A. Risk Factors"
     found = sec_filings.section_spans(body)
-    assert "Business (Item 1)" in found
+    assert found["Business (Item 1)"].startswith("We make drinks. drinks.")
+    in_comment = document.replace("<body>", "<body><!-- charset=windows-1252 -->")
+    assert sec_filings._plain_text(in_comment.encode("utf-8")).splitlines()[0] == "ITEM 1 – BUSINESS"
