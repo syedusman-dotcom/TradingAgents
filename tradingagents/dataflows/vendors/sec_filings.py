@@ -39,6 +39,8 @@ NO_QUARTERLY_FILINGS = (
 # Each section is cut to this many characters (~3,000 tokens) so the report
 # informs the analyst without crowding out the numbers.
 SECTION_CHARS = 12_000
+# The Business section (Item 1) is cut shorter: its product and innovation paragraphs follow it whole.
+BUSINESS_CHARS = 6_000
 
 # (title, start heading, end heading) in a 10-K's text, one block per line.
 # A heading stands on its own line; the same words inside a sentence ("refer to
@@ -47,6 +49,9 @@ SECTION_CHARS = 12_000
 _ITEM = r"^\s*item\s*"
 _SEP = r"\s*[.:\-–—]?\s*"
 SECTIONS = (
+    ("Business (Item 1)",
+     _ITEM + r"1" + _SEP + r"business\.?\s*$",
+     _ITEM + r"1a\b"),
     ("Risk factors (Item 1A)",
      _ITEM + r"1a" + _SEP + r"risk\s+factors\.?\s*$",
      _ITEM + r"(1b|1c|2)\b"),
@@ -167,7 +172,8 @@ def _filing_url(cik: str, filing: dict, document: str) -> str:
 
 def _sections(cik: str, filing: dict) -> dict[str, str]:
     """A filing's sections, cached forever: a filed document never changes."""
-    path = _cache_dir() / f"10k_{cik}_{filing['accession']}.json"
+    # _v2: Item 1 (Business) added; filings cached before it are read again.
+    path = _cache_dir() / f"10k_{cik}_{filing['accession']}_v2.json"
     if path.exists():
         try:
             return json.loads(path.read_text(encoding="utf-8"))
@@ -180,7 +186,7 @@ def _sections(cik: str, filing: dict) -> dict[str, str]:
 
 
 def get_annual_report(ticker: str, as_of_date: str | None = None) -> str:
-    """Risk factors and management's discussion from the latest 10-K filed by ``as_of_date``."""
+    """Business, risk factors and management's discussion from the latest 10-K filed by ``as_of_date``."""
     as_of_date = as_of_date or datetime.now().strftime("%Y-%m-%d")
     cik = sec_edgar.cik_for(ticker)
     if cik is None:
@@ -190,15 +196,39 @@ def get_annual_report(ticker: str, as_of_date: str | None = None) -> str:
         raise NoMarketDataError(ticker, ticker, f"no 10-K filed by {as_of_date}")
     found = _sections(cik, filing)
     lines = [f"# Annual report (10-K) for {ticker.upper()}, filed {filing['filed']}",
-             "Management's own words, as filed. Cite it for risks and for why results moved; "
-             f"each section is cut to its first {SECTION_CHARS:,} characters.", ""]
+             "Management's own words, as filed. Cite it for what the company is building, for risks "
+             f"and for why results moved; the Business section is cut to its first {BUSINESS_CHARS:,} "
+             f"characters and followed by its product and innovation paragraphs, kept whole; each "
+             f"other section is cut to its first {SECTION_CHARS:,} characters.", ""]
     if not found:
-        lines.append("The filing's risk factors and discussion sections could not be located in its text.")
-    for title, body in found.items():
-        cut = body[:SECTION_CHARS]
-        more = "" if len(body) <= SECTION_CHARS else f" [... {len(body) - SECTION_CHARS:,} more characters not shown]"
-        lines += [f"## {title}", "", cut + more, ""]
+        lines.append("The filing's business, risk factors and discussion sections could not be located in its text.")
+    for title, *_ in SECTIONS:
+        if title not in found:
+            continue
+        body = found[title]
+        if title == SECTIONS[0][0]:
+            innovation = _innovation_lines(body)
+            lines += [f"## {title}", "", _cut(body, BUSINESS_CHARS), "",
+                      "## Products and innovation lines", "",
+                      _cut("\n".join(innovation), OUTLOOK_CHARS) if innovation else "None found.", ""]
+        else:
+            lines += [f"## {title}", "", _cut(body, SECTION_CHARS), ""]
     return "\n".join(lines)
+
+
+# Paragraphs of the Business section that say what the company is building, kept whole.
+INNOVATION_WORDS = ("new product", "launch", "innovation", "innovative", "research and development",
+                    "pipeline", "patent", "roadmap", "introduced", "next generation", "next-generation")
+_INNOVATION = re.compile(r"\b(" + "|".join(re.escape(w) for w in INNOVATION_WORDS) + ")", re.I)
+
+
+def _innovation_lines(business: str) -> list[str]:
+    """The Business section's paragraphs naming a product, launch, pipeline or R&D, in order."""
+    found = []
+    for paragraph in business.split("\n"):
+        if _INNOVATION.search(paragraph) and paragraph not in found:
+            found.append(paragraph)
+    return found
 
 
 def _cut(body: str, limit: int) -> str:

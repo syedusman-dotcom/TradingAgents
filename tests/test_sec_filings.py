@@ -354,3 +354,84 @@ def test_an_empty_exhibit_is_the_vendor_unavailable_not_a_crash(edgar):
     docs["000002134426000040/ex99-1.htm"] = b""
     with pytest.raises(VendorUnavailableError):
         sec_filings.latest_earnings_release("KO", "2026-07-25")
+
+
+TEN_K = """
+Table of Contents
+Item 1. Business
+Item 1A. Risk Factors
+Item 1B. Unresolved Staff Comments
+Item 7. Management's Discussion and Analysis of Financial Condition and Results of Operations
+Item 7A. Quantitative and Qualitative Disclosures About Market Risk
+PART I
+ITEM 1 – BUSINESS.
+We make drinks and sell them in 200 countries.
+""" + "Our bottlers distribute the concentrate. " * 30 + """
+Item 1A. Risk Factors
+""" + "Demand for our drinks may fall. " * 30 + """
+Item 1B. Unresolved Staff Comments
+None.
+Item 7. Management's Discussion and Analysis of Financial Condition and Results of Operations
+""" + "Revenue grew on pricing. " * 30 + """
+Item 7A. Quantitative and Qualitative Disclosures About Market Risk
+Rates.
+"""
+
+
+def _ten_k(edgar, text=TEN_K):
+    docs, _ = edgar
+    docs["000002134426000010/k.htm"] = _html(text.replace("–", "&#8211;"))  # as EDGAR encodes it
+    return sec_filings.get_annual_report("KO", "2026-03-01")
+
+
+@pytest.mark.unit
+def test_business_section_is_the_body_and_stops_at_1a():
+    found = sec_filings.section_spans(TEN_K)
+    business = found["Business (Item 1)"]
+    assert business.startswith("We make drinks and sell them in 200 countries.")
+    assert "Demand for our drinks" not in business and "Risk Factors" not in business
+    assert found["Risk factors (Item 1A)"].startswith("Demand for our drinks may fall.")
+    assert sec_filings.SECTIONS[0][0] == "Business (Item 1)"
+
+
+@pytest.mark.unit
+def test_business_heading_does_not_match_item_1a():
+    import re
+    start = sec_filings.SECTIONS[0][1]
+    for heading in ("Item 1. Business", "Item 1. Business.", "ITEM 1 – BUSINESS", "Item 1: Business"):
+        assert re.search(start, heading, re.I | re.M), heading
+    for heading in ("Item 1A. Risk Factors", "Item 1A. Business Risks", "Item 1B. Business",
+                    "Item 10. Directors", "Item 1. Business 4"):
+        assert not re.search(start, heading, re.I | re.M), heading
+
+
+@pytest.mark.unit
+def test_innovation_lines_kept_beyond_the_cut(edgar):
+    assert sec_filings.BUSINESS_CHARS == 6_000
+    late = "In 2025 we introduced a new product line of zero-sugar drinks."
+    text = TEN_K.replace("Item 1A. Risk Factors\nDemand",
+                         "Distribution filler. " * 400 + "\n" + late + "\nItem 1A. Risk Factors\nDemand")
+    out = _ten_k(edgar, text)
+    order = [out.index(h) for h in ("## Business (Item 1)", "## Products and innovation lines",
+                                    "## Risk factors (Item 1A)",
+                                    "## Management's discussion and analysis (Item 7)")]
+    assert order == sorted(order)
+    business, rest = out.split("## Products and innovation lines")
+    assert late not in business and "more characters not shown]" in business
+    innovation = rest.split("## Risk factors (Item 1A)")[0]
+    assert late in innovation and "Distribution filler" not in innovation
+    assert "6,000" in out.splitlines()[1]
+
+
+@pytest.mark.unit
+def test_innovation_lines_none_found(edgar):
+    out = _ten_k(edgar)
+    innovation = out.split("## Products and innovation lines")[1].split("## Risk factors")[0]
+    assert innovation.strip() == "None found."
+
+
+@pytest.mark.unit
+def test_sections_cache_name_is_versioned(edgar, tmp_path):
+    _ten_k(edgar)
+    names = [p.name for p in (tmp_path / "sec_edgar").iterdir()]
+    assert names == [f"10k_{CIK}_0000021344-26-000010_v2.json"]
