@@ -251,6 +251,24 @@ def test_market_cap_uses_split_factor():
     assert n == SHARES and cap == pytest.approx(price * SHARES)
 
 
+def test_market_cap_counts_a_split_between_the_cover_date_and_the_date():
+    # The cover count (100M) is dated 2024-02-10; a 2:1 split on 2024-04-01 is before AS_OF
+    # and already in Yahoo's close, so the count is doubled to meet it.
+    hist = _hist(split_day="2024-04-01")
+    row, (years, price, market_cap, shares) = _snapshot(_snap_store(), hist=hist)
+    assert shares == 2 * SHARES == years[0]["shares"]
+    assert market_cap == pytest.approx(price * 2 * SHARES)
+    assert row["market_cap"] == pytest.approx(market_cap)
+
+
+def test_snapshot_none_on_a_stale_price():
+    hist = _hist()
+    stopped = hist[hist["date"] <= "2024-06-14"]          # 14 days before AS_OF: delisted
+    assert _snapshot(_snap_store(), hist=stopped) is None
+    recent = hist[hist["date"] <= "2024-06-18"]           # 10 days before: still trading
+    assert _snapshot(_snap_store(), hist=recent) is not None
+
+
 def test_snapshot_feeds_four_years_and_the_pm_record():
     store = _snap_store()
     row, (years, *_) = _snapshot(store)
@@ -277,29 +295,36 @@ def test_snapshot_feeds_four_years_and_the_pm_record():
 
 
 def _rec(**over) -> dict:
-    rec = {"roic_years_counted": 4, "roic_gw_years_above_15": 4, "roic_gw_min": 0.15,
-           "revenue_cagr": 0.08, "revenue_cagr_years": 5, "fcf_cagr": 0.05, "fcf_cagr_years": 3}
+    """A record exactly at every PM bar."""
+    n = dm.COMPOUNDER_MIN_ROIC_YEARS
+    rec = {"roic_years_counted": n, "roic_gw_years_above_15": n,
+           "roic_gw_min": dm.COMPOUNDER_ROIC_INCL_GOODWILL,
+           "revenue_cagr": dm.COMPOUNDER_REVENUE_CAGR,
+           "revenue_cagr_years": dm.COMPOUNDER_MIN_CAGR_YEARS,
+           "fcf_cagr": dm.COMPOUNDER_FCF_CAGR, "fcf_cagr_years": dm.COMPOUNDER_MIN_FCF_YEARS}
     rec.update(over)
     return rec
 
 
 def test_pm_record_ok_at_each_bar():
-    assert dm.COMPOUNDER_ROIC_INCL_GOODWILL == 0.15      # the bars below are set at these
+    n = dm.COMPOUNDER_MIN_ROIC_YEARS
+    roic, cagr, fcf = (dm.COMPOUNDER_ROIC_INCL_GOODWILL, dm.COMPOUNDER_REVENUE_CAGR,
+                       dm.COMPOUNDER_FCF_CAGR)
     assert backtest.pm_record_ok(_rec()) is True
-    assert backtest.pm_record_ok(_rec(roic_gw_min=0.15 - 1e-12, fcf_cagr=0.05 - 1e-12)) is True
+    assert backtest.pm_record_ok(_rec(roic_gw_min=roic - 1e-12, fcf_cagr=fcf - 1e-12)) is True
     for change in (
-        {"roic_years_counted": 3, "roic_gw_years_above_15": 3},
-        {"roic_gw_years_above_15": 3},
-        {"roic_gw_min": 0.1499},
+        {"roic_years_counted": n - 1, "roic_gw_years_above_15": n - 1},
+        {"roic_gw_years_above_15": n - 1},
+        {"roic_gw_min": roic - 1e-4},
         {"roic_years_counted": None},
         {"roic_gw_years_above_15": None},
-        {"revenue_cagr": 0.0799},
+        {"revenue_cagr": cagr - 1e-4},
         {"revenue_cagr": None},
-        {"revenue_cagr_years": 4},
+        {"revenue_cagr_years": dm.COMPOUNDER_MIN_CAGR_YEARS - 1},
         {"revenue_cagr_years": None},
-        {"fcf_cagr": 0.0499},
+        {"fcf_cagr": fcf - 1e-4},
         {"fcf_cagr": None},
-        {"fcf_cagr_years": 2},
+        {"fcf_cagr_years": dm.COMPOUNDER_MIN_FCF_YEARS - 1},
         {"fcf_cagr_years": None},
     ):
         assert backtest.pm_record_ok(_rec(**change)) is False, change

@@ -319,9 +319,11 @@ def quarters_as_of(store: dict, as_of: str) -> list[dict]:
     return out
 
 
-def shares_as_of(store: dict, as_of: str) -> float | None:
-    """The share count known on ``as_of``, on the filing's own basis: the latest cover-page
-    count, else the latest annual shares outstanding, else diluted weighted average shares."""
+def shares_as_of_dated(store: dict, as_of: str) -> tuple[str, float] | None:
+    """The share count known on ``as_of`` and the date it is counted at (its fact's ``end``), on
+    the filing's own basis: the latest cover-page count, else the latest annual shares
+    outstanding, else diluted weighted average shares. The date is what a split adjustment
+    starts from: splits after it are not in the count."""
     candidates = (
         ((SHARES_DEI,), ()),
         (("CommonStockSharesOutstanding",), sec_edgar._ANNUAL_FORMS),
@@ -330,8 +332,15 @@ def shares_as_of(store: dict, as_of: str) -> float | None:
     for tags, forms in candidates:
         values = _values(store, tags, as_of, _ANNUAL, forms)
         if values:
-            return float(values[max(values)])
+            key = max(values)
+            return key[0], float(values[key])
     return None
+
+
+def shares_as_of(store: dict, as_of: str) -> float | None:
+    """``shares_as_of_dated``'s count alone."""
+    dated = shares_as_of_dated(store, as_of)
+    return None if dated is None else dated[1]
 
 
 def revenue_history(store: dict, as_of: str) -> dict[str, float]:

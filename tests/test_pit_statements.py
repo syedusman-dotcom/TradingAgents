@@ -246,6 +246,15 @@ def test_shares_as_of_precedence():
     assert pit.shares_as_of(store, "2022-01-01") is None
 
 
+def test_shares_as_of_dated_names_the_count_date():
+    store = _store()
+    assert pit.shares_as_of_dated(store, "2023-03-01") == ("2023-02-10", 101.0)
+    assert pit.shares_as_of_dated(store, "2024-03-01") == ("2024-02-10", 205.0)
+    del store[pit.SHARES_DEI]
+    assert pit.shares_as_of_dated(store, "2024-03-01") == ("2023-12-31", 200.0)
+    assert pit.shares_as_of_dated(store, "2022-01-01") is None
+
+
 def test_year_shares_take_the_first_filing_and_the_split_factor():
     store = _store()
     years = pit.years_as_of(store, "2024-03-01")

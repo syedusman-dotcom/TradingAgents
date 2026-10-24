@@ -34,7 +34,7 @@ from value_pipeline.config import Paths
 from value_pipeline.pit_statements import (
     quarters_as_of,
     revenue_history,
-    shares_as_of,
+    shares_as_of_dated,
     years_as_of,
 )
 
@@ -207,24 +207,35 @@ def pm_record_ok(rec: dict) -> bool:
                 or fcf < COMPOUNDER_FCF_CAGR - 1e-9)
 
 
+def _traded_near(hist, day: str) -> bool:
+    """Whether the last close on or before ``day`` is at most ``WITHIN_DAYS`` before it (a
+    delisted name is not valued on a stale price)."""
+    rows = hist[hist["date"] <= pd.Timestamp(day)].dropna(subset=["close"])
+    return (not rows.empty
+            and rows["date"].iloc[-1] >= pd.Timestamp(day) - timedelta(days=WITHIN_DAYS))
+
+
 def snapshot(ticker: str, as_of: str, store: dict, hist: pd.DataFrame, rate: float, cfg: dict,
              sector: str | None = None) -> tuple[dict, tuple] | None:
     """The screen's row for ``ticker`` as it would have read on ``as_of``, from the facts filed
     and the closes dated on or before it, plus the PM's record verdict (``pm_record_ok``);
     with the ``(years, price, market_cap, shares)`` that ``screener.apply_sector_targets``
-    takes. None with fewer than two fiscal years, no close, or ``DataUnavailable``."""
+    takes. None with fewer than two fiscal years, no close in the ``WITHIN_DAYS`` up to
+    ``as_of``, or ``DataUnavailable``."""
     years = years_as_of(store, as_of,
                         split_factor=lambda end: split_factor_after(hist, end))[:SCREEN_YEARS]
     if len(years) < 2:
         log.info("skip %s on %s: fewer than two fiscal years filed", ticker, as_of)
         return None
     closes = closes_before(hist, as_of)
-    if not closes:
-        log.info("skip %s on %s: no close", ticker, as_of)
+    if not closes or not _traded_near(hist, as_of):
+        log.info("skip %s on %s: no close in the %d days to it", ticker, as_of, WITHIN_DAYS)
         return None
     price = closes[-1]
-    filed = shares_as_of(store, as_of)
-    shares = None if filed is None else filed * split_factor_after(hist, as_of)
+    # The count is on its filing's basis at its own date; Yahoo's close already reflects every
+    # split since, so the count is brought forward from that date, not from ``as_of``.
+    dated = shares_as_of_dated(store, as_of)
+    shares = None if dated is None else dated[1] * split_factor_after(hist, dated[0])
     market_cap = None if shares is None else price * shares
     quarters = quarters_as_of(store, as_of)
     data = {"ticker": ticker, "price": price, "shares": shares, "market_cap": market_cap,
