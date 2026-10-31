@@ -52,14 +52,16 @@ sizing:
 
 # Investment lanes beyond value (compounder, inflection) and the dislocation scan: where
 # discovery looks, and how many candidates of each it adds to a review.
-# Since 2026-10-24 the review is value plus strict compounder Buys: no inflection or dislocation
-# candidates (the backtest found inflection high-variance and dislocation flat over a year).
+# Since 2026-10-24 the review is value plus strict compounder Buys: no inflection candidates (the
+# backtest found inflection high-variance). Dislocation candidates were off from 2026-10-24 (flat
+# over a year in the backtest, +14.5 pts over three) and back on from 2026-10-31 for the Q3
+# earnings season; they are reviewed as value-lane names and still need the value bar to be bought.
 lanes:
   themes: []                 # e.g. ["AI infrastructure", "grid equipment"]
   tickers: []                # names to always consider
   inflection_candidates: 0
   compounder_candidates: 2
-  dislocation_candidates: 0  # quality names down 25%+ from the high (or 20%+ in a month), numbers intact
+  dislocation_candidates: 3  # quality names down 25%+ from the high (or 20%+ in a month), numbers intact
 
 # The lane-rule backtest (python -m value_pipeline backtest): the screen's lane rules replayed on
 # what was filed by each past cohort date, held for fixed terms, against SPY and the universe.
