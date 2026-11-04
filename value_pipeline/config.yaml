@@ -83,10 +83,11 @@ watch:
 
 daily:
   enabled: true        # the weekday price check that re-reviews what changed
-  scope: holdings      # holdings: keep-or-sell re-reviews only; ideas that fire wait for Saturday. all: re-review ideas too
+  scope: all           # since 2026-11-05: ideas that reach their entry price are re-reviewed the same morning, not left for Saturday
   max_reviews: 3       # re-reviews per day; the rest wait until tomorrow
   cooldown_days: 5     # skip a ticker reviewed this recently (EARNINGS and REACHED VALUE ignore it)
   big_move: 0.15       # a move this far from the last review's price triggers a re-review
+  exclude: [000270.KS] # ideas never re-reviewed on weekdays (Korea is untradeable for this account)
 
 superinvestors:
   # Concentrated value investors whose latest 13F holdings are shown beside the

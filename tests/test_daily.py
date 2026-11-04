@@ -358,3 +358,14 @@ def test_daily_default_scope_reviews_holdings_and_lists_ideas_for_saturday(tmp_p
     assert "DNLM.L" in text.split("## For Saturday's review")[1]
     assert "ENTRY PRICE" in text
     assert notes == ["2 trigger(s): HRB REACHED VALUE; DNLM.L ENTRY PRICE — 1 review(s) run; 1 idea(s) for Saturday"]
+
+
+def test_daily_exclude_keeps_a_ticker_out_of_the_ideas(tmp_path, monkeypatch):
+    """A ticker in ``daily.exclude`` (an untradeable market, say) never fires as an idea."""
+    paths = _data(tmp_path, monkeypatch, {"HRB": 50.0, "DNLM.L": 740.0})
+    monkeypatch.setattr(review, "run", _no_review)
+    cfg = {"daily": {**DEFAULTS["daily"], "scope": "all", "exclude": ["DNLM.L"]},
+           "watch": dict(DEFAULTS["watch"])}
+    found, out, _ = daily.run(paths, cfg, dry_run=True, notify=False, today=TODAY)
+    assert [t.ticker for t in found] == []
+    assert "DNLM.L" not in out.read_text().split("## Triggers")[1]

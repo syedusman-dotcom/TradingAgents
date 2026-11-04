@@ -127,11 +127,12 @@ def _inputs(paths: Paths, cfg: dict, today: date):
         if _iso(p.last_review_date):
             last_review[p.ticker] = p.last_review_date
     max_age = cfg["watch"].get("max_rating_age_days", 120)
+    excluded = {t.upper() for t in cfg["daily"].get("exclude", [])}   # never re-reviewed as ideas
     ideas = []
     for t, row in latest.items():
         reviewed = _iso(row.get("date"))
-        if (pf.position(t) is None and row.get("rating") != "Sell" and reviewed
-                and (today - reviewed).days <= max_age):
+        if (pf.position(t) is None and t.upper() not in excluded and row.get("rating") != "Sell"
+                and reviewed and (today - reviewed).days <= max_age):
             ideas.append(row)
             last_review[t] = row["date"]
     return holdings, ideas, criteria, last_review
