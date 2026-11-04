@@ -1,7 +1,7 @@
 #!/bin/bash
 # Value pipeline, started by launchd every Saturday. Never trades.
 #
-# Every Saturday: the full review. Screen the S&P 500 + 400, run the agents on
+# Every Saturday, and since 2026-11-05 every weekday too (until the cash is invested): the full review. Screen the S&P 500 + 400, run the agents on
 # holdings and the top candidates (plus lane hints and themes), and write
 # value_pipeline/data/reports/<date>/ACTIONS.md. Weekly since 2026-10-24; the
 # weekday daily check (scripts/daily.sh) covers the days between.

@@ -284,8 +284,27 @@ def fit_to_cap(tickers: list[str], n_held: int, cost_per_run: float, limit: floa
     return tickers[:keep], keep - n_held, len(tickers) - keep
 
 
+def recently_reviewed(paths: Paths, days: int, today: date | None = None) -> set[str]:
+    """Tickers with a result (not errored) from a review dated within the last ``days`` days;
+    empty when ``days`` is 0."""
+    if days <= 0:
+        return set()
+    from value_pipeline.watch import latest_results
+
+    today = today or date.today()
+    out = set()
+    for row in latest_results(paths):
+        try:
+            reviewed = date.fromisoformat(row["date"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if (today - reviewed).days < days:
+            out.add(row["ticker"])
+    return out
+
+
 def preview(paths: Paths, cfg: dict, only: list[str] | None = None,
-            discovered: list[str] | None = None) -> dict:
+            discovered: list[str] | None = None, today: date | None = None) -> dict:
     """What a review would run and cost, without running anything.
 
     Candidates: the names in ``lanes.tickers``, the screen's best Magic Formula names, up to
@@ -301,7 +320,11 @@ def preview(paths: Paths, cfg: dict, only: list[str] | None = None,
         n_themes = len({t for t in discovered or [] if t not in owned})
         inflections = max(0, int(lanes.get("inflection_candidates", 0)) - n_themes)
         named = [t.strip().upper() for t in lanes.get("tickers") or [] if t.strip()]
-        screened = screener.top_candidates(paths, owned, rcfg["candidates"],
+        # A daily review moves down the screen: names reviewed in the last
+        # ``candidate_cooldown_days`` give their place to the next ones (holdings and named
+        # tickers always run).
+        skip = owned | recently_reviewed(paths, int(rcfg.get("candidate_cooldown_days", 0)), today)
+        screened = screener.top_candidates(paths, skip, rcfg["candidates"],
                                            compounders=int(lanes.get("compounder_candidates", 0)),
                                            dislocations=int(lanes.get("dislocation_candidates", 0)),
                                            inflections=inflections)

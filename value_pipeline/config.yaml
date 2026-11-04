@@ -19,13 +19,14 @@ filters:
 
 screen:
   top_n: 10
-  cache_days: 7
+  cache_days: 1           # daily reviews since 2026-11-05 need each day's prices (7 while weekly)
   throttle_seconds: 0.3   # pause between tickers, to stay polite to Yahoo
   normalize_years: 5      # rank on EBIT and ROIC averaged over up to this many years
   roic_cap: 1.0           # ROIC above 100% ranks as 100%, so asset-light outliers don't dominate
 
 review:
   candidates: 5            # top screen candidates (not held) to analyse each review
+  candidate_cooldown_days: 5  # a candidate reviewed this recently gives its place to the next one down the screen (daily reviews since 2026-11-05)
   analysts: [market, news, fundamentals]
   # Financial statements for the agents. yfinance: ~5 years with every line (debt,
   # interest, PP&E, buybacks, dividends). sec_edgar: ~20 years of top-line rows only.

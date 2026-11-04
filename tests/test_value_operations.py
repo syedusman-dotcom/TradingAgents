@@ -202,3 +202,24 @@ def test_value_history_starts_at_the_earliest_trade_not_the_first_deposit(paths,
     monkeypatch.setattr(market_data, "closes_between", closes_between)
     history.fetch_value_series(paths)
     assert asked["SPY"] == "2021-03-01" and asked["KO"] == "2021-03-01"
+
+
+@pytest.mark.unit
+def test_review_candidate_cooldown_moves_down_the_screen(paths, tmp_path):
+    """A candidate reviewed within ``candidate_cooldown_days`` gives its place to the next one."""
+    import json
+
+    (paths.screens).mkdir(parents=True, exist_ok=True)
+    pd.DataFrame([{"ticker": t, "mf_position": i + 1, "trend": "UPTREND", "lane_hint": ""}
+                  for i, t in enumerate(["AAA", "BBB", "CCC"])]).to_csv(paths.screens / "screen_2026-11-04.csv", index=False)
+    folder = paths.reports / "2026-11-03"
+    folder.mkdir(parents=True)
+    (folder / "results.json").write_text(json.dumps([{"ticker": "AAA", "rating": "Hold", "error": None}]))
+    cfg = {**DEFAULTS, "review": {**DEFAULTS["review"], "candidates": 2, "candidate_cooldown_days": 5},
+           "lanes": {**DEFAULTS.get("lanes", {}), "compounder_candidates": 0, "dislocation_candidates": 0,
+                     "inflection_candidates": 0}}
+    p = review.preview(paths, cfg, today=date(2026, 11, 4))
+    assert p["tickers"] == ["BBB", "CCC"]
+    assert review.recently_reviewed(paths, 0, date(2026, 11, 4)) == set()
+    cfg["review"]["candidate_cooldown_days"] = 0
+    assert review.preview(paths, cfg, today=date(2026, 11, 4))["tickers"] == ["AAA", "BBB"]
