@@ -84,6 +84,13 @@ def test_trade_fx_reads_the_market_and_refuses_an_unknown_rate():
 
 
 @pytest.mark.unit
+def test_trade_fx_refuses_a_foreign_position_when_the_currency_is_unreadable():
+    held = Position("DNLM.L", 1, 900.0, "2026-11-05", currency="GBp")
+    with pytest.raises(TradeError, match="--fx"):
+        trade_fx("DNLM.L", None, position=held, fx_fn=lambda t: (None, 1.0))
+
+
+@pytest.mark.unit
 def test_record_buy_writes_currency_and_fx_and_upgrades_an_old_log(tmp_path, monkeypatch):
     paths = Paths(tmp_path)
     ops.init_portfolio(paths, 10_000.0, on="2026-10-01")
@@ -121,6 +128,10 @@ def test_portfolio_view_values_pence_in_dollars_and_falls_back_to_cost(tmp_path)
     view = portfolio_view(paths, price_fn=lambda t: 1_000.0, benchmark_fn=lambda *a: None,
                           fx_fn=lambda t: ("GBp", None))
     assert view["positions"][0]["value"] == pytest.approx(1_215.0)
+    view = portfolio_view(paths, price_fn=lambda t: 1_000.0, benchmark_fn=lambda *a: None,
+                          fx_fn=lambda t: (None, 1.0))      # unreadable currency: not dollars
+    assert view["positions"][0]["value"] == pytest.approx(1_215.0)
+    assert view["positions"][0]["fx"] is None
     view = portfolio_view(paths, price_fn=lambda t: None, benchmark_fn=lambda *a: None,
                           fx_fn=lambda t: ("GBp", 0.014))
     assert view["positions"][0]["gain"] is None

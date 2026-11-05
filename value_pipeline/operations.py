@@ -63,7 +63,7 @@ def trade_fx(ticker: str, fx: float | None, position: pfmod.Position | None = No
         return currency, fx
     if currency in (None, "USD"):
         return currency, 1.0
-    if market_rate is None:
+    if market_currency is None or market_rate is None:   # an unreadable currency has no trusted rate
         raise pfmod.TradeError(f"no dollar rate for {currency}: pass --fx (dollars per {currency})")
     return currency, market_rate
 
@@ -169,6 +169,8 @@ def portfolio_view(paths: Paths, price_fn=market_data.latest_price, benchmark_fn
     for p in pf.positions:
         price = price_fn(p.ticker)
         currency, rate = fx_fn(p.ticker)
+        if currency is None and p.currency not in (None, "USD"):
+            rate = None            # the market's 1.0 is a placeholder, not a rate for this currency
         value = p.shares * price * rate if price is not None and rate is not None else p.cost_usd
         cost = p.cost_usd
         iv = p.intrinsic_value_estimate
