@@ -39,6 +39,7 @@ DEFAULTS: dict = {
         "max_cost_per_review": 40.0,
         "committee": True,
         "candidate_cooldown_days": 0,
+        "min_run_rate": 0.8,
     },
     "watch": {"buy_margin_of_safety": 0.30, "max_rating_age_days": 120},
     "daily": {"enabled": True, "scope": "holdings", "max_reviews": 3, "cooldown_days": 5, "big_move": 0.15,

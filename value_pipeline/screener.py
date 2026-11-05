@@ -214,20 +214,20 @@ def latest_screen(paths: Paths) -> Path | None:
 
 
 def top_candidates(paths: Paths, owned: set[str], n: int, compounders: int = 0,
-                   dislocations: int = 0, inflections: int = 0) -> list[dict]:
+                   dislocations: int = 0, inflections: int = 0, min_run_rate: float = 0.0) -> list[dict]:
     """The best-ranked, not-owned, not-FREEFALL tickers from the latest screen, then up to
     ``compounders`` compounder-hinted ones (best compounder return first: yield + earned growth +
     reversion at most 0), then up to ``dislocations`` dislocation-hinted ones (best expected
     return first), each not already listed. A dislocated compounder counts as a dislocation too
     (its ``hints`` column lists both). Then up to ``inflections`` inflection-hinted ones (best
     expected return first). A screen from before the compounder return ranks
-    compounders by expected return."""
-    path = latest_screen(paths)
-    if path is None:
+    compounders by expected return. A Magic Formula pick whose TTM EBIT is below ``min_run_rate``
+    times its five-year average gives its place to the next name (a missing ratio passes; the
+    hinted lanes ignore the filter; 0 turns it off)."""
+    df = _eligible(paths, owned)
+    if df is None:
         return []
-    df = pd.read_csv(path)
-    df = df[~df["ticker"].isin(owned) & (df["trend"] != "FREEFALL")]
-    picks = df[df["mf_position"].notna()].sort_values("mf_position").head(n)
+    picks = _ranked(df, min_run_rate).head(n)
     for hint, count in (("compounder", compounders), ("dislocation", dislocations),
                         ("inflection", inflections)):
         if count <= 0 or "lane_hint" not in df:
@@ -238,6 +238,37 @@ def top_candidates(paths: Paths, owned: set[str], n: int, compounders: int = 0,
         hinted = hinted.sort_values(key, ascending=False, na_position="last")
         picks = pd.concat([picks, hinted.head(count)])
     return picks.to_dict("records")
+
+
+def _eligible(paths: Paths, owned: set[str]) -> pd.DataFrame | None:
+    """The latest screen without owned and FREEFALL rows (None without a screen)."""
+    path = latest_screen(paths)
+    if path is None:
+        return None
+    df = pd.read_csv(path)
+    return df[~df["ticker"].isin(owned) & (df["trend"] != "FREEFALL")]
+
+
+def _ranked(df: pd.DataFrame, min_run_rate: float) -> pd.DataFrame:
+    """The Magic Formula rows in rank order, without those running below ``min_run_rate``."""
+    ranked = df[df["mf_position"].notna()].sort_values("mf_position")
+    if min_run_rate > 0 and "ttm_vs_5y_ebit" in ranked:
+        ranked = ranked[~(ranked["ttm_vs_5y_ebit"] < min_run_rate)]
+    return ranked
+
+
+def run_rate_skips(paths: Paths, owned: set[str], n: int, min_run_rate: float) -> list[dict]:
+    """The Magic Formula names ``top_candidates`` left out for a low run rate, in rank order:
+    ``ticker`` and ``ttm_vs_5y_ebit``, only those ranked above the last pick."""
+    df = _eligible(paths, owned)
+    if df is None or min_run_rate <= 0 or "ttm_vs_5y_ebit" not in df:
+        return []
+    picks = _ranked(df, min_run_rate).head(n)
+    if picks.empty:
+        return []
+    ranked = df[df["mf_position"].notna()].sort_values("mf_position")
+    dropped = ranked[(ranked["ttm_vs_5y_ebit"] < min_run_rate) & (ranked["mf_position"] < picks["mf_position"].iloc[-1])]
+    return [{"ticker": r.ticker, "ttm_vs_5y_ebit": r.ttm_vs_5y_ebit} for r in dropped.itertuples()]
 
 
 def _hint_series(df: pd.DataFrame) -> pd.Series:

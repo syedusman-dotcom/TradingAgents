@@ -332,6 +332,7 @@ def preview(paths: Paths, cfg: dict, only: list[str] | None = None,
     owned = {p.ticker for p in pf.positions}
     refuse_fund(only, cfg)
     candidates: list[str] = []
+    skips: list[dict] = []
     if not only:
         n_themes = len({t for t in discovered or [] if t not in owned})
         inflections = max(0, int(lanes.get("inflection_candidates", 0)) - n_themes)
@@ -340,10 +341,12 @@ def preview(paths: Paths, cfg: dict, only: list[str] | None = None,
         # ``candidate_cooldown_days`` give their place to the next ones (holdings and named
         # tickers always run).
         skip = owned | recently_reviewed(paths, int(rcfg.get("candidate_cooldown_days", 0)), today)
+        min_run_rate = float(rcfg.get("min_run_rate", 0.0))
         screened = screener.top_candidates(paths, skip, rcfg["candidates"],
                                            compounders=int(lanes.get("compounder_candidates", 0)),
                                            dislocations=int(lanes.get("dislocation_candidates", 0)),
-                                           inflections=inflections)
+                                           inflections=inflections, min_run_rate=min_run_rate)
+        skips = screener.run_rate_skips(paths, skip, rcfg["candidates"], min_run_rate)
         candidates = [t for t in dict.fromkeys(named + [c["ticker"] for c in screened] + (discovered or []))
                       if t not in owned]
     tickers, n_held, n_new = select_tickers([p.ticker for p in pf.positions if p.ticker != fund],
@@ -353,7 +356,7 @@ def preview(paths: Paths, cfg: dict, only: list[str] | None = None,
         tickers, n_new, dropped = fit_to_cap(tickers, n_held, rcfg["cost_per_run"], rcfg["max_cost_per_review"])
     estimate = len(tickers) * rcfg["cost_per_run"]
     return {"tickers": tickers, "n_held": n_held, "n_new": n_new, "estimate": estimate, "dropped": dropped,
-            "cost_per_run": rcfg["cost_per_run"], "limit": rcfg["max_cost_per_review"],
+            "run_rate_skips": skips, "cost_per_run": rcfg["cost_per_run"], "limit": rcfg["max_cost_per_review"],
             "blocked": estimate > rcfg["max_cost_per_review"]}
 
 
@@ -491,6 +494,9 @@ def _run(paths: Paths, cfg: dict, *, yes: bool, dry_run: bool, today: str | None
     if plan_["dropped"]:
         print(f"{plan_['dropped']} candidate(s) left out to stay under the ${rcfg['max_cost_per_review']:,.2f} cap "
               "(raise review.max_cost_per_review or lower review.candidates to change this).")
+    if plan_["run_rate_skips"]:
+        left = ", ".join(f"{s['ticker']} {s['ttm_vs_5y_ebit']:.2f}" for s in plan_["run_rate_skips"])
+        print(f"Left out, profit running below the five-year average: {left}")
     if not tickers:
         raise SystemExit("Nothing to review: no holdings and no screen candidates.")
 
