@@ -713,7 +713,7 @@ def test_sector_falls_back_to_the_cached_fundamentals(tmp_path):
     (paths.cache / "HRB.json").write_text('{"ticker": "HRB", "sector": "Consumer Cyclical"}')
     assert market_data.cached_sector("HRB", paths) == "Consumer Cyclical"
     assert _sector(paths, "HRB", {"sector": "Industrials"}) == "Industrials"
-    assert _sector(paths, "HRB", None) == "Consumer Cyclical"
+    assert _sector(paths, "HRB", None) == "Consumer Discretionary"   # Yahoo name in GICS
     assert _sector(paths, "XYZ", None) is None
 
 
