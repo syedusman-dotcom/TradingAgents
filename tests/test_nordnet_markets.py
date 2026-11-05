@@ -374,6 +374,8 @@ def test_screen_run_ranks_in_dollars_and_writes_quote_units(tmp_path, monkeypatc
     assert row["market_cap"] == pytest.approx(2.0e9 * 1.30) and row["price"] == pytest.approx(800.0)
     assert row["market"] == "ftse100" and row["country"] == "UK" and row["quote_currency"] == "GBp"
     assert row["fx_quote"] == pytest.approx(0.013)
+    assert row["value_base"] / row["price"] == pytest.approx(1 / (1 - row["mos_formula"]))   # pence
+    assert row["shares"] == pytest.approx(row["market_cap"] / (row["price"] * row["fx_quote"]))
     assert row["sector"] == "Consumer Discretionary"          # from Yahoo's "Consumer Cyclical"
     assert rows["AAA"]["quote_currency"] == "USD" and rows["AAA"]["price"] == 20.0
     assert rows["AAA"]["sector"] == "Industrials" and rows["AAA"]["market"] == "sp500"
@@ -435,10 +437,10 @@ def _cached_record(paths, ticker="ABC", **over):
     return record
 
 
-def _fake_yahoo(monkeypatch, fast_info=None, closes=None):
+def _fake_yahoo(monkeypatch, closes=None):
     class FakeTicker:
         def __init__(self, t):
-            self.fast_info = fast_info if fast_info is not None else {"last_price": 12.0, "market_cap": 1.2e9}
+            pass
 
         @property
         def info(self):
@@ -454,7 +456,7 @@ def test_stale_price_is_refreshed_without_info(tmp_path, monkeypatch):
     _cached_record(paths)
     _fake_yahoo(monkeypatch)
     data = market_data.fundamentals("ABC", paths, cache_days=7, price_days=1)
-    assert data["price"] == 12.0 and data["market_cap"] == 1.2e9
+    assert data["price"] == 12.0 and data["market_cap"] == pytest.approx(1.2e9)
     assert data["enterprise_value"] == pytest.approx(1.4e9)
     assert data["closes"] == [11.0, 12.0] and data["price_at"] == date.today().isoformat()
     assert data["from_cache"] is True and data["price_refreshed"] is True
@@ -536,12 +538,24 @@ def test_empty_closes_count_as_a_failed_refresh(tmp_path, monkeypatch, caplog):
 
 
 @pytest.mark.unit
-def test_ev_is_left_alone_when_a_market_cap_is_missing(tmp_path, monkeypatch):
+def test_market_cap_and_ev_are_left_alone_when_the_old_price_is_missing(tmp_path, monkeypatch):
     paths = Paths(tmp_path)
-    _cached_record(paths, market_cap=None)
+    _cached_record(paths, price=None)
     _fake_yahoo(monkeypatch)
     data = market_data.fundamentals("ABC", paths, cache_days=7, price_days=1)
-    assert data["price"] == 12.0 and data["enterprise_value"] == 1.2e9
+    assert data["price"] == 12.0 and data["market_cap"] == 1e9 and data["enterprise_value"] == 1.2e9
+    assert data["price_refreshed"] is True
+
+
+@pytest.mark.unit
+def test_refresh_keeps_a_pence_record_in_its_own_units(tmp_path, monkeypatch):
+    paths = Paths(tmp_path)
+    _cached_record(paths, ticker="DNLM.L", currency="GBp", price=800.0, market_cap=2.0e9,
+                   enterprise_value=2.5e9)
+    _fake_yahoo(monkeypatch, closes=[790.0, 880.0])
+    data = market_data.fundamentals("DNLM.L", paths, cache_days=7, price_days=1)
+    assert data["price"] == 880.0 and data["market_cap"] == pytest.approx(2.2e9)
+    assert data["enterprise_value"] == pytest.approx(2.7e9)
 
 
 @pytest.mark.unit
@@ -556,17 +570,6 @@ def test_price_days_none_never_refreshes(tmp_path, monkeypatch):
 @pytest.mark.unit
 def test_screen_config_defaults():
     assert config.DEFAULTS["screen"]["price_days"] == 1 and config.DEFAULTS["screen"]["cache_days"] == 7
-
-
-@pytest.mark.unit
-def test_missing_market_cap_in_fast_info_keeps_the_cached_one(tmp_path, monkeypatch):
-    paths = Paths(tmp_path)
-    _cached_record(paths)
-    _fake_yahoo(monkeypatch, fast_info={"last_price": 12.0, "market_cap": None})
-    data = market_data.fundamentals("ABC", paths, cache_days=7, price_days=1)
-    assert data["price"] == 12.0 and data["market_cap"] == 1e9 and data["enterprise_value"] == 1.2e9
-    assert data["price_refreshed"] is True
-    assert json.loads((paths.cache / "ABC.json").read_text())["market_cap"] == 1e9
 
 
 @pytest.mark.unit
@@ -618,3 +621,48 @@ def test_backtest_report_says_us_only():
     from tests.test_lane_backtest import _fake_result
     from value_pipeline import backtest
     assert "S&P 500 and 400 only" in backtest.markdown(_fake_result())
+
+
+@pytest.mark.unit
+def test_old_universe_csv_without_market_keeps_its_us_rows(tmp_path):
+    paths = Paths(tmp_path)
+    paths.universe.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame([{"ticker": "AAA", "name": "Aaa", "sector": "Industrials", "index": "sp500"}]
+                 ).to_csv(paths.universe, index=False)
+    assert list(market_data._cached_universe(paths)["market"]) == ["sp500"]
+
+
+@pytest.mark.unit
+def test_name_key_keeps_holding_and_merges_ltd_and_inc():
+    assert market_data.name_key("Heineken Holding N.V.") != market_data.name_key("Heineken N.V.")
+    assert market_data.name_key("ABB Ltd") == market_data.name_key("ABB")
+    assert market_data.name_key("Aaa Inc") == market_data.name_key("Aaa Limited") == "aaa"
+
+
+@pytest.mark.unit
+def test_an_off_screen_holding_sector_is_in_gics_names(tmp_path):
+    from value_pipeline import review
+
+    paths = Paths(tmp_path)
+    _cached_record(paths, ticker="TECH", sector="Technology")
+    assert review._sector(paths, "TECH", None) == "Information Technology"
+
+
+@pytest.mark.unit
+def test_an_unreadable_cache_file_is_fetched_again_and_replaced(tmp_path, monkeypatch):
+    paths = Paths(tmp_path)
+    paths.cache.mkdir(parents=True)
+    (paths.cache / "ABC.json").write_text("{not json")
+
+    class FullTicker:
+        info = {"marketCap": 5e9, "currentPrice": 20.0, "currency": "USD"}
+        income_stmt = balance_sheet = cashflow = None
+
+    monkeypatch.setattr(market_data.yf, "Ticker", lambda t: FullTicker())
+    monkeypatch.setattr(market_data, "statement_years", lambda *a: [{"fiscal_year_end": "2025-12-31"}])
+    monkeypatch.setattr(market_data, "fetch_quarters", lambda t: ([], True))
+    monkeypatch.setattr(market_data, "closes", lambda t: [20.0])
+    data = market_data.fundamentals("ABC", paths, cache_days=7)
+    assert data["price"] == 20.0 and not data.get("from_cache")
+    assert json.loads((paths.cache / "ABC.json").read_text())["price"] == 20.0
+    assert not list(paths.cache.glob("*.tmp"))

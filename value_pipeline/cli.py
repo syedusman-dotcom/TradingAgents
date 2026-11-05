@@ -85,7 +85,7 @@ def cmd_screen(args, paths: Paths, cfg) -> None:
     owned = {p.ticker for p in pfmod.load(paths).positions} if paths.portfolio.exists() else set()
     if args.top:
         cfg["screen"]["top_n"] = args.top
-    console.print("Screening Nordnet's markets (first run fetches every new ticker; about an hour)...")
+    console.print("Screening Nordnet's markets (first run fetches every new ticker, roughly 1.5 to 3 hours)...")
     res = screener.run(paths, cfg, owned)
     console.print(f"Screened {res['screened']}, skipped {len(res['skipped'])} (missing data), "
                   f"excluded {len(res['excluded'])} financials/REITs/utilities, "

@@ -348,7 +348,7 @@ def _sector(paths: Paths, ticker: str, screen_row: dict | None) -> str | None:
     toward the sector cap)."""
     if screen_row and isinstance(screen_row.get("sector"), str):
         return screen_row["sector"]
-    return market_data.cached_sector(ticker, paths)
+    return market_data.gics_sector(market_data.cached_sector(ticker, paths))
 
 
 def _quote_fx(ticker: str) -> tuple[str | None, float | None]:

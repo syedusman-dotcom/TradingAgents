@@ -103,7 +103,7 @@ TICKER_COLUMNS = ("ticker", "symbol", "code", "ticker symbol", "mnem code")
 NAME_COLUMNS = ("company", "name", "security", "constituent")
 MIN_TICKERS = 10
 _DROPPED_WORDS = {"plc", "nv", "sa", "ag", "se", "ab", "asa", "as", "oyj", "spa", "group",
-                  "holding", "holdings"}
+                  "ltd", "limited", "inc"}
 
 
 def normalise_code(code: str, market: Market) -> str:
@@ -170,6 +170,7 @@ def _cached_universe(paths: Paths) -> pd.DataFrame | None:
     for col in UNIVERSE_COLUMNS:
         if col not in cached.columns:
             cached[col] = None
+    cached["market"] = cached["market"].fillna(cached["index"])   # a CSV from before markets
     return cached
 
 
@@ -238,21 +239,28 @@ def _price_is_stale(data: dict, price_days: int) -> bool:
 
 
 def _refresh_price(ticker: str, data: dict) -> dict:
-    """``data`` with today's price, market cap, closes and ``price_at`` from two cheap Yahoo
-    calls (``fast_info`` and the closes), enterprise value moved by the market-cap change;
-    statements and ``info`` are not touched. Raises when Yahoo has no price or no closes."""
-    fi = yf.Ticker(ticker).fast_info
-    price, mcap = fi["last_price"], fi["market_cap"]
+    """``data`` with today's price (the last close), closes and ``price_at`` from one Yahoo call.
+    Market cap and enterprise value move with the price, in the units the record already has;
+    statements and ``info`` are not touched. Raises when Yahoo has no closes."""
     series = closes(ticker)
-    if not series or not isinstance(price, (int, float)):
-        raise DataUnavailable("no price or closes")
-    out = {**data, "price": float(price), "closes": series, "price_at": date.today().isoformat()}
-    if isinstance(mcap, (int, float)):
-        old = data.get("market_cap")
-        out["market_cap"] = float(mcap)
-        if all(isinstance(x, (int, float)) for x in (old, data.get("enterprise_value"))):
-            out["enterprise_value"] = data["enterprise_value"] + float(mcap) - old
+    if not series:
+        raise DataUnavailable("no closes")
+    new_price = float(series[-1])
+    out = {**data, "price": new_price, "closes": series, "price_at": date.today().isoformat()}
+    old_price, old_mcap = data.get("price"), data.get("market_cap")
+    if all(isinstance(x, (int, float)) for x in (old_price, old_mcap)) and old_price > 0:
+        new_mcap = old_mcap * new_price / old_price
+        out["market_cap"] = new_mcap
+        if isinstance(data.get("enterprise_value"), (int, float)):
+            out["enterprise_value"] = data["enterprise_value"] + new_mcap - old_mcap
     return out
+
+
+def _write_cache(cache: Path, data: dict) -> None:
+    """Write ``data`` as JSON through a temp file, so a crash never leaves half a record."""
+    tmp = cache.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(data), encoding="utf-8")
+    tmp.replace(cache)
 
 
 def fundamentals(ticker: str, paths: Paths, cache_days: int = 7, price_days: int | None = None) -> dict:
@@ -261,15 +269,20 @@ def fundamentals(ticker: str, paths: Paths, cache_days: int = 7, price_days: int
     With ``price_days`` set, a cached record whose price is that many days old gets today's price
     (see ``_refresh_price``) and is returned with ``price_refreshed``; a failed refresh serves it as is."""
     cache = paths.cache / f"{ticker}.json"
+    data = None
     if cache.exists():
-        data = json.loads(cache.read_text(encoding="utf-8"))
+        try:
+            data = json.loads(cache.read_text(encoding="utf-8"))
+        except ValueError as exc:
+            log.warning("unreadable cache for %s, fetching again: %s", ticker, exc)
+    if data is not None:
         fresh = datetime.fromisoformat(data["fetched_at"]) > datetime.now() - timedelta(days=cache_days)
         # A record cached after a failed quarterly fetch has no "quarters": fetched again.
         if fresh and data.get("schema") == CACHE_SCHEMA and "quarters" in data:
             if price_days is not None and _price_is_stale(data, price_days):
                 try:
                     refreshed = _refresh_price(ticker, data)
-                    cache.write_text(json.dumps(refreshed), encoding="utf-8")
+                    _write_cache(cache, refreshed)
                 except Exception as exc:  # noqa: BLE001 - Yahoo raises many types
                     log.warning("price refresh failed for %s: %s", ticker, exc)
                     return {**data, "from_cache": True}
@@ -304,7 +317,7 @@ def fundamentals(ticker: str, paths: Paths, cache_days: int = 7, price_days: int
     }
     paths.cache.mkdir(parents=True, exist_ok=True)
     stored = data if complete else {k: v for k, v in data.items() if k != "quarters"}
-    cache.write_text(json.dumps(stored), encoding="utf-8")
+    _write_cache(cache, stored)
     return data
 
 
