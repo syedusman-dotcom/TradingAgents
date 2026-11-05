@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import statistics
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -447,13 +448,22 @@ def cohort_days(cfg: dict) -> list[str]:
     return list(bt["cohort_days"]) if "cohort_days" in bt else [bt["cohort_day"]]
 
 
+def _real_day(day: str) -> bool:
+    try:
+        date.fromisoformat(day)
+    except ValueError:
+        return False
+    return True
+
+
 def cohort_dates(cfg: dict, today: date) -> list[str]:
-    """Every cohort day of every year from ``first_year`` to ``last_year``, in date order,
-    keeping only those whose one-year hold has ended by ``today``."""
+    """Every cohort day of every year from ``first_year`` to ``last_year``, in date order and
+    once each, keeping only those whose one-year hold has ended by ``today``; 29 February is
+    skipped in a common year."""
     bt = cfg["backtest"]
-    days = sorted(f"{year}-{day}" for year in range(bt["first_year"], bt["last_year"] + 1)
-                  for day in cohort_days(cfg))
-    return [d for d in days if date.fromisoformat(_years_after(d, 1)) <= today]
+    days = sorted({f"{year}-{day}" for year in range(bt["first_year"], bt["last_year"] + 1)
+                   for day in cohort_days(cfg)})
+    return [d for d in days if _real_day(d) and date.fromisoformat(_years_after(d, 1)) <= today]
 
 
 def finish_cohort(rows: list[dict], inputs: dict[str, tuple]) -> None:
@@ -957,6 +967,7 @@ def run(paths: Paths, cfg: dict, today: date | None = None, tickers: list[str] |
     result = {
         "generated": today.isoformat(), "cohorts": cohorts, "holds": holds,
         "universe_size": len(members), "with_data": with_data,
+        "indexes": list(cfg["universe"]["indexes"]),
         "rows_per_cohort": {c: len(rows[c]) for c in cohorts}, "picks": picks,
         "missing_fields": {c: _missing_fields(inputs[c]) for c in cohorts},
         "summary": summary, "bar_verdicts": _bar_verdicts(summary),
@@ -1020,6 +1031,17 @@ OVERLAP = ("Counting cohorts — one-year holds on quarterly dates overlap, so t
            "trading costs; a pass is evidence to look closer, not proof.")
 
 
+DEFAULT_INDEXES = ("sp500", "sp400")   # the backtest command's lists: EDGAR covers US filers
+
+
+def _indexes(result: dict) -> list[str]:
+    return list(result.get("indexes") or DEFAULT_INDEXES)
+
+
+def _is_default(indexes: list[str]) -> bool:
+    return set(indexes) == set(DEFAULT_INDEXES)
+
+
 def _tested(result: dict) -> list[str]:
     cohorts, surv = result["cohorts"], result["survivorship"]
     span = f"{cohorts[0]} to {cohorts[-1]}" if cohorts else "none (no hold has ended)"
@@ -1037,7 +1059,8 @@ def _tested(result: dict) -> list[str]:
             "each cohort sees only the statements filed on or before its date (EDGAR) and the "
             "closes dated on or before it; returns start at the first close on or after it. The "
             "metrics see the newest four fiscal years known then, as the live screen does. "
-            "Sectors are today's (EDGAR has none), a mild look-ahead. " + survivorship, "",
+            "Sectors are today's (EDGAR has none), a mild look-ahead. Index lists: "
+            f"{', '.join(_indexes(result))}. " + survivorship, "",
             OVERLAP, ""]
 
 
@@ -1178,10 +1201,12 @@ def _coverage(result: dict) -> list[str]:
 def markdown(result: dict) -> str:
     """The report: what was tested, the verdict, the buy-bar candidates, each rule by cohort, the sensitivity, the bar
     that bound and the coverage."""
+    indexes = _indexes(result)
+    cover = ("The backtest covers the S&P 500 and 400 only" if _is_default(indexes)
+             else f"This run covers {', '.join(indexes)} only")
     lines = ["# Lane-rule backtest", "", f"Generated {result['generated']}. Nothing trades; "
              "no agent was called.", "",
-             "The backtest covers the S&P 500 and 400 only: non-US companies have no point-in-time "
-             "filings.", ""]
+             f"{cover}: non-US companies have no point-in-time filings.", ""]
     lines += _tested(result) + [verdict(result)] + _candidates(result) + _by_cohort(result) + _sensitivity(result)
     lines += _bound(result) + _coverage(result)
     return "\n".join(lines)
@@ -1191,12 +1216,21 @@ def _folder(paths: Paths) -> Path:
     return paths.reports / "backtest"
 
 
+def _suffix(result: dict) -> str:
+    """``""`` for the default lists, else ``_`` and the lists joined (``_sp500``)."""
+    indexes = _indexes(result)
+    return "" if _is_default(indexes) else "_" + "_".join(indexes)
+
+
 def write(paths: Paths, result: dict, today: str) -> tuple[Path, Path]:
-    """The report and the picks CSV (one row per pick and hold) under ``reports/backtest``."""
+    """The report and the picks CSV (one row per pick and hold) under ``reports/backtest``; a
+    run on other lists than the default gets their names in the file names
+    (``backtest_<date>_sp500.md``)."""
     folder = _folder(paths)
     folder.mkdir(parents=True, exist_ok=True)
-    md = folder / f"backtest_{today}.md"
-    csv = folder / f"backtest_{today}_picks.csv"
+    stem = f"backtest_{today}{_suffix(result)}"
+    md = folder / f"{stem}.md"
+    csv = folder / f"{stem}_picks.csv"
     text = markdown(result)
     replace_file(md, lambda temp: Path(temp).write_text(text, encoding="utf-8"))
     picks = pd.DataFrame(result["picks"], columns=PICK_COLUMNS)
@@ -1204,9 +1238,14 @@ def write(paths: Paths, result: dict, today: str) -> tuple[Path, Path]:
     return md, csv
 
 
+DEFAULT_REPORT = re.compile(r"backtest_\d{4}-\d{2}-\d{2}\.md")
+
+
 def latest_report(paths: Paths) -> tuple[str, str] | None:
-    """``(date, text)`` of the newest ``backtest_*.md``, None when there is none."""
-    reports = sorted(_folder(paths).glob("backtest_*.md"))
+    """``(date, text)`` of the newest default-universe ``backtest_<date>.md`` (not a suffixed
+    run on other lists), None when there is none."""
+    reports = sorted(p for p in _folder(paths).glob("backtest_*.md")
+                     if DEFAULT_REPORT.fullmatch(p.name))
     if not reports:
         return None
     return reports[-1].stem.removeprefix("backtest_"), reports[-1].read_text(encoding="utf-8")

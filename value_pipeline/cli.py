@@ -16,6 +16,7 @@ from value_pipeline import (
     backtest,
     calibration,
     daily,
+    market_data,
     operations as ops,
     portfolio as pfmod,
     review,
@@ -165,6 +166,14 @@ def _ints(text: str) -> list[int]:
         raise argparse.ArgumentTypeError(f"not a comma list of whole years: {text}") from exc
 
 
+def _indexes(text: str) -> list[str]:
+    names = list(dict.fromkeys(x.strip().lower() for x in text.split(",") if x.strip()))
+    unknown = [n for n in names if n not in market_data.MARKETS]
+    if not names or unknown:
+        raise argparse.ArgumentTypeError(f"not a comma list of known index lists: {text}")
+    return names
+
+
 def cmd_backtest(args, paths: Paths, cfg) -> None:
     cfg = copy.deepcopy(cfg)
     bt = cfg["backtest"]
@@ -174,9 +183,12 @@ def cmd_backtest(args, paths: Paths, cfg) -> None:
         bt["last_year"] = args.last_year
     if args.holds:
         bt["holds"] = args.holds
+    cfg["universe"]["indexes"] = args.indexes
     tickers = [t.strip().upper() for t in (args.tickers or "").split(",") if t.strip()] or None
-    console.print("Replaying the lane rules on past cohorts (the first run fetches every ticker's "
-                  "EDGAR statements and Yahoo prices; 20-40 minutes. Later runs read the caches)...")
+    console.print(f"Replaying the lane rules on past cohorts of {', '.join(args.indexes)} (the first "
+                  "run fetches every ticker's EDGAR statements and Yahoo prices; 20-40 minutes. Later "
+                  "runs read the caches, and the four cohorts a year make them about four times longer than "
+                  "one a year)...")
 
     def progress(i: int, n: int, ticker: str) -> None:
         if i % 50 == 0 or i == n:
@@ -186,6 +198,7 @@ def cmd_backtest(args, paths: Paths, cfg) -> None:
                           fetch=not args.no_fetch, progress=progress)
     md, csv = backtest.write(paths, result, result["generated"])
     console.print(Markdown(backtest.verdict(result)))
+    console.print(Markdown(backtest.candidates(result)))
     console.print(f"\nSaved {md} and {csv}")
 
 
@@ -201,8 +214,9 @@ def cmd_trend_backtest(args, paths: Paths, cfg) -> None:
     if args.start:
         cfg.setdefault("trend", {})["start"] = args.start
     console.print("Replaying the trend rules on daily closes of today's S&P 500 and S&P 400 members: first "
-                  "the lane backtest's cohorts (for the quality universe), then the closes. Cached data "
-                  "makes this a few minutes; nothing trades.")
+                  "the lane backtest's cohorts (for the quality universe), then the closes. With cached data "
+                  "the lane step's four cohorts a year make it about four times longer than one cohort a "
+                  "year did; nothing trades.")
 
     def progress(i: int, n: int, ticker: str) -> None:
         if i % 100 == 0 or i == n:
@@ -316,6 +330,9 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--to", dest="last_year", type=int, help="last cohort year (default backtest.last_year)")
     s.add_argument("--holds", type=_ints, help="holds in years, comma-separated (default 1,3)")
     s.add_argument("--tickers", help="only these, comma-separated (a smoke run)")
+    s.add_argument("--indexes", type=_indexes, default=list(backtest.DEFAULT_INDEXES),
+                   help="index lists, comma-separated (default sp500,sp400; sp500 alone is the "
+                        "survivorship check, saved as backtest_<date>_sp500.md)")
     s.add_argument("--refresh", action="store_true", help="refetch the cached statements and prices")
     s.add_argument("--no-fetch", action="store_true", help="read the statement and price caches only")
     s.set_defaults(func=cmd_backtest)

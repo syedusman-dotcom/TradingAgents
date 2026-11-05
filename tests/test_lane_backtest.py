@@ -12,7 +12,7 @@ import pytest
 from tradingagents.agents import decision_math as dm
 from tradingagents.dataflows.value_metrics import EQUITY_PREMIUM, MIN_DISCOUNT_RATE
 from value_pipeline import backtest, metrics, pit_statements as pit
-from value_pipeline.config import CONFIG_PATH, DEFAULTS, Paths, load_config
+from value_pipeline.config import CONFIG_PATH, DEFAULTS, Paths, load_config, validate_config
 
 pytestmark = pytest.mark.unit
 
@@ -782,7 +782,7 @@ def test_survivorship_counts_members_added_after_each_cohort(tmp_path):
 # --- config --------------------------------------------------------------------------------
 
 def test_backtest_defaults_in_config():
-    assert DEFAULTS["backtest"] == {"first_year": 2015, "last_year": 2024,
+    assert DEFAULTS["backtest"] == {"first_year": 2015, "last_year": 2025,
                                     "cohort_days": ["03-31", "06-30", "09-30", "12-31"],
                                     "holds": [1, 3], "value_top_n": 30, "benchmark": "SPY"}
     cfg = load_config()      # the user's config.yaml may override values; the keys stay
@@ -790,6 +790,45 @@ def test_backtest_defaults_in_config():
     text = CONFIG_PATH.read_text(encoding="utf-8")
     for key in DEFAULTS["backtest"]:
         assert f"#   {key}:" in text
+    assert "#   last_year: 2025" in text
+
+
+def test_an_old_cohort_day_in_the_yaml_survives_load_config(tmp_path):
+    old = tmp_path / "old.yaml"
+    old.write_text('backtest:\n  cohort_day: "06-30"\n  first_year: 2022\n  last_year: 2023\n',
+                   encoding="utf-8")
+    cfg = load_config(old)
+    assert cfg["backtest"]["cohort_days"] == ["06-30"]
+    validate_config(cfg)
+    assert backtest.cohort_dates(cfg, date(2030, 1, 1)) == ["2022-06-30", "2023-06-30"]
+    both = tmp_path / "both.yaml"
+    both.write_text('backtest:\n  cohort_day: "06-30"\n  cohort_days: ["03-31"]\n',
+                    encoding="utf-8")
+    assert load_config(both)["backtest"]["cohort_days"] == ["03-31"]
+    new = tmp_path / "new.yaml"
+    new.write_text("backtest:\n  first_year: 2020\n", encoding="utf-8")
+    assert load_config(new)["backtest"]["cohort_days"] == DEFAULTS["backtest"]["cohort_days"]
+
+
+@pytest.mark.parametrize("days", [["02-29"], ["03-31", "12-31"], ["01-01"]])
+def test_validate_config_accepts_real_month_days(days):
+    validate_config(_bt_cfg(cohort_days=days))
+
+
+@pytest.mark.parametrize("days", [["02-30"], ["13-01"], ["6-30"], ["06/30"], [630], [],
+                                  ["2024-06-30"], ["04-31"]])
+def test_validate_config_refuses_a_cohort_day_that_is_not_a_month_day(days):
+    with pytest.raises(ValueError, match="cohort_days"):
+        validate_config(_bt_cfg(cohort_days=days))
+
+
+def test_cohort_dates_skip_29_february_in_a_common_year_and_duplicates():
+    leap = _bt_cfg(first_year=2019, last_year=2021, cohort_days=["02-29", "06-30"])
+    assert backtest.cohort_dates(leap, date(2030, 1, 1)) == [
+        "2019-06-30", "2020-02-29", "2020-06-30", "2021-06-30"]
+    twice = _bt_cfg(first_year=2022, last_year=2023, cohort_days=["06-30", "03-31", "06-30"])
+    assert backtest.cohort_dates(twice, date(2030, 1, 1)) == [
+        "2022-03-31", "2022-06-30", "2023-03-31", "2023-06-30"]
 
 
 # --- run, report, command ------------------------------------------------------------------
@@ -1150,6 +1189,7 @@ def test_cli_backtest_no_fetch(tmp_path, monkeypatch, capsys):
               "--from", "2022", "--to", "2023", "--holds", "1"])
     out = capsys.readouterr().out
     assert "Verdict" in out and "magic_formula: beat SPY" in out
+    assert "Buy-bar candidates" in out and "er_hurdle: 0 cohorts with five or more picks" in out
     reports = sorted((paths.reports / "backtest").iterdir())
     assert [p.name for p in reports] == [f"backtest_{date.today()}.md",
                                          f"backtest_{date.today()}_picks.csv"]
@@ -1461,3 +1501,66 @@ def test_picks_carry_the_audit_columns():
     assert (pick["expected_return"], pick["momentum_12_1"], pick["fcf_yield"], pick["trend"]) == (
         0.14, 0.2, 0.05, "UPTREND")
     assert {"expected_return", "momentum_12_1", "fcf_yield", "trend"} <= set(backtest.PICK_COLUMNS)
+
+
+# --- the survivorship check: --indexes -------------------------------------------------------
+
+def _cli_run(tmp_path, monkeypatch, *extra):
+    from functools import partial
+
+    from value_pipeline import cli
+
+    paths, _ = _e2e_setup(tmp_path)
+    seen = []
+
+    def universe(p, indexes):
+        seen.append(list(indexes))
+        return _e2e_universe(p, indexes)
+
+    monkeypatch.setattr(backtest, "added_dates", _no_wiki)
+    monkeypatch.setattr(backtest, "run", partial(backtest.run, universe_fn=universe))
+    cli.main(["--data-dir", str(paths.root), "backtest", "--no-fetch", "--tickers", "AAA,BBB",
+              "--from", "2022", "--to", "2023", "--holds", "1", *extra])
+    return paths, seen
+
+
+@pytest.mark.unit
+def test_cli_backtest_screens_the_us_lists_by_default(tmp_path, monkeypatch):
+    paths, seen = _cli_run(tmp_path, monkeypatch)
+    assert seen == [["sp500", "sp400"]]           # not the live 23-market universe.indexes
+    text = (paths.reports / "backtest" / f"backtest_{date.today()}.md").read_text(encoding="utf-8")
+    tested = text.split("## What was tested")[1].split("## Verdict")[0]
+    assert "Index lists: sp500, sp400." in tested
+
+
+@pytest.mark.unit
+def test_cli_backtest_on_the_sp500_alone_writes_suffixed_files(tmp_path, monkeypatch):
+    paths, seen = _cli_run(tmp_path, monkeypatch, "--indexes", "sp500")
+    assert seen == [["sp500"]]
+    folder = paths.reports / "backtest"
+    assert sorted(p.name for p in folder.iterdir()) == [f"backtest_{date.today()}_sp500.md",
+                                                        f"backtest_{date.today()}_sp500_picks.csv"]
+    text = (folder / f"backtest_{date.today()}_sp500.md").read_text(encoding="utf-8")
+    assert "Index lists: sp500." in text.split("## What was tested")[1].split("## Verdict")[0]
+    assert "S&P 500 and 400 only" not in text
+
+
+@pytest.mark.unit
+def test_cli_backtest_refuses_an_unknown_index(tmp_path, monkeypatch, capsys):
+    with pytest.raises(SystemExit):
+        _cli_run(tmp_path, monkeypatch, "--indexes", "sp500,nikkei")
+    assert "nikkei" in capsys.readouterr().err
+
+
+@pytest.mark.unit
+def test_write_suffixes_a_non_default_universe_and_the_page_keeps_the_default(tmp_path):
+    paths = Paths(tmp_path / "data")
+    result = _fake_result()
+    default = backtest.write(paths, {**result, "indexes": ["sp400", "sp500"]}, "2026-11-05")
+    assert [p.name for p in default] == ["backtest_2026-11-05.md", "backtest_2026-11-05_picks.csv"]
+    md, csv = backtest.write(paths, {**result, "indexes": ["sp500"]}, "2026-11-05")
+    assert (md.name, csv.name) == ("backtest_2026-11-05_sp500.md",
+                                   "backtest_2026-11-05_sp500_picks.csv")
+    backtest.write(paths, {**result, "indexes": ["sp500"]}, "2026-11-06")
+    latest = backtest.latest_report(paths)
+    assert latest == ("2026-11-05", default[0].read_text(encoding="utf-8"))

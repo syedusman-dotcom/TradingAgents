@@ -52,7 +52,7 @@ uv run python -m value_pipeline status
 | `superinvestors [--force]` | Refresh which tracked value investors (Buffett, Klarman, Li Lu, Pabrai, Russo, Akre; editable in `config.yaml`) hold what, from their latest 13F filings. Shown in the screen's Superinvestors column and on stock pages. A second opinion only: 13Fs are up to ~4.5 months old by the time you read them, and they never feed the agents or the action rules. The monthly screen refreshes it weekly at most. |
 | `web [--port 8765] [--no-browser]` | Open the local website (this Mac only): dashboard, trades, history with undo, reviews and reports, stock pages, the screen, running jobs and settings. Stop with Ctrl+C. |
 | `calibration [--horizon {30,90,180,365}]` | Every past decision against the closes that followed it, then the scores and one verdict per lane (see Calibration below). Fetches and caches the closes it has not seen. Default horizon 180 days. |
-| `backtest [--from YEAR] [--to YEAR] [--holds 1,3] [--tickers A,B] [--refresh] [--no-fetch]` | The lane rules replayed on past cohort dates against SPY (see Backtest below). No agents. Writes `reports/backtest/backtest_<date>.md` and `_picks.csv` and prints the verdict. |
+| `backtest [--from YEAR] [--to YEAR] [--holds 1,3] [--indexes sp500,sp400] [--tickers A,B] [--refresh] [--no-fetch]` | The lane rules replayed on past cohort dates against SPY (see Backtest below). No agents. Writes `reports/backtest/backtest_<date>.md` and `_picks.csv` (`backtest_<date>_sp500.md` for `--indexes sp500`) and prints the verdict and the buy-bar candidates. |
 | `trend-backtest [--from YYYY-MM-DD] [--no-fetch]` | Turtle-style breakouts and 12-1 momentum replayed on daily closes of today's S&P 500 and 400 members, after costs, with the fixed verdict (see Trend backtest below). No agents, nothing trades. Writes `reports/backtest/trend_<date>.md`, `.html` and `_trades.csv` and prints the report. |
 | `screen [--top N]` | Rank the universe (every market in `universe.indexes`); writes `data/screens/screen_YYYY-MM-DD.csv`. |
 | `review [--yes] [--dry-run] [--candidates N]` | Run the agents and write the action list. |
@@ -319,7 +319,7 @@ value"). A few decisions say little: read the counts before the shares.
 
 Would the lane rules have picked winners? `backtest` replays the screen on quarterly cohort dates
 (`backtest.first_year` to `last_year`, on `cohort_days`, default 31 March, 30 June, 30 September and
-31 December, 2015 to 2024; a config with the older `cohort_day` still means one date a year),
+31 December, 2015 to 2025; a config with the older `cohort_day` still means one date a year),
 using only what was known then: the EDGAR statements filed on or before the date (an
 amendment counts from its filing date) and the closes dated on or before it. It runs the
 screen's hard filters, Magic Formula rank, formula value, the compounder, inflection and
@@ -397,8 +397,8 @@ What it cannot test or correct:
 
 How to run: `uv run python -m value_pipeline backtest`. The first run fetches every ticker's
 EDGAR company facts and Yahoo price history (about 900 + 900 requests, 20-40 minutes) and
-caches them under `data/cache/backtest/facts/` and `prices/`; later runs read the caches and
-take a minute or two, refetching only a price history that stops more than a week before the
+caches them under `data/cache/backtest/facts/` and `prices/`; later runs read the caches (the
+quarterly cohorts make the replay about four times longer than one cohort a year did), refetching only a price history that stops more than a week before the
 newest hold end the run needs and a fact store fetched before the newest cohort date (so next
 year's cohort is not silently dropped). Coverage prints where SPY's history ends and names any
 cohort whose ended hold it does not reach. `--refresh` refetches, `--no-fetch` reads the caches only:
@@ -406,7 +406,15 @@ statements, prices and the S&P 500 join dates (`data/cache/backtest/added_dates.
 on every fetching run, and used when the fetch fails). The index lists are still read from
 Wikipedia and fall back to `data/universe.csv` when that fails. If the join dates cannot be read
 at all, late joiners stay in every cohort, and the report says so at the top of the Verdict. `--from`/`--to` pick the
-cohort years, `--holds 1` one hold, and `--tickers DECK,ADBE` a quick smoke run. A cohort is
+cohort years, `--holds 1` one hold, and `--tickers DECK,ADBE` a quick smoke run. The command
+screens the US lists only (`sp500,sp400`, not the live `universe.indexes`), since EDGAR covers US
+filers. `--indexes sp500` is the survivorship check: the S&P 500 alone, where membership is point
+in time by join date, saved as `backtest_<date>_sp500.md` and `_sp500_picks.csv`. The S&P 400
+publishes no join dates, so names that entered it after rising are in every cohort; a 20-name
+basket ranked on momentum can hold several while the universe holds each at a small weight, so
+the bias is shared but not equal. A candidate is recommended for a live change only when it
+supports on the full universe and, on the S&P 500 alone, its mean one-year excess over the
+universe is above zero and above the plain screen's on the same cohorts. A cohort is
 evaluated only when its one-year hold has ended; a three-year result only when that hold has.
 
 How to read it. The Verdict gives one sentence per rule and hold, such as `compounder: beat SPY
@@ -425,7 +433,7 @@ tuned to this sample. *Coverage* counts the universe, the tickers with statement
 the rows per cohort, the skipped tickers by reason and, per cohort, how many rows' newest
 fiscal year lacks revenue, EBIT or free cash flow (a filer whose tags the map does not know).
 
-The website's Backtest page shows the newest report. `scripts/pit_probe.py` checks the
+The website's Backtest page shows the newest report on the default lists (not an `_sp500` run). `scripts/pit_probe.py` checks the
 point-in-time statements offline on the EDGAR company facts already cached under
 `~/.tradingagents/cache/sec_edgar/`: fiscal years known on four dates and the fields missing.
 
@@ -467,7 +475,8 @@ cash earns nothing. A gap of at most five missing closes inside a ticker's histo
 close before it (the report counts them); a longer gap blocks that name's signals.
 
 How to run: `uv run python -m value_pipeline trend-backtest`. It first runs the lane backtest's
-cohorts (for the quality universe; the same caches) and then reads the price caches, fetching
+cohorts (for the quality universe; the same caches; the four cohorts a year make this step about
+four times longer than one a year did) and then reads the price caches, fetching
 a missing one or a stale one (ending before SPY's); `--no-fetch` reads the caches only and `--from 2018-01-02` moves the start.
 The website's Backtest page links the newest trend report.
 

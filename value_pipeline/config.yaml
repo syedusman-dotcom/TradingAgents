@@ -94,7 +94,7 @@ lanes:
 # what was filed by each past cohort date, held for fixed terms, against SPY and the universe.
 # backtest:
 #   first_year: 2015       # first cohort year
-#   last_year: 2024        # last cohort year (a cohort runs only once its one-year hold has ended)
+#   last_year: 2025        # last cohort year (a cohort runs only once its one-year hold has ended)
 #   cohort_days: ["03-31", "06-30", "09-30", "12-31"]   # month-days of the cohort dates, four a year
 #                          # for more cohorts; one-year holds that overlap are not independent samples
 #   holds: [1, 3]          # holding terms in years, each reported separately

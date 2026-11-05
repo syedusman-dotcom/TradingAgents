@@ -5,6 +5,8 @@ from __future__ import annotations
 import copy
 import math
 import os
+import re
+from datetime import date
 from pathlib import Path
 
 import yaml
@@ -71,7 +73,7 @@ DEFAULTS: dict = {
     "parking": {"ticker": "0P0001K6NL.ST", "share": 0.7, "min_trade_amount": 250},
     "lanes": {"themes": [], "tickers": [], "inflection_candidates": 3, "compounder_candidates": 2,
               "dislocation_candidates": 3},
-    "backtest": {"first_year": 2015, "last_year": 2024, "cohort_days": ["03-31", "06-30", "09-30", "12-31"],
+    "backtest": {"first_year": 2015, "last_year": 2025, "cohort_days": ["03-31", "06-30", "09-30", "12-31"],
                  "holds": [1, 3], "value_top_n": 30, "benchmark": "SPY"},
     "trend": {"start": "2015-07-01", "equity": 10000, "risk_per_trade": 0.01, "stop_n": 2.0, "n_days": 20,
               "max_positions": 10, "max_position_weight": 0.20, "cost_per_side": 0.0035, "market_filter": True},
@@ -124,16 +126,38 @@ def validate_config(cfg: dict) -> None:
                     raise ValueError(f"{section}.{key} must be a finite number of zero or more, not {value!r}")
                 if key in _POSITIVE and value <= 0:
                     raise ValueError(f"{section}.{key} must be more than zero, not {value!r}")
+    _validate_cohort_days(cfg["backtest"]["cohort_days"])
     share = cfg["parking"]["share"]
     if not 0 <= share <= 1:
         raise ValueError(f"parking.share must be between 0 and 1 (a share of the idle money), not {share!r}")
 
 
+def _validate_cohort_days(days: list) -> None:
+    """Each cohort day a real ``MM-DD`` (checked in a leap year, so 29 February is allowed)."""
+    if not days:
+        raise ValueError("backtest.cohort_days must name at least one MM-DD day")
+    for day in days:
+        ok = isinstance(day, str) and re.fullmatch(r"\d{2}-\d{2}", day) is not None
+        if ok:
+            try:
+                date.fromisoformat(f"2000-{day}")
+            except ValueError:
+                ok = False
+        if not ok:
+            raise ValueError(f"backtest.cohort_days entries must be real MM-DD days, not {day!r}")
+
+
 def load_config(path: Path | None = None) -> dict:
     path = path or CONFIG_PATH
-    if path.exists():
-        return _merge(DEFAULTS, yaml.safe_load(path.read_text(encoding="utf-8")) or {})
-    return copy.deepcopy(DEFAULTS)
+    if not path.exists():
+        return copy.deepcopy(DEFAULTS)
+    user = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    cfg = _merge(DEFAULTS, user)
+    backtest = user.get("backtest") if isinstance(user, dict) else None
+    if isinstance(backtest, dict) and "cohort_day" in backtest and "cohort_days" not in backtest:
+        # An older config's single cohort date; the defaults' four days must not override it.
+        cfg["backtest"]["cohort_days"] = [backtest["cohort_day"]]
+    return cfg
 
 
 class Paths:
