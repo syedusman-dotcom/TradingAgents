@@ -524,7 +524,9 @@ A pass turns nothing on; it would only justify designing a small live sleeve.
 
 The fund record beside it is information only: `momentum.funds` pairs (MTUM against SPY, and the
 Xetra funds IS3R.DE and QDVA.DE against their parents) are real funds after their own costs, with
-no survivorship bias. A fund with no price history shows as unavailable.
+no survivorship bias. A fund with no price history shows as unavailable. A one-day move above 15% in either fund
+is treated as a data error: the pair is measured on its longest stretch without one (marked `*`
+in the report), and bars dated today are ignored.
 
 Limits, stated in the report too: today's members only, so names that left the index are missing,
 which flatters the sleeve and the universe but not SPY; fills at the next close; cash earns

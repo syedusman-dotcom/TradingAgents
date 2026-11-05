@@ -28,6 +28,10 @@ CHECK_BEAT_SPY = 0.01    # (6) top 20, recent: above SPY by this much (hold-out:
 EPS = 1e-9               # every bound is inclusive to this tolerance
 
 # The settings the pass rule was fixed for; a run with any other is shown but does not count.
+MAX_DAILY_MOVE = 0.15    # fund record: a larger one-day move in either fund is a data error
+
+MAX_BREAK_GAP_DAYS = 7   # ... but only between common dates this close: a longer gap is not one day
+
 FIXED = {"recent_start": "2015-07-01", "holdout_start": "2005-01-03", "holdout_end": "2015-06-30",
          "positions": 10, "check_positions": 20, "cost_per_side": 0.005, "market_filter": True}
 
@@ -149,31 +153,46 @@ def verdict(recent: dict, holdout: dict, recent_check: dict, holdout_check: dict
 def fund_record(paths: Paths, pairs: list[dict], fetch: bool = True,
                 today: date | None = None) -> list[dict]:
     """For each ``{"fund", "parent", "label"}`` pair, the fund's and its parent's adjusted closes
-    on their common dates: CAGR, excess and worst fall. A missing history or fewer than two common
-    dates leaves the numbers None and names the problem in ``error``."""
+    on their common dates: CAGR, excess and worst fall. Bars dated today or later are dropped. A
+    one-day move (dates at most ``MAX_BREAK_GAP_DAYS`` apart) above ``MAX_DAILY_MOVE`` in either series is a data error: it ends a stretch and
+    the longest stretch (the later on a tie) is measured, ``cut`` saying it is shorter than the
+    whole range. A missing history or fewer than two dates in the stretch leaves the numbers None
+    and names the problem in ``error``."""
     today = today or date.today()
     stale = (today - timedelta(days=backtest.PRICE_SLACK_DAYS)).isoformat()
     rows = []
     for pair in pairs:
         row = {"fund": pair["fund"], "parent": pair["parent"], "label": pair.get("label", ""),
                "start": None, "end": None, "years": None, "fund_cagr": None, "parent_cagr": None,
-               "excess": None, "fund_max_drawdown": None, "parent_max_drawdown": None, "error": None}
+               "excess": None, "fund_max_drawdown": None, "parent_max_drawdown": None,
+               "cut": False, "error": None}
         series = {}
         for symbol in (pair["fund"], pair["parent"]):
             hist = backtest.price_history(symbol, paths, fetch=fetch, stale_before=stale)
             if hist is None:
                 row["error"] = f"no price history for {symbol}"
                 break
-            series[symbol] = trend._adj_closes(hist).dropna()
+            closes = trend._adj_closes(hist).dropna()
+            series[symbol] = closes[closes.index < pd.Timestamp(today)]
         else:
             fund, parent = series[pair["fund"]], series[pair["parent"]]
             common = fund.index.intersection(parent.index)
-            if len(common) < 2:
+            fund, parent = fund.loc[common], parent.loc[common]
+            moves = pd.concat([fund.pct_change(), parent.pct_change()], axis=1).abs().max(axis=1)
+            gaps = pd.Series(common, index=common).diff().dt.days
+            starts = [0] + [i for i in range(1, len(common))
+                            if moves.iloc[i] > MAX_DAILY_MOVE + EPS
+                            and gaps.iloc[i] <= MAX_BREAK_GAP_DAYS]
+            bounds = list(zip(starts, starts[1:] + [len(common)], strict=True))
+            first, last = max(bounds, key=lambda b: (b[1] - b[0], b[0])) if bounds else (0, 0)
+            if last - first < 2:
                 row["error"] = "no common dates"
             else:
-                fund, parent = fund.loc[common], parent.loc[common]
+                row["cut"] = last - first < len(common)
+                fund, parent = fund.iloc[first:last], parent.iloc[first:last]
                 row.update({
-                    "start": common[0].date().isoformat(), "end": common[-1].date().isoformat(),
+                    "start": fund.index[0].date().isoformat(),
+                    "end": fund.index[-1].date().isoformat(),
                     "years": trend._years(fund), "fund_cagr": trend.cagr(fund),
                     "parent_cagr": trend.cagr(parent),
                     "fund_max_drawdown": trend.max_drawdown(fund),
@@ -318,9 +337,12 @@ def render_report(result: dict) -> str:
         if f["error"]:
             lines.append(f"| {name} | {f['parent']} | unavailable: {f['error']} | | | | | | |")
         else:
-            lines.append(f"| {name} | {f['parent']} | {f['start']} | {f['end']} "
+            lines.append(f"| {name}{' *' if f.get('cut') else ''} | {f['parent']} | {f['start']} | {f['end']} "
                          f"| {_pct(f['fund_cagr'])} | {_pct(f['parent_cagr'])} | {_pct(f['excess'])} "
                          f"| {_pct(f['fund_max_drawdown'])} | {_pct(f['parent_max_drawdown'])} |")
+    if any(f.get("cut") for f in result["funds"]):
+        lines += ["", "* A one-day move above 15% in either fund is treated as a data error; this "
+                      "pair uses its longest stretch without one."]
     lines += ["", "## Limits", "",
               "- Today's members only: names that left the index are missing. This flatters the "
               "sleeve and the universe, but not SPY.",

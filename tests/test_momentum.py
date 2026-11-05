@@ -262,6 +262,120 @@ def test_fund_record_without_two_common_dates(tmp_path, monkeypatch):
     assert row["error"] == "no common dates" and row["fund_cagr"] is None
 
 
+def _cagr_of(dates, values) -> float:
+    return trend.cagr(pd.Series(np.asarray(values, dtype=float), index=pd.DatetimeIndex(dates)))
+
+
+def _record(tmp_path, monkeypatch, fund, parent, idx):
+    _patch_history(monkeypatch, {"FND": _hist(idx, fund), "PAR": _hist(idx, parent)})
+    return momentum.fund_record(Paths(tmp_path / "data"), [PAIR], today=date(2026, 11, 5))[0]
+
+
+def test_fund_record_drops_the_unsettled_bar_dated_today(tmp_path, monkeypatch):
+    idx = pd.DatetimeIndex(list(pd.bdate_range("2025-06-02", periods=300)[:299]) + [pd.Timestamp("2026-11-05")])
+    idx = idx.sort_values()
+    good = _rising(idx[:-1], 0.001)
+    fund = np.append(good, good[-1] * 0.25)
+    row = _record(tmp_path, monkeypatch, fund, _rising(idx, 0.0005), idx)
+    assert row["end"] == idx[-2].date().isoformat() and row["cut"] is False
+    assert row["fund_cagr"] == pytest.approx(_cagr_of(idx[:-1], good))
+    assert row["fund_max_drawdown"] == pytest.approx(0.0)
+
+
+def _flipping(n_steady=500):
+    idx = pd.bdate_range("2020-01-01", periods=20 + n_steady)
+    flips = [25.0 if i % 2 == 0 else 19.0 for i in range(20)]
+    steady = list(19.0 * 1.001 ** np.arange(1, n_steady + 1))
+    return idx, np.array(flips + steady)
+
+
+def test_fund_record_starts_at_the_last_flip_of_a_bad_start(tmp_path, monkeypatch):
+    idx, fund = _flipping()
+    row = _record(tmp_path, monkeypatch, fund, _rising(idx, 0.0005), idx)
+    assert row["start"] == idx[19].date().isoformat() and row["cut"] is True
+    assert row["end"] == idx[-1].date().isoformat()
+    assert row["fund_cagr"] == pytest.approx(_cagr_of(idx[19:], fund[19:]))
+    assert row["parent_cagr"] == pytest.approx(_cagr_of(idx[19:], _rising(idx, 0.0005)[19:]))
+    assert row["fund_max_drawdown"] == pytest.approx(0.0)
+
+
+def test_fund_record_splits_on_a_bad_tick_in_the_parent_too(tmp_path, monkeypatch):
+    idx, bad = _flipping()
+    row = _record(tmp_path, monkeypatch, _rising(idx, 0.001), bad, idx)
+    assert row["start"] == idx[19].date().isoformat() and row["cut"] is True
+    assert row["fund_cagr"] == pytest.approx(_cagr_of(idx[19:], _rising(idx, 0.001)[19:]))
+
+
+def _dropped(n: int, at: int):
+    idx = pd.bdate_range("2020-01-01", periods=n)
+    values = _rising(idx, 0.001)
+    values[at:] *= 0.8
+    return idx, values
+
+
+def test_fund_record_uses_the_longer_side_of_a_single_break(tmp_path, monkeypatch):
+    idx, values = _dropped(400, 100)                      # stretches of 100 and 300
+    row = _record(tmp_path, monkeypatch, values, _rising(idx, 0.0005), idx)
+    assert row["start"] == idx[100].date().isoformat() and row["cut"] is True
+    idx, values = _dropped(400, 300)                      # stretches of 300 and 100
+    row = _record(tmp_path, monkeypatch, values, _rising(idx, 0.0005), idx)
+    assert row["start"] == idx[0].date().isoformat() and row["end"] == idx[299].date().isoformat()
+    assert row["cut"] is True
+
+
+def test_fund_record_takes_the_later_stretch_on_equal_lengths(tmp_path, monkeypatch):
+    idx, values = _dropped(400, 200)
+    row = _record(tmp_path, monkeypatch, values, _rising(idx, 0.0005), idx)
+    assert row["start"] == idx[200].date().isoformat() and row["end"] == idx[-1].date().isoformat()
+
+
+def test_fund_record_break_threshold_is_above_fifteen_percent(tmp_path, monkeypatch):
+    idx = pd.bdate_range("2020-01-01", periods=10)
+    for jump, cut in ((1.15, False), (1.1501, True)):
+        fund = np.array([100.0] * 5 + [100.0 * jump] * 5)
+        row = _record(tmp_path, monkeypatch, fund, _rising(idx, 0.0005), idx)
+        assert row["cut"] is cut
+        assert row["start"] == (idx[5] if cut else idx[0]).date().isoformat()
+
+
+def test_fund_record_only_counts_a_move_over_at_most_seven_days_as_a_break(tmp_path, monkeypatch):
+    for gap, cut in ((10, False), (7, True)):
+        first = pd.date_range("2020-01-01", periods=5)
+        idx = first.append(pd.date_range(first[-1] + pd.Timedelta(days=gap), periods=5))
+        fund = np.array([100.0] * 5 + [150.0] * 5)
+        row = _record(tmp_path, monkeypatch, fund, np.full(10, 100.0), idx)
+        assert row["cut"] is cut
+        assert row["start"] == (idx[5] if cut else idx[0]).date().isoformat()
+
+
+def test_fund_record_without_breaks_is_not_cut(tmp_path, monkeypatch):
+    idx = pd.bdate_range("2020-01-01", periods=300)
+    row = _record(tmp_path, monkeypatch, _rising(idx, 0.001), _rising(idx, 0.0005), idx)
+    assert row["cut"] is False and row["start"] == idx[0].date().isoformat()
+
+
+def test_fund_record_with_one_date_left_after_the_cuts(tmp_path, monkeypatch):
+    idx = pd.DatetimeIndex(["2020-01-01", "2026-11-05", "2026-11-06"])   # only one dated before today
+    row = _record(tmp_path, monkeypatch, [100.0, 100.0, 100.0], [100.0, 100.0, 100.0], idx)
+    assert row["error"] == "no common dates" and row["fund_cagr"] is None and row["start"] is None
+    idx = pd.bdate_range("2020-01-01", periods=2)         # a break leaves two stretches of one
+    row = _record(tmp_path, monkeypatch, [100.0, 130.0], [100.0, 100.0], idx)
+    assert row["error"] == "no common dates" and row["fund_cagr"] is None
+
+
+def test_render_report_marks_a_cut_pair_and_prints_the_footnote_once():
+    result = _result()
+    result["funds"][0]["cut"] = True
+    text = momentum.render_report(result)
+    note = ("* A one-day move above 15% in either fund is treated as a data error; this pair "
+            "uses its longest stretch without one.")
+    assert "MTUM label * |" in text and "QDVA label *" not in text
+    assert text.count(note) == 1
+    assert text.index(note) < text.index("## Limits")
+    plain = momentum.render_report(_result())
+    assert " *" not in plain and "data error" not in plain
+
+
 # --- run -------------------------------------------------------------------------------------
 
 def _patched_run(tmp_path, monkeypatch, added=None):
