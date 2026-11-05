@@ -586,7 +586,7 @@ def added_dates(fetch: Callable[[str], str] | None = None) -> dict[str, str]:
     the constituents table's ``Date added`` column; rows without a readable date are left out,
     and ``{}`` (logged) when the page or table cannot be read."""
     try:
-        table = pd.read_html(StringIO((fetch or _wiki_html)(market_data.WIKI["sp500"])))[0]
+        table = pd.read_html(StringIO((fetch or _wiki_html)(market_data.MARKETS["sp500"].pages[0])))[0]
         tickers = table["Symbol"].astype(str).str.replace(".", "-", regex=False)
         # The first ten characters: a footnoted cell ("2001-05-07[12]") still parses.
         dates = pd.to_datetime(table["Date added"].astype(str).str[:10], errors="coerce")

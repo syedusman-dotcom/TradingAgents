@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from io import StringIO
 from pathlib import Path
@@ -27,10 +29,6 @@ from value_pipeline.config import Paths
 log = logging.getLogger(__name__)
 
 
-WIKI = {
-    "sp500": "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies",
-    "sp400": "https://en.wikipedia.org/wiki/List_of_S%26P_400_companies",
-}
 HEADERS = {"User-Agent": "value-pipeline/0.1 (personal research tool)"}
 
 
@@ -44,21 +42,131 @@ class DataUnavailable(Exception):
 
 # --- universe ----------------------------------------------------------------
 
+@dataclass(frozen=True)
+class Market:
+    key: str
+    country: str
+    pages: tuple[str, ...]          # Wikipedia pages, tried in order; the first usable table wins
+    suffix: str = ""                # Yahoo exchange suffix, e.g. ".L"
+    gics_column: str | None = None  # only the S&P lists carry a GICS sector worth keeping
+
+
+_WIKI = "https://en.wikipedia.org/wiki/"
+
+
+def _market(key: str, country: str, page: str, suffix: str = "", *extra: str,
+            gics: str | None = None) -> Market:
+    return Market(key, country, tuple(_WIKI + p for p in (page, *extra)), suffix, gics)
+
+
+MARKETS: dict[str, Market] = {m.key: m for m in (
+    _market("sp500", "US", "List_of_S%26P_500_companies", gics="GICS Sector"),
+    _market("sp400", "US", "List_of_S%26P_400_companies", gics="GICS Sector"),
+    _market("ftse100", "UK", "FTSE_100_Index", ".L"),
+    _market("ftse250", "UK", "FTSE_250_Index", ".L"),
+    _market("dax", "Germany", "DAX", ".DE"),
+    _market("mdax", "Germany", "MDAX", ".DE"),
+    _market("cac40", "France", "CAC_40", ".PA"),
+    _market("sbf120", "France", "SBF_120", ".PA"),
+    _market("aex", "Netherlands", "AEX_index", ".AS"),
+    _market("amx", "Netherlands", "AMX_index", ".AS"),
+    _market("bel20", "Belgium", "BEL_20", ".BR"),
+    _market("psi", "Portugal", "PSI-20", ".LS"),
+    _market("iseq20", "Ireland", "ISEQ_20", ".IR"),
+    _market("ftsemib", "Italy", "FTSE_MIB", ".MI"),
+    _market("smi", "Switzerland", "Swiss_Market_Index", ".SW"),
+    _market("smim", "Switzerland", "SMI_MID", ".SW"),
+    _market("atx", "Austria", "Austrian_Traded_Index", ".VI"),
+    _market("ibex35", "Spain", "IBEX_35", ".MC"),
+    _market("omxs30", "Sweden", "OMX_Stockholm_30", ".ST"),
+    _market("omxc25", "Denmark", "OMX_Copenhagen_25", ".CO"),
+    _market("omxh25", "Finland", "OMX_Helsinki_25", ".HE"),
+    _market("obx", "Norway", "OBX_Index", ".OL"),
+    _market("tsxcomp", "Canada", "S%26P/TSX_Composite_Index", ".TO",
+            "List_of_companies_listed_on_the_S%26P/TSX_Composite_Index"),
+)}
+
+TICKER_COLUMNS = ("ticker", "symbol", "code", "ticker symbol")
+NAME_COLUMNS = ("company", "name", "security", "constituent")
+MIN_TICKERS = 10
+_DROPPED_WORDS = {"plc", "nv", "sa", "ag", "se", "ab", "asa", "as", "oyj", "spa", "group",
+                  "holding", "holdings"}
+
+
+def normalise_code(code: str, market: Market) -> str:
+    """A Wikipedia ticker cell as Yahoo writes it: exchange prefix/suffix off, dashes, suffix on."""
+    code = re.sub(r"^[A-Z]+:\s*", "", str(code).strip())
+    if market.suffix and code.endswith(market.suffix):
+        code = code[: -len(market.suffix)]
+    code = code.removesuffix(".")
+    return re.sub(r"[.\s]+", "-", code) + market.suffix
+
+
+def name_key(name: str) -> str:
+    """A company name reduced so one firm's listings in two markets compare equal."""
+    words = re.sub(r"[^\w\s]", "", str(name).lower()).split()
+    return " ".join(w for w in words if w not in _DROPPED_WORDS)
+
+
+def _column(table: pd.DataFrame, wanted: tuple[str, ...]):
+    for col in table.columns:
+        label = " ".join(map(str, col)) if isinstance(col, tuple) else str(col)
+        if label.strip().lower() in wanted:
+            return col
+    return None
+
+
+def fetch_market(market: Market) -> pd.DataFrame:
+    """One market's members as ticker, name, sector, market, country; empty when no page has a table."""
+    for page in market.pages:
+        html = requests.get(page, headers=HEADERS, timeout=30).text
+        for table in pd.read_html(StringIO(html)):
+            tick, name = _column(table, TICKER_COLUMNS), _column(table, NAME_COLUMNS)
+            if tick is None or name is None:
+                continue
+            gics = _column(table, (market.gics_column.lower(),)) if market.gics_column else None
+            frame = pd.DataFrame({
+                "ticker": table[tick],
+                "name": table[name],
+                "sector": table[gics] if gics is not None else None,
+            }).dropna(subset=["ticker", "name"])
+            frame["ticker"] = [normalise_code(t, market) for t in frame["ticker"]]
+            frame["market"], frame["country"] = market.key, market.country
+            return frame.reset_index(drop=True)
+    return pd.DataFrame(columns=["ticker", "name", "sector", "market", "country"])
+
+
 def universe(paths: Paths, indexes: list[str]) -> pd.DataFrame:
-    """Index members as columns ticker, name, sector, index. Falls back to the cached CSV."""
+    """Members of every listed market as ticker, name, sector, index, market, country.
+
+    ``index`` equals ``market``. Falls back to the cached CSV when the lists cannot be fetched.
+    """
+    for key in indexes:
+        if key not in MARKETS:
+            raise ValueError(f"unknown universe.indexes entry: {key}")
     try:
-        frames = []
-        for idx in indexes:
-            html = requests.get(WIKI[idx], headers=HEADERS, timeout=30).text
-            table = pd.read_html(StringIO(html))[0]
-            frames.append(pd.DataFrame({
-                # Yahoo writes class shares with a dash: BRK.B -> BRK-B.
-                "ticker": table["Symbol"].astype(str).str.replace(".", "-", regex=False),
-                "name": table["Security"],
-                "sector": table["GICS Sector"],
-                "index": idx,
-            }))
-        df = pd.concat(frames).drop_duplicates("ticker").reset_index(drop=True)
+        seen_names: dict[str, str] = {}
+        seen_tickers: set[str] = set()
+        rows = []
+        for key in indexes:
+            members = fetch_market(MARKETS[key])
+            if len(members) < MIN_TICKERS:
+                log.warning("%s gave %d tickers (under %d); skipped this run",
+                            key, len(members), MIN_TICKERS)
+                continue
+            for rec in members.to_dict("records"):
+                nk = name_key(rec["name"])
+                if nk and nk in seen_names:
+                    log.info("cross-listing dropped: %s (%s) duplicates %s",
+                             rec["ticker"], key, seen_names[nk])
+                    continue
+                if rec["ticker"] in seen_tickers:
+                    continue
+                seen_tickers.add(rec["ticker"])
+                if nk:
+                    seen_names[nk] = rec["ticker"]
+                rows.append({**rec, "index": key})
+        df = pd.DataFrame(rows, columns=["ticker", "name", "sector", "index", "market", "country"])
         paths.root.mkdir(parents=True, exist_ok=True)
         df.to_csv(paths.universe, index=False)
         return df

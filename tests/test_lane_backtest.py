@@ -707,7 +707,7 @@ def test_added_dates_reads_the_constituents_table():
     assert backtest.added_dates(fetch) == {
         "AAA": "1957-03-04", "BRK-B": "2010-02-16", "NEW": "2025-10-01", "MID": "2023-03-20",
         "EDGE": "2020-06-30", "FOOT": "2001-05-07"}               # a footnoted cell still parses
-    assert urls == [backtest.market_data.WIKI["sp500"]]
+    assert urls == [backtest.market_data.MARKETS["sp500"].pages[0]]
 
     def boom(url):
         raise RuntimeError("offline")
