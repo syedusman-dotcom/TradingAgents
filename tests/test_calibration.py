@@ -424,3 +424,81 @@ def test_verdict_each_condition_failing(rs, failed):
     assert v["supports"] is False
     assert v["sentence"].startswith("fair_price does not support a live test of the rule:")
     assert failed in v["sentence"].split("Failed:")[1]
+
+
+# --- paper Buys shown: the markdown and the page --------------------------------------------
+
+SENTENCE_START = "fair_price: not enough paper Buys yet"
+
+
+def _shown(day, ticker, paper, excess, ret_usd=0.0, price=96.2, currency="USD"):
+    r = _p(day, ticker=ticker, paper=paper, excess=excess)
+    r["h180"] = {**r["h180"], "ret_usd": ret_usd}
+    r.update(price=price, currency=currency, rating="Hold", lane="value", value=120.0)
+    return r
+
+
+def _flagged():
+    return [_shown("2026-01-05", "AAA", ("fair_price", "discount_15"), 0.10, ret_usd=0.12),
+            _shown("2026-02-05", "BBB", ("fair_price",), -0.02, ret_usd=0.01),
+            _shown("2026-03-05", "CCC", ("fair_price",), None, ret_usd=None)]
+
+
+@pytest.mark.unit
+def test_markdown_paper_section_sits_between_scores_and_verdicts():
+    rs = _flagged()
+    md = calibration.markdown(rs, calibration.score(rs))
+    assert md.index("## Scores") < md.index("## Paper Buys") < md.index("## Verdicts")
+    section = md.split("## Paper Buys")[1].split("## Verdicts")[0]
+    assert ("Tracked only: no money follows these. Each rule is applied in code to what a "
+            "review recorded.") in section
+    for name, text in calibration.paper.RULES.items():
+        assert f"- **{name}**: {text}" in section
+    assert SENTENCE_START in section
+    assert "| Rule | Counted | 30 days | 90 days | 180 days | 365 days |" in section
+    assert "| fair_price | 3 | – | – | +4.0% over SPY (1/2 ahead, n=2) | – |" in section
+    assert "| every review | 3 | – | – | +4.0% over SPY (1/2 ahead, n=2) | – |" in section
+    assert "| discount_15 | 1 | – | – | +10.0% over SPY (1/1 ahead, n=1) | – |" in section
+    assert ("| Date | Ticker | Rules | Price then | Latest horizon | Return in dollars "
+            "| Against SPY |") in section
+    assert "| 2026-01-05 | AAA | fair_price, discount_15 | 96.20 | 180 days | +12.0% | +10.0% |" \
+        in section
+    assert "| 2026-03-05 | CCC | fair_price | 96.20 | 180 days | – | – |" in section
+    assert ("1 counted results have no dollar return (a currency rate or SPY close is "
+            "missing); run `calibration` to fetch them.") in section
+    assert "No paper Buys yet." not in section
+
+
+@pytest.mark.unit
+def test_markdown_paper_section_without_a_flagged_row_and_decisions_unchanged():
+    rs = [_p("2026-01-05", paper=(), excess=0.1)]
+    md = calibration.markdown(rs, calibration.score(rs))
+    section = md.split("## Paper Buys")[1].split("## Verdicts")[0]
+    assert "No paper Buys yet." in section and SENTENCE_START in section
+    assert "- **fair_price**:" in section
+    assert "| Rule |" not in section and "| Date | Ticker | Rules" not in section
+    assert "no dollar return" not in section
+    assert md.split("## Scores")[0] == calibration.markdown(
+        rs, calibration.score(rs)).split("## Scores")[0]
+    assert "Paper" not in md.split("## Scores")[0]
+
+
+@pytest.mark.unit
+def test_calibration_page_shows_paper_buys_and_a_paper_column(tmp_path):
+    paths = Paths(tmp_path / "data")
+    _paper_review(paths, "2026-01-05", "USD", ticker="AAA", margin_of_safety=0.2,
+                  intrinsic_value=120.0)
+    _write(paths, "2026-02-05", [
+        {"ticker": "BBB", "rating": "Sell", "error": None, "price": 10.0}])
+    client = _web(tmp_path, paths)   # no SPY close cached
+    r = client.get("/calibration")
+    assert r.status_code == 200
+    assert "Paper Buys" in r.text and SENTENCE_START in r.text
+    for name in calibration.paper.RULES:
+        assert name in r.text
+    assert "<th>Paper</th>" in r.text
+    assert "fair_price, fair_price_investing, discount_15" in r.text
+    assert "No paper Buys yet." not in r.text
+
+    r = _web(tmp_path, Paths(tmp_path / "other")).get("/calibration")
+    assert r.status_code == 200 and "No paper Buys yet." in r.text

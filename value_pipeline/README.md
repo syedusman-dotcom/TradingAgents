@@ -315,6 +315,19 @@ after the watch, so the page stays current. It stays empty until a decision is a
 the decisions table shows; the scores and verdicts always use 180 days (365 days for "reached
 value"). A few decisions say little: read the counts before the shares.
 
+Paper Buys: the Calibration page, `calibration` and each review's `ACTIONS.md` also show
+what a looser Buy rule would have done. A paper Buy is a decision the agents rated Hold or
+better, with a good business and good management, priced at or below their own value. The
+three rules are `fair_price` (that), `fair_price_investing` (and the company is still
+investing for growth) and `discount_15` (at least 15% below their value). Each is applied in
+code to what the review recorded and scored in dollars against SPY at 30, 90, 180 and 365
+days; a ticker counts again only 90 days after it last counted. The verdict is on `fair_price`
+at 180 days: it supports a live test only with at least 20 paper Buys past 180 days from at
+least 3 months, an average of at least 3% over SPY, at least 55% of them ahead of SPY, and an
+average at least 2 points above every reviewed stock. Paper Buys are tracked only. Nothing
+trades on them, they are not a suggestion to buy, and no sizing or agent reads them. A dry
+run lists none.
+
 ## Backtest
 
 Would the lane rules have picked winners? `backtest` replays the screen on quarterly cohort dates

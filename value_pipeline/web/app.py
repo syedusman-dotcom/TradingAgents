@@ -238,7 +238,9 @@ def create_app(paths: Paths, *, config_path: Path = CONFIG_PATH, price_fn=market
     def calibration_page(request: Request):
         # Cached closes only: the page never calls Yahoo; `calibration` on the command line fills the cache.
         rs = calibration.rows(paths, price_fn=calibration.price_fn_for(paths, fetch=False))
-        return render(request, "calibration.html", rows=rs, scores=calibration.score(rs),
+        scores = calibration.score(rs)
+        return render(request, "calibration.html", rows=rs, scores=scores,
+                      paper_view=calibration.paper_view(scores["paper"]),
                       has_horizons=calibration.has_horizons(rs), horizons=calibration.HORIZONS)
 
     @app.get("/backtest", response_class=HTMLResponse)

@@ -19,6 +19,7 @@ from value_pipeline import (
     lock,
     market_data,
     metrics,
+    paper,
     parse,
     portfolio as pfmod,
     render,
@@ -645,7 +646,7 @@ def _run(paths: Paths, cfg: dict, *, yes: bool, dry_run: bool, today: str | None
                                  if themes_report and (set(discovered) & set(tickers) or scares)
                                  else None,
                                  foreign=any(r.get("currency") not in (None, "USD") for r in rows),
-                                 fund=fund_info)
+                                 fund=fund_info, paper=paper_buys(rows, dry_run))
     (out_dir / "ACTIONS.md").write_text(md, encoding="utf-8")
     (out_dir / "ACTIONS.html").write_text(render.actions_html(md, f"Value review {today}"), encoding="utf-8")
     # Written whole: the website reads these files while a review may be finishing.
@@ -707,6 +708,16 @@ def _write_whole(path: Path, data) -> None:
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
     tmp.replace(path)
+
+
+def paper_buys(rows: list[dict], dry_run: bool) -> list[dict] | None:
+    """The rows of ``results.json`` that meet a paper Buy rule, for ACTIONS.md. None on a dry run,
+    whose ratings are fake. Display only: nothing sizes or trades on it."""
+    if dry_run:
+        return None
+    return [{"ticker": r["ticker"], "rules": rules, "price": r.get("price"),
+             "value": r.get("intrinsic_value"), "currency": r.get("currency")}
+            for r in rows if (rules := paper.flags(r))]
 
 
 def _committee(ta, tally, decisions, rows, pf, summary, sizing, actions, fund=None):

@@ -30,11 +30,26 @@
 </div>
 {% endfor %}
 {% endif %}
+<h2>Paper Buys</h2>
+<p class="muted">Tracked only: no money follows these. Each rule is applied in code to what a review recorded.</p>
+<ul>{% for name, g in scores.paper.rules.items() %}<li><b>{{ name }}</b>: {{ g.description }}</li>{% endfor %}</ul>
+<p>{{ scores.paper.verdict.sentence }}</p>
+{% if not paper_view.listed %}
+<p class="muted">No paper Buys yet.</p>
+{% else %}
+<div class="table"><table>
+<thead><tr><th>Rule</th><th class="num">Counted</th><th>30 days</th><th>90 days</th><th>180 days</th><th>365 days</th></tr></thead>
+<tbody>{% for t in paper_view.table %}<tr><td>{{ t.name }}</td><td class="num">{{ t.counted }}</td>{% for c in t.cells %}<td>{{ c }}</td>{% endfor %}</tr>{% endfor %}</tbody></table></div>
+<div class="table"><table>
+<thead><tr><th>Date</th><th>Ticker</th><th>Rules</th><th class="num">Price then</th><th>Latest horizon</th><th class="num">Return in dollars</th><th class="num">Against SPY</th></tr></thead>
+<tbody>{% for x in paper_view.listed %}<tr><td>{{ x.date }}</td><td><a href="/stock/{{ x.ticker }}">{{ x.ticker }}</a></td><td>{{ x.rules }}</td><td class="num">{{ x.price }}</td><td>{{ x.horizon }}</td><td class="num">{{ x.ret_usd }}</td><td class="num">{{ x.excess }}</td></tr>{% endfor %}</tbody></table></div>
+{% if paper_view.missing %}<p class="muted">{{ paper_view.missing }} counted results have no dollar return (a currency rate or SPY close is missing); run <code>calibration</code> to fetch them.</p>{% endif %}
+{% endif %}
 {% if rows %}
 <h2>Decisions</h2>
 <p class="muted">Click a column heading to sort. "Reached value" is yes when a checkpoint within a year closed at or above the agents' value.</p>
 <div class="table"><table id="calibration">
-<thead><tr><th>Date</th><th>Ticker</th><th>Lane</th><th>Rating</th><th class="num" data-k="n">Price then</th><th class="num" data-k="n">Value</th><th class="num" data-k="n">Formula</th><th class="num" data-k="n">Bear</th>{% for n in horizons %}<th class="num" data-k="n">{{ n }}d</th>{% endfor %}<th>Reached value</th><th>Below bear 180d</th><th>Below entry 180d</th></tr></thead>
+<thead><tr><th>Date</th><th>Ticker</th><th>Lane</th><th>Rating</th><th class="num" data-k="n">Price then</th><th class="num" data-k="n">Value</th><th class="num" data-k="n">Formula</th><th class="num" data-k="n">Bear</th>{% for n in horizons %}<th class="num" data-k="n">{{ n }}d</th>{% endfor %}<th>Reached value</th><th>Below bear 180d</th><th>Below entry 180d</th><th>Paper</th></tr></thead>
 <tbody>
 {% for r in rows %}{% set h180 = r.h180 or {} %}
 <tr><td>{{ r.date }}</td><td><a href="/stock/{{ r.ticker }}">{{ r.ticker }}</a></td><td>{{ r.lane or "–" }}</td><td>{{ r.rating or "–" }}</td>
@@ -44,7 +59,7 @@
 <td class="num">{{ "{:,.2f}".format(r.bear) if r.bear is not none else "–" }}</td>
 {% for n in horizons %}{% set h = r["h" ~ n] %}<td class="num">{{ pct(h.ret) if h else "–" }}</td>{% endfor %}
 <td>{% set seen = [] %}{% for n in horizons %}{% if r["h" ~ n] %}{% set _ = seen.append(r["h" ~ n].reached_value) %}{% endif %}{% endfor %}{{ "–" if not seen or r.value is none else ("yes" if true in seen else "no") }}</td>
-<td>{{ yes(h180.below_bear) }}</td><td>{{ yes(h180.below_entry) }}</td></tr>
+<td>{{ yes(h180.below_bear) }}</td><td>{{ yes(h180.below_entry) }}</td><td>{{ r.paper | join(", ") if r.paper else "–" }}</td></tr>
 {% endfor %}
 </tbody></table></div>
 <script>

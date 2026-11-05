@@ -350,6 +350,48 @@ def paper_scores(rs: list[dict]) -> dict:
     return {"rules": rules, "baseline": baseline, "verdict": verdict}
 
 
+def _paper_cell(h: dict) -> str:
+    if not h["n"]:
+        return "–"
+    return f"{_points(h['mean_excess'])} over SPY ({h['ahead']['k']}/{h['ahead']['n']} ahead, n={h['n']})"
+
+
+def paper_view(paper_scores_: dict) -> dict:
+    """What the paper Buys section prints, as text: ``table`` (a name and its counted number and
+    one cell per horizon, for each rule and then every review), ``listed`` (the counted rows of
+    every rule once, oldest first, at the latest horizon each has reached) and ``missing`` (the
+    reached horizons of those rows with no dollar result)."""
+    table = []
+    for name, g in [*paper_scores_["rules"].items(), ("every review", paper_scores_["baseline"])]:
+        table.append({"name": name, "counted": len(g["counted"]),
+                      "cells": [_paper_cell(g["horizons"][n]) for n in HORIZONS]})
+    seen, rows_ = set(), []
+    for g in paper_scores_["rules"].values():
+        for r in g["counted"]:
+            if id(r) not in seen:
+                seen.add(id(r))
+                rows_.append(r)
+    rows_.sort(key=lambda r: (r["date"], r["ticker"], r.get("folder") or ""))
+    listed, missing = [], 0
+    for r in rows_:
+        reached = [n for n in HORIZONS if r.get(f"h{n}")]
+        h = r[f"h{reached[-1]}"] if reached else None
+        missing += sum(r[f"h{n}"].get("excess") is None for n in reached)
+        price = r.get("price")
+        cur = r.get("currency")
+        then = "–" if price is None else (
+            f"{price:,.2f}" if not cur or cur == "USD" else f"{price:,.2f} {cur}")
+        listed.append({"date": r["date"], "ticker": r["ticker"], "rules": ", ".join(r["paper"]),
+                       "price": then, "horizon": f"{reached[-1]} days" if reached else "–",
+                       "ret_usd": _pct1(h and h.get("ret_usd")),
+                       "excess": _pct1(h and h.get("excess"))})
+    return {"table": table, "listed": listed, "missing": missing}
+
+
+def _pct1(x: float | None) -> str:
+    return "–" if x is None else _points(x)
+
+
 def has_horizons(rs: list[dict]) -> bool:
     return any(r.get(f"h{n}") for r in rs for n in HORIZONS)
 
@@ -408,5 +450,27 @@ def markdown(rs: list[dict], scores: dict, horizon: int = 180) -> str:
     else:
         lines.append("\nProbabilities: not enough decisions past 180 days yet "
                      f"(needs {MIN_CALIBRATION_ROWS}).")
-    lines += ["", "## Verdicts", "", *[f"- {v}" for v in scores["verdicts"]], ""]
+    lines += ["", "## Paper Buys", "",
+              "Tracked only: no money follows these. Each rule is applied in code to what a "
+              "review recorded.", ""]
+    lines += [f"- **{name}**: {g['description']}" for name, g in scores["paper"]["rules"].items()]
+    lines += ["", scores["paper"]["verdict"]["sentence"], ""]
+    view = paper_view(scores["paper"])
+    if not view["listed"]:
+        lines += ["No paper Buys yet.", ""]
+    else:
+        lines += ["| Rule | Counted | 30 days | 90 days | 180 days | 365 days |",
+                  "|---|--:|---|---|---|---|"]
+        lines += [f"| {t['name']} | {t['counted']} | {' | '.join(t['cells'])} |"
+                  for t in view["table"]]
+        lines += ["", "| Date | Ticker | Rules | Price then | Latest horizon | Return in dollars "
+                  "| Against SPY |", "|---|---|---|--:|---|--:|--:|"]
+        lines += [f"| {x['date']} | {x['ticker']} | {x['rules']} | {x['price']} | {x['horizon']} "
+                  f"| {x['ret_usd']} | {x['excess']} |" for x in view["listed"]]
+        if view["missing"]:
+            lines += ["", f"{view['missing']} counted results have no dollar return (a currency "
+                      "rate or SPY close is missing); run `calibration` to fetch them.", ""]
+        else:
+            lines.append("")
+    lines += ["## Verdicts", "", *[f"- {v}" for v in scores["verdicts"]], ""]
     return "\n".join(lines)

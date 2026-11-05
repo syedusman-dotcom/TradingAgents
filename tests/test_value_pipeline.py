@@ -1840,3 +1840,73 @@ def test_dry_run_results_carry_still_investing(tmp_path, monkeypatch):
     row = json.loads((out.parent / "results.json").read_text())[0]
     assert row["checklist"]["still_investing"]["passed"] is True
     assert row["checklist"]["still_investing"]["note"].startswith("Fake:")
+
+
+PAPER = [{"ticker": "AAA", "rules": ["fair_price", "discount_15"], "price": 96.2,
+          "value": 120.0, "currency": "USD"}]
+
+
+@pytest.mark.unit
+def test_actions_paper_buys_sit_between_candidates_and_falling_knives():
+    actions, summary = plan([_new("Hold")], cash=50_000.0, sizing=SIZING)
+    md = render.actions_markdown("2026-11-07", actions, summary, reports={}, comparison=None,
+                                 cost=4.0, failures=[], dry_run=False, knives=["XYZ"],
+                                 paper=PAPER, names={"AAA": "Alpha"})
+    assert "## Candidates not bought" in md
+    assert md.index("## Candidates not bought") < md.index("## Paper Buys") \
+        < md.index("## Watch: falling knives")
+    assert ("## Paper Buys\n\nTracked on the calibration page only; not a suggestion to buy. "
+            "Each name is one the agents call a good business with good management, priced at "
+            "or below their own value: a looser rule than the live one, recorded to see whether "
+            "it would have paid.\n\n"
+            "- Alpha (AAA): fair_price, discount_15 (price 96.20, agents' value 120.00)\n") in md
+
+
+@pytest.mark.unit
+def test_actions_paper_buys_quote_currency_and_absence():
+    uk = [{"ticker": "BAB.L", "rules": ["fair_price"], "price": 4376.1, "value": 5000.0,
+           "currency": "GBp"}]
+    md = render.actions_markdown("2026-11-07", [], {"total_value": 1.0, "cash": 1.0,
+                                                     "target_weight": 0.1, "cash_after": 1.0},
+                                 reports={}, comparison=None, cost=0.0, failures=[],
+                                 dry_run=False, paper=uk)
+    assert "- BAB.L: fair_price (price 4,376.10 GBp, agents' value 5,000.00 GBp)" in md
+    for none in (None, []):
+        md = render.actions_markdown("2026-11-07", [], {"total_value": 1.0, "cash": 1.0,
+                                                         "target_weight": 0.1, "cash_after": 1.0},
+                                     reports={}, comparison=None, cost=0.0, failures=[],
+                                     dry_run=False, paper=none)
+        assert "Paper Buys" not in md
+
+
+@pytest.mark.unit
+def test_paper_buys_list_comes_from_the_flagged_rows_and_never_a_dry_run():
+    from value_pipeline import review
+
+    row = {"ticker": "AAA", "rating": "Hold", "error": None, "price": 96.2,
+           "intrinsic_value": 120.0, "margin_of_safety": 0.2, "currency": "USD",
+           "checklist": {"good_business": {"passed": True}, "good_management": {"passed": True}}}
+    other = {**row, "ticker": "BBB", "rating": "Sell"}
+    assert review.paper_buys([row, other], dry_run=False) == [
+        {"ticker": "AAA", "rules": ["fair_price", "discount_15"], "price": 96.2, "value": 120.0,
+         "currency": "USD"}]
+    assert review.paper_buys([row], dry_run=True) is None
+
+
+@pytest.mark.unit
+def test_a_dry_run_review_writes_no_paper_buys_section(tmp_path, monkeypatch):
+    import pandas as pd
+
+    from value_pipeline import market_data, operations as ops, paper, review
+
+    paths = Paths(tmp_path)
+    monkeypatch.setattr(market_data, "quote_fx", lambda t: ("USD", 1.0))
+    ops.init_portfolio(paths, 1000.0, on="2026-10-01")
+    monkeypatch.setattr(review, "_screen_rows", lambda paths: {})
+    monkeypatch.setattr(market_data, "latest_price", lambda t: 50.0)
+    monkeypatch.setattr(market_data, "closes_between", lambda *a, **k: pd.Series(dtype=float))
+    monkeypatch.setattr(review, "next_earnings_date", lambda t: None)
+    out = review.run(paths, DEFAULTS, yes=True, dry_run=True, today="2026-10-23", only=["HRB"])
+    rows = json.loads((out.parent / "results.json").read_text())
+    assert any(paper.flags(r) for r in rows)    # fake_run's rows pass the gate
+    assert "## Paper Buys" not in out.read_text()

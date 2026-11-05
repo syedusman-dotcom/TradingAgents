@@ -23,6 +23,10 @@ def _quoted(x: float | None, d) -> str:
     return f"${x:,.2f}" if not currency or currency == "USD" else f"{x:,.2f} {currency}"
 
 
+def _figure(x: float | None) -> str:
+    return "–" if x is None else f"{x:,.2f}"
+
+
 def _pct(x: float | None) -> str:
     return "–" if x is None else f"{x:.1%}"
 
@@ -38,7 +42,7 @@ def actions_markdown(date: str, actions: list[Action], summary: dict, *, reports
                      committee: tuple[committee_mod.Committee, list[str]] | None = None,
                      committee_unavailable: str | None = None, max_weight: float = 0.10,
                      themes_report: str | None = None, foreign: bool = False,
-                     fund: dict | None = None) -> str:
+                     fund: dict | None = None, paper: list[dict] | None = None) -> str:
     def who(ticker: str) -> str:
         return f"{names[ticker]} ({ticker})" if names and names.get(ticker) else ticker
 
@@ -142,6 +146,20 @@ def actions_markdown(date: str, actions: list[Action], summary: dict, *, reports
         lines += ["## Candidates not bought", ""]
         lines += [f"- {who(a.ticker)}{_hint_note(a.decision)}: {a.reason}{_lane_note(a)}{_entry_note(a.decision)}{_er_note(a.decision)} "
                   f"({_link(reports, a.ticker)})" for a in skipped]
+        lines.append("")
+    if paper:
+        lines += ["## Paper Buys", "",
+                  "Tracked on the calibration page only; not a suggestion to buy. Each name is one "
+                  "the agents call a good business with good management, priced at or below their "
+                  "own value: a looser rule than the live one, recorded to see whether it would "
+                  "have paid.", ""]
+        for p in paper:
+            unit = p.get("currency")
+            tail = "" if not unit or unit == "USD" else f" {unit}"
+            lines.append(f"- {who(p['ticker'])}: {', '.join(p['rules'])} (price "
+                         f"{_figure(p.get('price'))}{tail if p.get('price') is not None else ''}, "
+                         f"agents' value {_figure(p.get('value'))}"
+                         f"{tail if p.get('value') is not None else ''})")
         lines.append("")
     if knives:
         lines += ["## Watch: falling knives", "", "Ranked well in the screen but in FREEFALL: " + ", ".join(knives), ""]
