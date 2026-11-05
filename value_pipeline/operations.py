@@ -54,17 +54,35 @@ def init_portfolio(paths: Paths, cash: float, currency: str = "USD", on: str | N
     return pf
 
 
+# A typed rate further than this from the market's is refused as a slip (or a rate left over
+# from another ticker on the website's form).
+RATE_TOLERANCE = 0.20
+
+
 def trade_fx(ticker: str, fx: float | None, position: pfmod.Position | None = None,
-             fx_fn=market_data.quote_fx) -> tuple[str | None, float]:
-    """The quote currency and dollars per quoted unit for a fill: a given rate wins over the market's."""
+             fx_fn=market_data.quote_fx, how: str = "pass --fx") -> tuple[str | None, float]:
+    """The quote currency and dollars per quoted unit for a fill: a given rate wins over the market's,
+    unless the stock is quoted in dollars or the rate is more than ``RATE_TOLERANCE`` from the market's.
+    ``how`` says how to give a rate (the CLI's ``--fx``, the website's Rate field)."""
     market_currency, market_rate = fx_fn(ticker)
     currency = market_currency or (position.currency if position else None)
     if fx is not None:
+        if currency == "USD" and fx != 1.0:
+            raise pfmod.TradeError(f"{ticker} is quoted in US dollars: its rate is 1, not {fx:g}")
+        if market_currency not in (None, "USD") and market_rate and abs(fx / market_rate - 1) > RATE_TOLERANCE:
+            raise pfmod.TradeError(
+                f"the rate {fx:g} is more than {RATE_TOLERANCE:.0%} away from the market's {market_rate:g} "
+                f"dollars per {market_currency} for {ticker}: check it")
         return currency, fx
-    if currency in (None, "USD"):
+    if currency == "USD":
         return currency, 1.0
+    if currency is None:
+        if position is not None and not position.foreign:
+            return None, 1.0          # a dollar holding: the placeholder is its rate
+        raise pfmod.TradeError(f"could not read the quote currency of {ticker}: give the rate, "
+                               f"1 for a dollar stock ({how})")
     if market_currency is None or market_rate is None:   # an unreadable currency has no trusted rate
-        raise pfmod.TradeError(f"no dollar rate for {currency}: pass --fx (dollars per {currency})")
+        raise pfmod.TradeError(f"no dollar rate for {currency}: {how} (dollars per {currency})")
     return currency, market_rate
 
 
@@ -169,17 +187,17 @@ def portfolio_view(paths: Paths, price_fn=market_data.latest_price, benchmark_fn
     rows = []
     for p in pf.positions:
         price = price_fn(p.ticker)
-        currency, rate = fx_fn(p.ticker)
-        if currency is None and p.currency not in (None, "USD"):
-            rate = None            # the market's 1.0 is a placeholder, not a rate for this currency
-        value = p.shares * price * rate if price is not None and rate is not None else p.cost_usd
+        quote = fx_fn(p.ticker)
+        currency, rate = quote[0], pfmod.position_rate(p, quote)
+        priced = price is not None and rate is not None
+        value = p.shares * price * rate if priced else p.cost_usd
         cost = p.cost_usd
         fund = p.ticker == parking_ticker
         iv = None if fund else p.intrinsic_value_estimate
         rows.append({
             "ticker": p.ticker, "shares": p.shares, "avg_price": p.avg_price, "price": price,
             "currency": p.currency or currency, "fx": rate, "cost": cost,
-            "value": value, "gain": value / cost - 1 if price and cost else None,
+            "value": value, "gain": value / cost - 1 if priced and price and cost else None,
             "last_rating": "index fund" if fund else p.last_rating, "intrinsic_value": iv,
             "margin_of_safety": (iv - price) / iv if iv and price else None,
             "days_held": (today - date.fromisoformat(p.first_bought)).days, "thesis": p.thesis,

@@ -44,6 +44,23 @@ class Position:
         """Dollars paid for the position, fees included."""
         return self.shares * self.avg_price * self.avg_fx
 
+    @property
+    def foreign(self) -> bool:
+        """Quoted outside dollars, or bought at a rate other than par."""
+        return self.currency not in (None, "USD") or self.avg_fx != 1.0
+
+
+def position_rate(position: Position | None, quote: tuple[str | None, float | None]) -> float | None:
+    """Dollars per quoted unit for a holding, from ``market_data.quote_fx``'s answer.
+
+    ``(None, 1.0)`` means the currency could not be read: its 1.0 is a placeholder, so a foreign
+    holding gets None (valued at cost, sized by hand) and only a dollar holding (or no holding) 1.0.
+    """
+    currency, rate = quote
+    if currency is None and position is not None and position.foreign:
+        return None
+    return rate
+
 
 @dataclass
 class Portfolio:

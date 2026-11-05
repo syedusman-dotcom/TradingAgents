@@ -559,6 +559,8 @@ def _run(paths: Paths, cfg: dict, *, yes: bool, dry_run: bool, today: str | None
     for r in results:
         held = pf.position(r.ticker)
         row = screen_row.get(r.ticker)
+        if held is not None:     # an unreadable currency is no rate for a foreign holding: size it by hand
+            fx[r.ticker] = (fx[r.ticker][0] or held.currency, pfmod.position_rate(held, fx[r.ticker]))
         fscore = row.get("fscore") if row else None
         decisions.append(Decision(
             ticker=r.ticker,
@@ -677,7 +679,7 @@ def _hint(row: dict | None) -> str:
 def _holding_value(p, price: float | None, fx: tuple[str | None, float | None]) -> float:
     """An unreviewed holding's value in US dollars: today's price at the quote's rate, else its
     cost basis in dollars."""
-    rate = fx[1]
+    rate = pfmod.position_rate(p, fx)
     return p.shares * price * rate if price is not None and rate is not None else p.cost_usd
 
 
@@ -685,9 +687,9 @@ def _parking(p, fund: str, price: float | None, fx: tuple[str | None, float | No
              parking: dict) -> tuple[float, dict, dict]:
     """The fund's dollar value (cost basis without a price or rate), the ``plan`` parking settings
     (with ``price_usd`` only when the price and rate are known) and the ACTIONS section's facts."""
-    rate = fx[1]
-    if fx[0] is None and p is not None and p.currency not in (None, "USD"):
-        rate = None             # the 1.0 for an unreadable currency is a placeholder, not a rate
+    # An unreadable currency leaves the fund unpriced: its 1.0 is a placeholder, and a fund not
+    # held yet has no currency of its own to say whether it is one.
+    rate = pfmod.position_rate(p, fx) if p is not None else (None if fx[0] is None else fx[1])
     price_usd = price * rate if price is not None and rate is not None else None
     held_value = 0.0
     if p is not None:

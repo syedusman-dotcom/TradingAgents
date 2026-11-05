@@ -21,6 +21,13 @@ def _no_company_name_lookup(monkeypatch):
     monkeypatch.setattr(context, "resolve_instrument_identity", lambda ticker: {})
 
 
+@pytest.fixture
+def dollar_market(monkeypatch):
+    from value_pipeline import market_data
+
+    monkeypatch.setattr(market_data, "quote_fx", lambda t: ("USD", 1.0))   # no network for rates
+
+
 # --- portfolio math ---------------------------------------------------------------
 
 @pytest.mark.unit
@@ -1000,6 +1007,7 @@ def test_old_portfolio_file_loads_with_empty_kill_criteria(tmp_path):
 
 
 @pytest.mark.unit
+@pytest.mark.usefixtures("dollar_market")
 def test_recording_a_buy_stores_kill_criteria_and_entry_price(tmp_path):
     from value_pipeline import operations as ops
 
@@ -1019,6 +1027,7 @@ def test_recording_a_buy_stores_kill_criteria_and_entry_price(tmp_path):
 
 
 @pytest.mark.unit
+@pytest.mark.usefixtures("dollar_market")
 def test_a_review_stores_a_holdings_kill_criteria_and_entry_price(tmp_path):
     from value_pipeline import operations as ops, review
 
@@ -1403,6 +1412,7 @@ def test_unresolved_lane_claim_sizes_as_hold():
 
 
 @pytest.mark.unit
+@pytest.mark.usefixtures("dollar_market")
 def test_position_and_results_carry_the_lane(tmp_path):
     from value_pipeline import operations as ops, review
 

@@ -15,7 +15,7 @@ from value_pipeline.web import create_app, views
 
 @pytest.fixture(autouse=True)
 def _dollar_market(monkeypatch):
-    monkeypatch.setattr(market_data, "quote_fx", lambda t: (None, 1.0))     # no network for rates
+    monkeypatch.setattr(market_data, "quote_fx", lambda t: ("USD", 1.0))   # no network for rates
 
 
 def _client(tmp_path, **kw):

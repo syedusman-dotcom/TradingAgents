@@ -5,8 +5,13 @@ from datetime import date
 import pandas as pd
 import pytest
 
-from value_pipeline import history, operations as ops, portfolio as pfmod, review
+from value_pipeline import history, market_data, operations as ops, portfolio as pfmod, review
 from value_pipeline.config import DEFAULTS, Paths
+
+
+@pytest.fixture(autouse=True)
+def _dollar_market(monkeypatch):
+    monkeypatch.setattr(market_data, "quote_fx", lambda t: ("USD", 1.0))   # no network for rates
 
 
 @pytest.fixture

@@ -84,7 +84,6 @@ def test_trade_fx_reads_the_market_and_refuses_an_unknown_rate():
     assert trade_fx("DNLM.L", None, fx_fn=lambda t: ("GBp", 0.0135)) == ("GBp", 0.0135)
     assert trade_fx("DNLM.L", 0.014, fx_fn=lambda t: ("GBp", 0.0135)) == ("GBp", 0.014)
     assert trade_fx("HRB", None, fx_fn=lambda t: ("USD", 1.0)) == ("USD", 1.0)
-    assert trade_fx("HRB", None, fx_fn=lambda t: (None, 1.0)) == (None, 1.0)
     with pytest.raises(TradeError, match="--fx"):
         trade_fx("XYZ.WA", None, fx_fn=lambda t: ("PLN", None))
     assert trade_fx("XYZ.WA", 0.25, fx_fn=lambda t: ("PLN", None)) == ("PLN", 0.25)
@@ -214,3 +213,116 @@ def test_status_shows_the_quote_unit(monkeypatch, tmp_path):
     monkeypatch.setattr(cli, "console", Console(file=out, width=200))
     cli.main(["--data-dir", str(tmp_path), "status"])
     assert "900.00 GBp" in out.getvalue()
+
+
+# --- An unreadable currency is not a dollar rate (final review F1, F4, M1) ---
+
+def _dnlm(**kw):
+    return Position("DNLM.L", 84, 900.0, "2026-11-05", currency="GBp", avg_fx=0.01348, **kw)
+
+
+@pytest.mark.unit
+def test_position_rate_refuses_the_placeholder_for_a_foreign_position():
+    assert pfmod.position_rate(_dnlm(), (None, 1.0)) is None
+    assert pfmod.position_rate(_dnlm(), ("GBp", 0.013)) == 0.013
+    assert pfmod.position_rate(_dnlm(), ("GBp", None)) is None
+    hrb = Position("HRB", 10, 50.0, "2026-10-01")
+    assert pfmod.position_rate(hrb, (None, 1.0)) == 1.0            # a dollar position: 1.0 is its rate
+    paid_in_kronor = Position("X", 1, 280.0, "2026-10-01", avg_fx=0.102)   # no currency kept, a rate paid
+    assert pfmod.position_rate(paid_in_kronor, (None, 1.0)) is None
+    assert pfmod.position_rate(None, (None, 1.0)) == 1.0
+
+
+@pytest.mark.unit
+def test_holding_value_of_a_foreign_holding_with_an_unreadable_currency_is_its_cost():
+    assert review._holding_value(_dnlm(), 910.0, (None, 1.0)) == pytest.approx(84 * 900.0 * 0.01348)
+    assert review._holding_value(_dnlm(), 910.0, ("GBp", 0.013)) == pytest.approx(84 * 910.0 * 0.013)
+
+
+@pytest.mark.unit
+def test_parking_with_an_unreadable_currency_is_unpriced():
+    fund = Position("0P0001K6NL.ST", 24, 280.0, "2026-10-01", currency="SEK", avg_fx=0.102)
+    cfg = {"ticker": "0P0001K6NL.ST", "share": 0.7, "min_trade_amount": 250}
+    value, settings, info = review._parking(fund, "0P0001K6NL.ST", 285.0, (None, 1.0), cfg)
+    assert value == pytest.approx(24 * 280.0 * 0.102) and "price_usd" not in settings
+    assert info["priced"] is False
+    value, settings, info = review._parking(None, "0P0001K6NL.ST", 285.0, (None, 1.0), cfg)
+    assert value == 0.0 and "price_usd" not in settings and info["priced"] is False   # not held yet
+    _, settings, info = review._parking(None, "0P0001K6NL.ST", 285.0, ("SEK", 0.105), cfg)
+    assert settings["price_usd"] == pytest.approx(285.0 * 0.105) and info["priced"] is True
+
+
+def _review_paths(tmp_path, monkeypatch):
+    paths = Paths(tmp_path)
+    ops.init_portfolio(paths, 10_000.0, on="2026-09-01")
+    pf = pfmod.load(paths)
+    apply_buy(pf, "HRB", 10, 50.0, on="2026-09-02").last_review_date = "2026-10-01"
+    apply_buy(pf, "DNLM.L", 84, 900.0, on="2026-09-02", currency="GBp", fx=0.01348)
+    pfmod.save(paths, pf)
+    prices = {"HRB": 50.0, "DNLM.L": 910.0}
+    monkeypatch.setattr(market_data, "latest_price", lambda t: prices.get(t))
+    monkeypatch.setattr(market_data, "quote_fx", lambda t: ("USD", 1.0) if t == "HRB" else (None, 1.0))
+    monkeypatch.setattr(market_data, "closes_between", lambda *a, **k: __import__("pandas").Series(dtype=float))
+    monkeypatch.setattr(review, "_screen_rows", lambda paths: {})
+    monkeypatch.setattr(review, "screen_row_for", lambda *a, **k: None)
+    return paths
+
+
+@pytest.mark.unit
+def test_review_values_an_unreviewed_foreign_holding_at_cost_when_the_currency_is_unreadable(
+        tmp_path, monkeypatch):
+    import copy
+
+    from value_pipeline.config import DEFAULTS
+    paths = _review_paths(tmp_path, monkeypatch)
+    cfg = copy.deepcopy(DEFAULTS)
+    cfg["parking"]["ticker"] = ""
+    md = review.run(paths, cfg, yes=True, dry_run=True, only=["HRB"], today="2026-11-05").read_text()
+    assert "- Value: **$10,000.00**" in md          # not 84 x 910 "dollars" = $76,440 for DNLM.L
+
+
+@pytest.mark.unit
+def test_review_sizes_a_reviewed_foreign_holding_by_hand_when_the_currency_is_unreadable(
+        tmp_path, monkeypatch):
+    import copy
+
+    from value_pipeline.config import DEFAULTS
+    paths = _review_paths(tmp_path, monkeypatch)
+    cfg = copy.deepcopy(DEFAULTS)
+    cfg["parking"]["ticker"] = ""
+    out = review.run(paths, cfg, yes=True, dry_run=True, today="2026-11-05")
+    md = out.read_text()
+    assert "quoted in GBp: size by hand" in md
+    assert "$76,440" not in md and "76,440" not in md
+    rows = {r["ticker"]: r for r in __import__("json").loads((out.parent / "results.json").read_text())}
+    assert rows["DNLM.L"]["currency"] == "GBp" and rows["DNLM.L"]["fx_to_usd"] is None
+
+
+@pytest.mark.unit
+def test_trade_fx_refuses_an_unreadable_currency_for_a_first_buy():
+    with pytest.raises(TradeError, match="could not read the quote currency"):
+        trade_fx("0P0001K6NL.ST", None, fx_fn=lambda t: (None, 1.0))
+    assert trade_fx("0P0001K6NL.ST", 0.105, fx_fn=lambda t: (None, 1.0)) == (None, 0.105)
+    hrb = Position("HRB", 10, 50.0, "2026-10-01")
+    assert trade_fx("HRB", None, position=hrb, fx_fn=lambda t: (None, 1.0)) == (None, 1.0)   # a dollar holding
+    with pytest.raises(TradeError, match="Rate field"):
+        trade_fx("0P0001K6NL.ST", None, fx_fn=lambda t: (None, 1.0), how="fill in the Rate field")
+
+
+@pytest.mark.unit
+def test_trade_fx_refuses_a_rate_for_a_dollar_stock_and_one_far_from_the_market():
+    with pytest.raises(TradeError, match="US dollars"):
+        trade_fx("AAPL", 0.01348, fx_fn=lambda t: ("USD", 1.0))
+    assert trade_fx("AAPL", 1.0, fx_fn=lambda t: ("USD", 1.0)) == ("USD", 1.0)
+    with pytest.raises(TradeError, match=r"0\.0135.*0\.105|0\.105.*0\.0135"):
+        trade_fx("0P0001K6NL.ST", 0.0135, fx_fn=lambda t: ("SEK", 0.105))
+    assert trade_fx("0P0001K6NL.ST", 0.11, fx_fn=lambda t: ("SEK", 0.105)) == ("SEK", 0.11)   # within 20%
+
+
+@pytest.mark.unit
+def test_portfolio_view_shows_no_gain_without_a_rate(tmp_path):
+    paths = _foreign_paths(tmp_path)
+    for fx in (("GBp", None), (None, 1.0)):
+        row = portfolio_view(paths, price_fn=lambda t: 1_000.0, benchmark_fn=lambda *a: None,
+                             fx_fn=lambda t, fx=fx: fx)["positions"][0]
+        assert row["value"] == pytest.approx(1_215.0) and row["gain"] is None
