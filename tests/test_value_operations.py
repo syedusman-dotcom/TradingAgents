@@ -123,6 +123,26 @@ def test_value_series_replays_cash_shares_and_the_spy_shadow():
 
 
 @pytest.mark.unit
+def test_value_series_is_in_dollars_for_a_kronor_fund_and_a_pence_stock():
+    deposits = [{"date": "2026-01-02", "amount": 10_000}]
+    trades = [{"date": "2026-01-05", "ticker": "0P0001K6NL.ST", "action": "BUY", "shares": "24",
+               "price": "280", "fees": "0", "currency": "SEK", "fx": "0.102"},
+              {"date": "2026-01-05", "ticker": "DNLM.L", "action": "BUY", "shares": "100",
+               "price": "900", "fees": "1", "currency": "GBp", "fx": "0.0135"}]
+    idx = [date(2026, 1, 2), date(2026, 1, 5), date(2026, 1, 9)]
+    closes = {"0P0001K6NL.ST": pd.Series([280.0, 280.0, 285.0], index=idx),
+              "DNLM.L": pd.Series([900.0, 900.0, 1_000.0], index=idx)}
+    spy = pd.Series([100.0, 100.0, 110.0], index=idx)
+    s = history.value_series(deposits, trades, closes, spy, idx)
+    cost = 24 * 280 * 0.102 + 100 * 900 * 0.0135 + 1           # 685.44 + 1,215 + 1 in dollars
+    assert s[1]["portfolio"] == pytest.approx(10_000 - 1)       # bought at cost: only the fee is gone
+    assert s[2]["portfolio"] == pytest.approx(10_000 - cost + 24 * 285 * 0.102 + 100 * 1_000 * 0.0135)
+    assert s[2]["spy"] == pytest.approx(10_000 - cost + cost / 100 * 110)   # SPY bought with the dollars
+    # Without closes, a holding is shown at its last trade's dollar price.
+    s = history.value_series(deposits, trades, {}, spy, idx)
+    assert s[2]["portfolio"] == pytest.approx(10_000 - 1)
+
+@pytest.mark.unit
 def test_review_ratings_do_not_wipe_a_trade_recorded_while_it_ran(paths):
     """A review loads the portfolio at the start and stores ratings an hour later."""
     from value_pipeline.actions import Action, Decision

@@ -22,14 +22,20 @@ def _asof(series: pd.Series | None, day: date) -> float | None:
 
 def value_series(deposits: list[dict], trades: list[dict], closes: dict[str, pd.Series],
                  spy: pd.Series, days: list[date]) -> list[dict]:
-    """Value of the portfolio and of the SPY shadow on each day in ``days``."""
+    """Value of the portfolio and of the SPY shadow on each day in ``days``, in dollars.
+
+    A trade's dollar amount is its quote-unit gross times its ``fx`` (fees are dollars). A holding
+    outside dollars is valued at its quote-unit close times the rate of its latest trade so far: an
+    approximation (the chart holds no rate history), exact on the trade day and off by the
+    currency's move since."""
     events = sorted(
         [(d["date"], "deposit", d) for d in deposits] + [(t["date"], "trade", t) for t in trades],
         key=lambda e: e[0],
     )
     cash = spy_cash = spy_shares = 0.0
     shares: dict[str, float] = {}
-    last_price: dict[str, float] = {}
+    last_price: dict[str, float] = {}       # dollars per share at the latest trade
+    rate: dict[str, float] = {}             # dollars per quoted unit at the latest trade
     out, i = [], 0
     for day in days:
         while i < len(events) and date.fromisoformat(events[i][0]) <= day:
@@ -38,18 +44,22 @@ def value_series(deposits: list[dict], trades: list[dict], closes: dict[str, pd.
                 cash += float(e["amount"])
                 spy_cash += float(e["amount"])
             else:
-                n, price, fees = float(e["shares"]), float(e["price"]), float(e.get("fees") or 0)
+                fx = pfmod.row_fx(e)
+                n, price, fees = float(e["shares"]), float(e["price"]) * fx, float(e.get("fees") or 0)
                 sign = 1 if e["action"] == "BUY" else -1
                 amount = n * price + fees if sign == 1 else n * price - fees
                 shares[e["ticker"]] = shares.get(e["ticker"], 0.0) + sign * n
-                last_price[e["ticker"]] = price
+                last_price[e["ticker"]], rate[e["ticker"]] = price, fx
                 cash -= sign * amount
                 spy_price = _asof(spy, date.fromisoformat(when))
                 if spy_price:
                     spy_shares += sign * amount / spy_price
                     spy_cash -= sign * amount
             i += 1
-        held = sum(n * (_asof(closes.get(t), day) or last_price.get(t, 0.0)) for t, n in shares.items())
+        held = 0.0
+        for t, n in shares.items():
+            close = _asof(closes.get(t), day)
+            held += n * (close * rate[t] if close else last_price.get(t, 0.0))
         out.append({"date": day.isoformat(), "portfolio": cash + held,
                     "spy": spy_cash + spy_shares * (_asof(spy, day) or 0.0)})
     return out
