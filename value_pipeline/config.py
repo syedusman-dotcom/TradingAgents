@@ -78,6 +78,21 @@ DEFAULTS: dict = {
                  "holds": [1, 3], "value_top_n": 30, "benchmark": "SPY"},
     "trend": {"start": "2015-07-01", "equity": 10000, "risk_per_trade": 0.01, "stop_n": 2.0, "n_days": 20,
               "max_positions": 10, "max_position_weight": 0.20, "cost_per_side": 0.0035, "market_filter": True},
+    # The momentum sleeve test (value_pipeline/momentum.py): today's S&P 500 members from the day they
+    # joined the index, a recent period and an earlier hold-out; the real funds are the record.
+    "momentum": {"recent_start": "2015-07-01", "holdout_start": "2005-01-03", "holdout_end": "2015-06-30",
+                 "equity": 10000, "positions": 10, "check_positions": 20, "cost_per_side": 0.005,
+                 "market_filter": True,
+                 "funds": [
+                     {"fund": "MTUM", "parent": "SPY",
+                      "label": "iShares MSCI USA Momentum against the S&P 500 "
+                              "(US-listed; not sold to EU retail investors)"},
+                     {"fund": "IS3R.DE", "parent": "EUNL.DE",
+                      "label": "iShares Edge MSCI World Momentum against iShares Core MSCI World "
+                              "(Xetra, at Nordnet)"},
+                     {"fund": "QDVA.DE", "parent": "SXR8.DE",
+                      "label": "iShares Edge MSCI USA Momentum against iShares Core S&P 500 "
+                              "(Xetra, at Nordnet)"}]},
 }
 
 
@@ -103,7 +118,7 @@ def _merge(base: dict, override: dict) -> dict:
 
 # Numbers that disable a safeguard at zero: the cost cap would never block, sizes would be nothing.
 _POSITIVE = {"cost_per_run", "max_cost_per_review", "max_position_weight", "max_sector_weight", "min_holdings",
-             "max_reviews", "big_move"}
+             "max_reviews", "big_move", "positions", "check_positions", "equity"}
 
 
 def validate_config(cfg: dict) -> None:
