@@ -231,7 +231,10 @@ def _price_is_stale(data: dict, price_days: int) -> bool:
     price_at = data.get("price_at")
     if not price_at:
         return True
-    return (date.today() - date.fromisoformat(price_at)).days >= price_days
+    try:
+        return (date.today() - date.fromisoformat(price_at)).days >= price_days
+    except (TypeError, ValueError):
+        return True
 
 
 def _refresh_price(ticker: str, data: dict) -> dict:
@@ -243,11 +246,12 @@ def _refresh_price(ticker: str, data: dict) -> dict:
     series = closes(ticker)
     if not series or not isinstance(price, (int, float)):
         raise DataUnavailable("no price or closes")
-    out = {**data, "price": price, "market_cap": mcap, "closes": series,
-           "price_at": date.today().isoformat()}
-    old = data.get("market_cap")
-    if all(isinstance(x, (int, float)) for x in (old, mcap, data.get("enterprise_value"))):
-        out["enterprise_value"] = data["enterprise_value"] + mcap - old
+    out = {**data, "price": float(price), "closes": series, "price_at": date.today().isoformat()}
+    if isinstance(mcap, (int, float)):
+        old = data.get("market_cap")
+        out["market_cap"] = float(mcap)
+        if all(isinstance(x, (int, float)) for x in (old, data.get("enterprise_value"))):
+            out["enterprise_value"] = data["enterprise_value"] + float(mcap) - old
     return out
 
 
@@ -264,12 +268,12 @@ def fundamentals(ticker: str, paths: Paths, cache_days: int = 7, price_days: int
         if fresh and data.get("schema") == CACHE_SCHEMA and "quarters" in data:
             if price_days is not None and _price_is_stale(data, price_days):
                 try:
-                    data = _refresh_price(ticker, data)
+                    refreshed = _refresh_price(ticker, data)
+                    cache.write_text(json.dumps(refreshed), encoding="utf-8")
                 except Exception as exc:  # noqa: BLE001 - Yahoo raises many types
                     log.warning("price refresh failed for %s: %s", ticker, exc)
                     return {**data, "from_cache": True}
-                cache.write_text(json.dumps(data), encoding="utf-8")
-                return {**data, "from_cache": True, "price_refreshed": True}
+                return {**refreshed, "from_cache": True, "price_refreshed": True}
             return {**data, "from_cache": True}
     t = yf.Ticker(ticker)
     try:

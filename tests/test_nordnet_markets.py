@@ -556,3 +556,34 @@ def test_price_days_none_never_refreshes(tmp_path, monkeypatch):
 @pytest.mark.unit
 def test_screen_config_defaults():
     assert config.DEFAULTS["screen"]["price_days"] == 1 and config.DEFAULTS["screen"]["cache_days"] == 7
+
+
+@pytest.mark.unit
+def test_missing_market_cap_in_fast_info_keeps_the_cached_one(tmp_path, monkeypatch):
+    paths = Paths(tmp_path)
+    _cached_record(paths)
+    _fake_yahoo(monkeypatch, fast_info={"last_price": 12.0, "market_cap": None})
+    data = market_data.fundamentals("ABC", paths, cache_days=7, price_days=1)
+    assert data["price"] == 12.0 and data["market_cap"] == 1e9 and data["enterprise_value"] == 1.2e9
+    assert data["price_refreshed"] is True
+    assert json.loads((paths.cache / "ABC.json").read_text())["market_cap"] == 1e9
+
+
+@pytest.mark.unit
+def test_unparseable_price_at_is_refreshed(tmp_path, monkeypatch):
+    paths = Paths(tmp_path)
+    _cached_record(paths, price_at="garbage")
+    _fake_yahoo(monkeypatch)
+    data = market_data.fundamentals("ABC", paths, cache_days=7, price_days=1)
+    assert data["price"] == 12.0 and data["price_refreshed"] is True
+
+
+@pytest.mark.unit
+def test_unserialisable_refresh_is_a_warned_cache_hit(tmp_path, monkeypatch, caplog):
+    paths = Paths(tmp_path)
+    _cached_record(paths)
+    _fake_yahoo(monkeypatch, closes=[11.0, object()])
+    with caplog.at_level(logging.WARNING):
+        data = market_data.fundamentals("ABC", paths, cache_days=7, price_days=1)
+    assert data["price"] == 10.0 and "price_refreshed" not in data
+    assert "price refresh failed for ABC" in caplog.text
