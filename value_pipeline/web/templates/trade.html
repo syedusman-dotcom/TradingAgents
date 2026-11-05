@@ -5,7 +5,7 @@
 <form method="get" action="/trade"><label>Look up a ticker <input name="ticker" value="{{ info.ticker if info else '' }}" size="8"></label> <button class="secondary">Look up</button></form>
 {% if info %}
 <fieldset><b>{{ info.ticker }}</b>
-  · price {{ "{:,.2f}".format(info.price) if info.price is not none else "unavailable" }}
+  · price {{ "{:,.2f}".format(info.price) if info.price is not none else "unavailable" }}{% if info.currency %} {{ info.currency }}{% endif %}
   {% if info.position %} · you hold {{ "{:g}".format(info.position.shares) }} sh at {{ "{:,.2f}".format(info.position.avg_price) }}{% endif %}
   {% if info.result %} · last rated <b>{{ info.result.rating }}</b>
     {% if info.result.intrinsic_value %}, value {{ "{:,.2f}".format(info.result.intrinsic_value) }}{% endif %}
@@ -19,7 +19,8 @@
   <input type="hidden" name="token" value="{{ token }}">
   <label>Ticker <input name="ticker" size="8" required value="{{ v.ticker or (info.ticker if info else '') }}"></label>
   <label>Shares <input name="shares" inputmode="decimal" size="8" required value="{{ v.shares or '' }}"></label>
-  <label>Price <input name="price" inputmode="decimal" size="8" required value="{{ v.price or '' }}"></label>
+  <label>Price{% if info and info.currency %} ({{ info.currency }}){% endif %} <input name="price" inputmode="decimal" size="8" required value="{{ v.price or '' }}"></label>
+  <label>Rate ($ per unit) <input name="fx" inputmode="decimal" size="8" value="{{ v.fx if v.fx is defined else (info.fx if info and info.fx else '') }}"></label>
   <label>Fees <input name="fees" inputmode="decimal" size="6" value="{{ v.fees or '0' }}"></label>
   <label>Date <input name="date" type="date" value="{{ v.date or '' }}"></label>
   <label>Note <input name="note" size="20" value="{{ v.note or '' }}"></label>

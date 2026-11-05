@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import math
 import re
 import secrets
@@ -108,7 +109,8 @@ def create_app(paths: Paths, *, config_path: Path = CONFIG_PATH, price_fn=market
     def dashboard(request: Request):
         if not paths.portfolio.exists():
             return render(request, "start.html")
-        view = ops.portfolio_view(paths, price_fn=app.state.price_fn, benchmark_fn=app.state.benchmark_fn)
+        view = ops.portfolio_view(paths, price_fn=app.state.price_fn, benchmark_fn=app.state.benchmark_fn,
+                                fx_fn=lambda t: market_data.quote_fx(t))
         series = app.state.series_fn(paths)
         chart = charts.line_chart([s["date"] for s in series],
                                   {"Portfolio": [s["portfolio"] for s in series],
@@ -138,7 +140,12 @@ def create_app(paths: Paths, *, config_path: Path = CONFIG_PATH, price_fn=market
         ticker = (request.query_params.get("ticker") or values.get("ticker") or "").strip().upper()
         info = None
         if ticker:
-            info = {"ticker": ticker, "price": app.state.price_fn(ticker),
+            currency, rate = None, None
+            with contextlib.suppress(Exception):    # a convenience: the form still works with a typed rate
+                currency, rate = market_data.quote_fx(ticker)
+            if currency in (None, "USD"):
+                currency, rate = None, None
+            info = {"ticker": ticker, "price": app.state.price_fn(ticker), "currency": currency, "fx": rate,
                     "result": reviewmod.latest_result(paths, ticker), "position": pf.position(ticker)}
         return render(request, "trade.html", status=status, error=error, pf=pf, info=info,
                       values=values, posted=posted)
@@ -163,11 +170,12 @@ def create_app(paths: Paths, *, config_path: Path = CONFIG_PATH, price_fn=market
                 price = parse_number(values.get("price", ""), "Price")
                 fees = parse_number(values.get("fees") or "0", "Fees")
                 note = values.get("note", "")
+                fx = parse_number(values["fx"], "Rate") if values.get("fx", "").strip() else None
                 if kind == "buy":
-                    held, pf = ops.record_buy(paths, ticker, shares, price, fees, on=on, note=note)
+                    held, pf = ops.record_buy(paths, ticker, shares, price, fees, on=on, note=note, fx=fx)
                     msg = f"Recorded: bought {shares:g} {ticker} @ {price:,.2f}. Now {held.shares:g} sh; cash {pf.cash:,.2f}"
                 else:
-                    gain, pf = ops.record_sell(paths, ticker, shares, price, fees, on=on, note=note)
+                    gain, pf = ops.record_sell(paths, ticker, shares, price, fees, on=on, note=note, fx=fx)
                     msg = f"Recorded: sold {shares:g} {ticker} @ {price:,.2f} (realised {gain:+,.2f}); cash {pf.cash:,.2f}"
             elif kind == "deposit":
                 pf = ops.record_deposit(paths, parse_number(values.get("amount", ""), "Amount"), on=on)

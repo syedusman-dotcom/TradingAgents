@@ -46,8 +46,8 @@ uv run python -m value_pipeline status
 |---|---|
 | `init --cash 1000 [--currency USD] [--date D]` | Start a portfolio with cash. |
 | `deposit AMOUNT [--date D]` | Add cash (negative withdraws). Counted in the SPY comparison. |
-| `buy TICKER SHARES PRICE [--fees X] [--date D] [--note T]` | Record a buy: updates shares, average price (fees included) and cash; appends to `trades.csv`. Fractional shares work. A new position takes its thesis and intrinsic value from the latest review of that ticker. |
-| `sell TICKER SHARES PRICE [--fees X] [--date D] [--note T]` | Record a sale and print the realised gain. Selling everything closes the position. |
+| `buy TICKER SHARES PRICE [--fx R] [--fees X] [--date D] [--note T]` | Record a buy: updates shares, average price (fees included) and cash; appends to `trades.csv`. Fractional shares work. A new position takes its thesis and intrinsic value from the latest review of that ticker. |
+| `sell TICKER SHARES PRICE [--fx R] [--fees X] [--date D] [--note T]` | Record a sale and print the realised gain. Selling everything closes the position. |
 | `status` | Each holding's price, value, gain, weight, last rating and days held; total value and return vs SPY. |
 | `superinvestors [--force]` | Refresh which tracked value investors (Buffett, Klarman, Li Lu, Pabrai, Russo, Akre; editable in `config.yaml`) hold what, from their latest 13F filings. Shown in the screen's Superinvestors column and on stock pages. A second opinion only: 13Fs are up to ~4.5 months old by the time you read them, and they never feed the agents or the action rules. The monthly screen refreshes it weekly at most. |
 | `web [--port 8765] [--no-browser]` | Open the local website (this Mac only): dashboard, trades, history with undo, reviews and reports, stock pages, the screen, running jobs and settings. Stop with Ctrl+C. |
@@ -58,6 +58,8 @@ uv run python -m value_pipeline status
 | `run-all [--yes] [--dry-run]` | `screen`, then the theme scan (when `lanes.themes` names any), then `review` with the scan's inflection candidates. |
 | `themes` | The theme scan alone (see Themes below): one quick model call per theme in `lanes.themes`, the named tickers fetched and checked, `reports/themes_<date>.md` written and printed. No review. |
 | `watch [--no-notify]` | The free weekly check (prices only, no agents): a holding above its intrinsic value or in FREEFALL, a stock last rated Buy/Overweight now at least 30% below its value, or a stock now at or below the entry price its last review gave (ENTRY PRICE). Lists each holding's kill criteria for you to check against the news. A `New ideas` section lists names you don't own that newly carry a compounder, inflection or dislocation hint in the latest screen since the previous watch (the first watch lists them all), so a scare that starts mid-month is seen that Saturday. Writes `reports/watch_<date>.md` (and `watch_<date>.json`, the hinted list the next watch compares against) and shows a macOS notification when something needs a look. |
+
+**Buying outside dollars.** Enter the price in the stock's quote unit (pence for London, euro for Paris) and the tool converts at today's market rate: `buy DNLM.L 84 900`. Pass `--fx` with the dollars per quoted unit you actually got (`--fx 0.0135`) to record your broker's rate instead; `sell` takes it too. Fees are always in dollars. Cash, value and gain stay in dollars, while Avg and Price in `status` and on the website stay in the quote unit. If no rate is known the command stops and asks for `--fx`.
 
 Use `--data-dir PATH` before the command (or `VALUE_PIPELINE_DATA`) to keep data somewhere else, and `-v` to log every skipped ticker.
 

@@ -1,10 +1,19 @@
 """Positions and trades in the quote currency (pence, euro, ...) with dollars as the base."""
 
 import csv
+from io import StringIO
 
 import pytest
+from rich.console import Console
 
-from value_pipeline import benchmark, market_data, operations as ops, portfolio as pfmod, review
+from value_pipeline import (
+    benchmark,
+    cli,
+    market_data,
+    operations as ops,
+    portfolio as pfmod,
+    review,
+)
 from value_pipeline.config import Paths
 from value_pipeline.operations import portfolio_view, realised_gains, trade_fx
 from value_pipeline.portfolio import (
@@ -148,3 +157,60 @@ def test_benchmark_and_realised_gains_use_the_trade_rate():
     assert events[0] == ("2026-11-05", "buy", pytest.approx(1_217.0))
     assert events[1] == ("2026-11-20", "sell", pytest.approx(1_400.0))
     assert realised_gains(trades) == [None, pytest.approx(183.0)]
+
+
+@pytest.mark.unit
+def test_trade_line_states_both_units():
+    assert cli.trade_line("BUY", 84, "DNLM.L", 900.0, "GBp", 0.01348) \
+        == "BUY 84 DNLM.L @ 900.00 GBp (fx 0.01348) = $1,019.09"
+    assert cli.trade_line("SELL", 10, "HRB", 50.0, None, 1.0) == "SELL 10 HRB @ $50.00 = $500.00"
+
+
+def _gbp_portfolio(tmp_path, monkeypatch):
+    monkeypatch.setattr(market_data, "quote_fx", lambda t: ("GBp", 0.013))
+    monkeypatch.setattr(review, "latest_result", lambda *a, **k: None)
+    paths = Paths(tmp_path)
+    ops.init_portfolio(paths, 10_000.0, on="2026-10-01")
+    return paths
+
+
+@pytest.mark.unit
+def test_cli_buy_passes_fx(monkeypatch, tmp_path, capsys):
+    paths = _gbp_portfolio(tmp_path, monkeypatch)
+    cli.main(["--data-dir", str(tmp_path), "buy", "DNLM.L", "84", "900", "--fx", "0.0135"])
+    held = pfmod.load(paths).position("DNLM.L")
+    assert held.currency == "GBp" and held.avg_fx == pytest.approx(0.0135)
+    assert "BUY 84 DNLM.L @ 900.00 GBp (fx 0.0135) = $1,020.60" in capsys.readouterr().out
+
+
+@pytest.mark.unit
+def test_cli_buy_without_fx_uses_the_market_rate_and_sell_prints_the_line(monkeypatch, tmp_path, capsys):
+    paths = _gbp_portfolio(tmp_path, monkeypatch)
+    cli.main(["--data-dir", str(tmp_path), "buy", "DNLM.L", "84", "900"])
+    assert pfmod.load(paths).position("DNLM.L").avg_fx == pytest.approx(0.013)
+    cli.main(["--data-dir", str(tmp_path), "sell", "DNLM.L", "84", "1000", "--fx", "0.014"])
+    assert "SELL 84 DNLM.L @ 1,000.00 GBp (fx 0.014) = $1,176.00" in capsys.readouterr().out
+    assert pfmod.load(paths).position("DNLM.L") is None
+
+
+@pytest.mark.unit
+def test_cli_buy_without_a_known_rate_stops_naming_fx(monkeypatch, tmp_path):
+    paths = _gbp_portfolio(tmp_path, monkeypatch)
+    monkeypatch.setattr(market_data, "quote_fx", lambda t: ("PLN", None))
+    with pytest.raises(SystemExit, match="--fx"):
+        cli.main(["--data-dir", str(tmp_path), "buy", "XYZ.WA", "1", "10"])
+    assert pfmod.load(paths).position("XYZ.WA") is None
+
+
+@pytest.mark.unit
+def test_status_shows_the_quote_unit(monkeypatch, tmp_path):
+    paths = _gbp_portfolio(tmp_path, monkeypatch)
+    ops.record_buy(paths, "DNLM.L", 84, 900.0, fx=0.0135)
+    monkeypatch.setattr(market_data, "latest_price", lambda t: 900.0)
+    monkeypatch.setattr(benchmark, "compare", lambda *a, **k: None)
+    monkeypatch.setattr(ops, "portfolio_view", lambda paths: portfolio_view(
+        paths, price_fn=lambda t: 900.0, benchmark_fn=lambda *a: None, fx_fn=lambda t: ("GBp", 0.013)))
+    out = StringIO()
+    monkeypatch.setattr(cli, "console", Console(file=out, width=200))
+    cli.main(["--data-dir", str(tmp_path), "status"])
+    assert "900.00 GBp" in out.getvalue()

@@ -8,9 +8,14 @@ from datetime import date
 import pytest
 from fastapi.testclient import TestClient
 
-from value_pipeline import operations as ops, portfolio as pfmod
+from value_pipeline import market_data, operations as ops, portfolio as pfmod
 from value_pipeline.config import Paths
 from value_pipeline.web import create_app, views
+
+
+@pytest.fixture(autouse=True)
+def _dollar_market(monkeypatch):
+    monkeypatch.setattr(market_data, "quote_fx", lambda t: (None, 1.0))     # no network for rates
 
 
 def _client(tmp_path, **kw):
@@ -609,3 +614,47 @@ def test_stock_page_shows_the_quote_currency(tmp_path):
     client2, app2, paths2 = _client(tmp_path / "b", price_fn={"HRB": 800.0}.get)
     _review(paths2, "2026-11-07", [ROW])
     assert "Price 800.00 ·" in client2.get("/stock/HRB").text
+
+
+@pytest.mark.unit
+def test_trade_form_prefills_the_rate_and_shows_dollars(tmp_path, monkeypatch):
+    client, app, paths = _client(tmp_path, price_fn={"DNLM.L": 900.0}.get)
+    ops.init_portfolio(paths, 1000.0)
+    monkeypatch.setattr(market_data, "quote_fx", lambda t: ("GBp", 0.0135))
+    r = client.get("/trade?ticker=DNLM.L")
+    assert 'name="fx"' in r.text and 'value="0.0135"' in r.text and "900.00 GBp" in r.text
+    monkeypatch.setattr(market_data, "quote_fx", lambda t: (None, 1.0))
+    dollars = client.get("/trade?ticker=HRB").text
+    assert 'name="fx"' in dollars and 'value="0.0135"' not in dollars
+
+
+@pytest.mark.unit
+def test_trade_post_records_the_rate(tmp_path, monkeypatch):
+    client, app, paths = _client(tmp_path)
+    ops.init_portfolio(paths, 10_000.0)
+    monkeypatch.setattr(market_data, "quote_fx", lambda t: ("GBp", 0.013))
+    body = {"ticker": "DNLM.L", "shares": "10", "price": "900", "token": app.state.token}
+    assert client.post("/trade/buy", data={**body, "fx": "0.014"}, follow_redirects=False).status_code == 303
+    assert pfmod.load(paths).position("DNLM.L").avg_fx == pytest.approx(0.014)
+    body["ticker"] = "SHEL.L"
+    assert client.post("/trade/buy", data={**body, "fx": ""}, follow_redirects=False).status_code == 303
+    assert pfmod.load(paths).position("SHEL.L").avg_fx == pytest.approx(0.013)
+
+
+@pytest.mark.unit
+def test_trade_post_shows_a_missing_rate_on_the_form(tmp_path, monkeypatch):
+    client, app, paths = _client(tmp_path)
+    ops.init_portfolio(paths, 10_000.0)
+    monkeypatch.setattr(market_data, "quote_fx", lambda t: ("PLN", None))
+    r = client.post("/trade/buy", data={"ticker": "XYZ.WA", "shares": "1", "price": "10",
+                                        "token": app.state.token})
+    assert r.status_code == 400 and "--fx" in r.text and pfmod.load(paths).position("XYZ.WA") is None
+
+
+@pytest.mark.unit
+def test_dashboard_shows_the_unit_next_to_a_foreign_price(tmp_path, monkeypatch):
+    client, app, paths = _client(tmp_path, price_fn={"DNLM.L": 900.0}.get)
+    ops.init_portfolio(paths, 10_000.0)
+    monkeypatch.setattr(market_data, "quote_fx", lambda t: ("GBp", 0.0135))
+    ops.record_buy(paths, "DNLM.L", 10, 900.0)
+    assert "900.00 GBp" in client.get("/").text
