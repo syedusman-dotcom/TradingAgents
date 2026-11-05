@@ -42,6 +42,7 @@ DEFAULTS: dict = {
         "committee": True,
         "candidate_cooldown_days": 0,
         "min_run_rate": 0.8,
+        "candidate_countries": [],
     },
     "watch": {"buy_margin_of_safety": 0.30, "max_rating_age_days": 120},
     "daily": {"enabled": True, "scope": "holdings", "max_reviews": 3, "cooldown_days": 5, "big_move": 0.15,
@@ -127,6 +128,9 @@ def validate_config(cfg: dict) -> None:
                 if key in _POSITIVE and value <= 0:
                     raise ValueError(f"{section}.{key} must be more than zero, not {value!r}")
     _validate_cohort_days(cfg["backtest"]["cohort_days"])
+    for country in cfg["review"]["candidate_countries"]:
+        if not isinstance(country, str) or not country.strip():
+            raise ValueError(f"review.candidate_countries entries must be country names, not {country!r}")
     share = cfg["parking"]["share"]
     if not 0 <= share <= 1:
         raise ValueError(f"parking.share must be between 0 and 1 (a share of the idle money), not {share!r}")

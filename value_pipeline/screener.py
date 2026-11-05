@@ -214,7 +214,8 @@ def latest_screen(paths: Paths) -> Path | None:
 
 
 def top_candidates(paths: Paths, owned: set[str], n: int, compounders: int = 0,
-                   dislocations: int = 0, inflections: int = 0, min_run_rate: float = 0.0) -> list[dict]:
+                   dislocations: int = 0, inflections: int = 0, min_run_rate: float = 0.0,
+                   countries: list[str] | None = None) -> list[dict]:
     """The best-ranked, not-owned, not-FREEFALL tickers from the latest screen, then up to
     ``compounders`` compounder-hinted ones (best compounder return first: yield + earned growth +
     reversion at most 0), then up to ``dislocations`` dislocation-hinted ones (best expected
@@ -223,16 +224,21 @@ def top_candidates(paths: Paths, owned: set[str], n: int, compounders: int = 0,
     expected return first). A screen from before the compounder return ranks
     compounders by expected return. A Magic Formula pick whose TTM EBIT is below ``min_run_rate``
     times its five-year average gives its place to the next name (a missing ratio passes; the
-    hinted lanes ignore the filter; 0 turns it off)."""
+    hinted lanes ignore the filter; 0 turns it off). With ``countries`` the Magic Formula and
+    dislocation picks come only from those countries (the screen's ``country`` column, matched
+    without regard to case; rank order is kept); the compounder and inflection picks ignore it."""
     df = _eligible(paths, owned)
     if df is None:
         return []
-    picks = _ranked(df, min_run_rate).head(n)
+    in_list = _in_countries(df, countries)
+    picks = _ranked(df[in_list], min_run_rate).head(n)
     for hint, count in (("compounder", compounders), ("dislocation", dislocations),
                         ("inflection", inflections)):
         if count <= 0 or "lane_hint" not in df:
             continue
         has = _hint_series(df).map(lambda h, hint=hint: hint in h.split(";"))
+        if hint == "dislocation":
+            has = has & in_list
         hinted = df[has & ~df["ticker"].isin(picks["ticker"])]
         key = "compounder_return" if hint == "compounder" and "compounder_return" in df else "expected_return"
         hinted = hinted.sort_values(key, ascending=False, na_position="last")
@@ -257,12 +263,39 @@ def _ranked(df: pd.DataFrame, min_run_rate: float) -> pd.DataFrame:
     return ranked
 
 
-def run_rate_skips(paths: Paths, owned: set[str], n: int, min_run_rate: float) -> list[dict]:
+def _names(countries: list[str] | None) -> set[str]:
+    return {c.strip().casefold() for c in countries or [] if isinstance(c, str) and c.strip()}
+
+
+def _in_countries(df: pd.DataFrame, countries: list[str] | None) -> pd.Series:
+    """True for the rows in ``countries`` (all rows without a list or without a ``country`` column)."""
+    names = _names(countries)
+    if not names or "country" not in df:
+        return pd.Series(True, index=df.index)
+    return df["country"].map(lambda c: isinstance(c, str) and c.strip().casefold() in names)
+
+
+def missing_countries(paths: Paths, countries: list[str] | None) -> list[str]:
+    """The listed countries with no row in the latest screen, in the list's order (``[]`` without
+    a screen, without a ``country`` column or for an empty list)."""
+    path = latest_screen(paths)
+    if path is None or not _names(countries):
+        return []
+    df = pd.read_csv(path)
+    if "country" not in df:
+        return []
+    present = {c.strip().casefold() for c in df["country"].dropna().astype(str)}
+    return [c for c in countries if c.strip() and c.strip().casefold() not in present]
+
+
+def run_rate_skips(paths: Paths, owned: set[str], n: int, min_run_rate: float,
+                   countries: list[str] | None = None) -> list[dict]:
     """The Magic Formula names ``top_candidates`` left out for a low run rate, in rank order:
     ``ticker`` and ``ttm_vs_5y_ebit``, only those ranked above the last pick."""
     df = _eligible(paths, owned)
     if df is None or min_run_rate <= 0 or "ttm_vs_5y_ebit" not in df:
         return []
+    df = df[_in_countries(df, countries)]
     picks = _ranked(df, min_run_rate).head(n)
     if picks.empty:
         return []

@@ -53,6 +53,11 @@ review:
   candidates: 5            # top screen candidates (not held) to analyse each review
   candidate_cooldown_days: 5  # a candidate reviewed this recently gives its place to the next one down the screen (daily reviews since 2026-11-05)
   min_run_rate: 0.8        # Magic Formula candidates need TTM EBIT at least this multiple of the 5-year average; 0 turns it off
+  # Countries the Magic Formula and dislocation candidates may come from (the screen's country
+  # column). Since 2026-11-05: Europe only. The buy-bar backtest found no US value rule that
+  # beats the index, and value has paid in Europe since 2021. Compounder candidates, holdings,
+  # lanes.tickers and --tickers ignore this list. [] means every country.
+  candidate_countries: [Sweden, Norway, Denmark, Finland, Germany, France, Netherlands, Switzerland, Italy, Spain, Ireland, Portugal, Austria, Belgium, UK]
   analysts: [market, news, fundamentals]
   # Financial statements for the agents. yfinance: ~5 years with every line (debt,
   # interest, PP&E, buybacks, dividends). sec_edgar: ~20 years of top-line rows only.
