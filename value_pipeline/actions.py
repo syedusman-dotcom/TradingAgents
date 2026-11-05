@@ -74,19 +74,6 @@ class Action:
     lane: str = "value"
 
 
-def action_rows(actions: list[Action], names: dict[str, str] | None = None) -> list[dict]:
-    """The plan as plain dicts, written next to ACTIONS.md for other tools (the status publisher)."""
-    rows = []
-    for a in actions:
-        d = a.decision
-        rows.append({"ticker": a.ticker, "name": (names or {}).get(a.ticker), "held": a.held, "rating": a.rating,
-                     "action": a.action, "reason": a.reason, "amount": a.amount, "shares": a.shares,
-                     "lane": a.lane, "flags": list(a.flags),
-                     "price": d.price if d else None, "currency": d.currency if d else None,
-                     "entry_price": d.entry_price if d else None})
-    return rows
-
-
 # The agents' value may differ from the formula's for stated reasons; past this
 # gap, check their reasons before acting on it.
 VALUE_GAP = 0.30

@@ -30,7 +30,5 @@ case "$mode" in
     if ! uv run python -m value_pipeline daily >> "$log" 2>&1; then
       notify "Value daily check failed" "See $log"
       exit 1
-    fi
-    # The day's buys, sells and trims for the Claude routine that messages the user.
-    uv run python -m value_pipeline publish --push >> "$log" 2>&1 || true ;;
+    fi ;;
 esac

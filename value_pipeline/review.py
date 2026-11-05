@@ -25,7 +25,7 @@ from value_pipeline import (
     screener,
     themes as themes_mod,
 )
-from value_pipeline.actions import Decision, action_rows, plan
+from value_pipeline.actions import Decision, plan
 from value_pipeline.config import Paths
 
 log = logging.getLogger(__name__)
@@ -620,7 +620,6 @@ def _run(paths: Paths, cfg: dict, *, yes: bool, dry_run: bool, today: str | None
     (out_dir / "ACTIONS.html").write_text(render.actions_html(md, f"Value review {today}"), encoding="utf-8")
     # Written whole: the website reads these files while a review may be finishing.
     _write_whole(out_dir / "results.json", rows)
-    _write_whole(out_dir / "actions.json", action_rows(actions, {r.ticker: r.name for r in results if r.name}))
     if committee:
         _write_whole(out_dir / "committee.json", {**committee[0].model_dump(), "notes": committee[1]})
 

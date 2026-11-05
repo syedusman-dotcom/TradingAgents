@@ -18,7 +18,6 @@ from value_pipeline import (
     daily,
     operations as ops,
     portfolio as pfmod,
-    publish as publish_mod,
     review,
     screener,
     superinvestors,
@@ -130,16 +129,6 @@ def cmd_watch(args, paths: Paths, cfg) -> None:
     found, out = watch.run(paths, cfg, notify=not args.no_notify)
     console.print(Markdown(out.read_text(encoding="utf-8")))
     console.print(f"\nSaved {out}")
-
-
-def cmd_publish(args, paths: Paths, cfg) -> None:
-    today = date.today().isoformat()
-    if args.push:
-        out = publish_mod.publish(paths, today)
-        console.print(out.read_text(encoding="utf-8"))
-        console.print(f"\nSaved {out}")
-    else:
-        console.print(publish_mod.summary(paths, today))
 
 
 def cmd_daily(args, paths: Paths, cfg) -> int:
@@ -262,10 +251,6 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("watch", help="free weekly check: prices vs values, FREEFALL, buy range (no agents)")
     s.add_argument("--no-notify", action="store_true", help="don't show a macOS notification")
     s.set_defaults(func=cmd_watch)
-
-    s = sub.add_parser("publish", help="the day's buys, sells and trims in one short file for the Claude routine")
-    s.add_argument("--push", action="store_true", help="write data/status/latest.md and push it to the private status repo")
-    s.set_defaults(func=cmd_publish)
 
     s = sub.add_parser("daily", help="weekday check: re-run the agents on names whose triggers fired")
     s.add_argument("--dry-run", action="store_true", help="list the triggers, re-run nothing")
