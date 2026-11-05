@@ -2,6 +2,7 @@
 
 import json
 from datetime import date
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -464,7 +465,7 @@ def test_markdown_paper_section_sits_between_scores_and_verdicts():
     assert "| 2026-01-05 | AAA | fair_price, discount_15 | 96.20 | 180 days | +12.0% | +10.0% |" \
         in section
     assert "| 2026-03-05 | CCC | fair_price | 96.20 | 180 days | – | – |" in section
-    assert ("1 counted results have no dollar return (a currency rate or SPY close is "
+    assert ("1 counted result has no dollar return (a currency rate or SPY close is "
             "missing); run `calibration` to fetch them.") in section
     assert "No paper Buys yet." not in section
 
@@ -480,7 +481,8 @@ def test_markdown_paper_section_without_a_flagged_row_and_decisions_unchanged():
     assert "no dollar return" not in section
     assert md.split("## Scores")[0] == calibration.markdown(
         rs, calibration.score(rs)).split("## Scores")[0]
-    assert "Paper" not in md.split("## Scores")[0]
+    head = md.split("## Scores")[0]
+    assert "| Reached value | Below bear | Paper |" in head and "| – |" in head
 
 
 @pytest.mark.unit
@@ -502,3 +504,69 @@ def test_calibration_page_shows_paper_buys_and_a_paper_column(tmp_path):
 
     r = _web(tmp_path, Paths(tmp_path / "other")).get("/calibration")
     assert r.status_code == 200 and "No paper Buys yet." in r.text
+
+
+def test_markdown_decisions_table_has_a_paper_column():
+    rs = _flagged()
+    head = calibration.markdown(rs, calibration.score(rs)).split("## Scores")[0]
+    assert "| Reached value | Below bear | Paper |" in head
+    assert "|---|---|---|---|--:|--:|--:|---|---|---|" in head
+    assert "| fair_price, discount_15 |" in head and "| fair_price |" in head
+
+
+def test_a_listed_row_shows_only_the_rules_it_is_counted_for():
+    rs = [_shown("2026-01-05", "AAA", ("fair_price",), 0.1),
+          _shown("2026-02-05", "AAA", ("fair_price", "fair_price_investing"), 0.1)]
+    view = calibration.paper_view(calibration.paper_scores(rs))
+    assert [(x["date"], x["rules"]) for x in view["listed"]] == [
+        ("2026-01-05", "fair_price"), ("2026-02-05", "fair_price_investing")]
+
+
+def test_the_no_dollar_return_sentence_is_singular_or_plural():
+    one = calibration.markdown(*(lambda rs: (rs, calibration.score(rs)))(_flagged()))
+    assert "1 counted result has no dollar return" in one
+    rs = [_shown("2026-01-05", "AAA", ("fair_price",), None, ret_usd=None),
+          _shown("2026-01-05", "BBB", ("fair_price",), None, ret_usd=None)]
+    two = calibration.markdown(rs, calibration.score(rs))
+    assert "2 counted results have no dollar return" in two
+
+
+def test_the_paper_text_says_returns_leave_out_dividends():
+    sentence = ("Returns are price changes without dividends, for the stock and for SPY alike, "
+                "which understates high-yield names a little.")
+    rs = _flagged()
+    assert sentence in calibration.markdown(rs, calibration.score(rs))
+    assert sentence in calibration.paper_view(calibration.score(rs)["paper"])["note"]
+    assert sentence in " ".join(Path("value_pipeline/README.md").read_text(encoding="utf-8").split())
+
+
+def _past(day, ticker, **kw):
+    r = _p(day, ticker=ticker, **kw)
+    r["reached"] = [30, 90, 180, 365]
+    return r
+
+
+def test_a_counted_row_with_no_later_close_counts_as_no_dollar_result():
+    rs = [_past("2025-01-02", "GONE", h=0), _past("2025-01-02", "OK", excess=0.1)]
+    rs[0]["reached"] = [30, 90, 180]
+    h = calibration.paper_scores(rs)["rules"]["fair_price"]["horizons"][180]
+    assert h["n"] == 1 and h["no_dollar_result"] == 1
+    h365 = calibration.paper_scores(rs)["rules"]["fair_price"]["horizons"][365]
+    assert h365["n"] == 0 and h365["no_dollar_result"] == 1   # only OK reached 365 and has no close
+    view = calibration.paper_view(calibration.paper_scores(rs))
+    assert view["missing"] >= 1
+
+
+def test_a_horizon_still_in_the_future_counts_in_neither(tmp_path):
+    rs = [_p("2026-01-02", ticker="NEW", h=0)]
+    rs[0]["reached"] = [30]
+    for n in calibration.HORIZONS:
+        h = calibration.paper_scores(rs)["rules"]["fair_price"]["horizons"][n]
+        assert h["n"] == 0 and h["no_dollar_result"] == (1 if n == 30 else 0)
+
+
+def test_rows_carry_the_horizons_whose_day_has_passed(tmp_path):
+    paths = Paths(tmp_path)
+    _paper_review(paths, "2026-01-05", "USD")
+    row = calibration.rows(paths, today=date(2026, 4, 20), price_fn=lambda t, d: 10.0)[0]
+    assert row["reached"] == [30, 90]

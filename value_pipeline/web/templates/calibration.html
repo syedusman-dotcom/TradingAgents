@@ -43,7 +43,8 @@
 <div class="table"><table>
 <thead><tr><th>Date</th><th>Ticker</th><th>Rules</th><th class="num">Price then</th><th>Latest horizon</th><th class="num">Return in dollars</th><th class="num">Against SPY</th></tr></thead>
 <tbody>{% for x in paper_view.listed %}<tr><td>{{ x.date }}</td><td><a href="/stock/{{ x.ticker }}">{{ x.ticker }}</a></td><td>{{ x.rules }}</td><td class="num">{{ x.price }}</td><td>{{ x.horizon }}</td><td class="num">{{ x.ret_usd }}</td><td class="num">{{ x.excess }}</td></tr>{% endfor %}</tbody></table></div>
-{% if paper_view.missing %}<p class="muted">{{ paper_view.missing }} counted results have no dollar return (a currency rate or SPY close is missing); run <code>calibration</code> to fetch them.</p>{% endif %}
+{% if paper_view.missing %}<p class="muted">{{ paper_view.missing_text }}</p>{% endif %}
+<p class="muted">{{ paper_view.note }}</p>
 {% endif %}
 {% if rows %}
 <h2>Decisions</h2>

@@ -327,8 +327,9 @@ days; a ticker counts again only 90 days after it last counted. The verdict is o
 at 180 days: it supports a live test only with at least 20 paper Buys past 180 days from at
 least 3 months, an average of at least 3% over SPY, at least 55% of them ahead of SPY, and an
 average at least 2 points above every reviewed stock. Paper Buys are tracked only. Nothing
-trades on them, they are not a suggestion to buy, and no sizing or agent reads them. A dry
-run lists none.
+trades on them, they are not a suggestion to buy, and no sizing or agent reads them. Returns
+are price changes without dividends, for the stock and for SPY alike, which understates
+high-yield names a little. A dry run lists none.
 
 ## Backtest
 

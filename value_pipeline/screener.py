@@ -263,8 +263,16 @@ def _ranked(df: pd.DataFrame, min_run_rate: float) -> pd.DataFrame:
     return ranked
 
 
-def _names(countries: list[str] | None) -> set[str]:
-    return {c.strip().casefold() for c in countries or [] if isinstance(c, str) and c.strip()}
+def normalise_countries(countries) -> list[str]:
+    """The country names to filter by: a bare string is one name; entries that are not strings or
+    are blank are dropped; names are stripped. (The command line does not run ``validate_config``.)"""
+    if isinstance(countries, str):
+        countries = [countries]
+    return [c.strip() for c in countries or [] if isinstance(c, str) and c.strip()]
+
+
+def _names(countries) -> set[str]:
+    return {c.casefold() for c in normalise_countries(countries)}
 
 
 def _in_countries(df: pd.DataFrame, countries: list[str] | None) -> pd.Series:
@@ -272,7 +280,7 @@ def _in_countries(df: pd.DataFrame, countries: list[str] | None) -> pd.Series:
     names = _names(countries)
     if not names or "country" not in df:
         return pd.Series(True, index=df.index)
-    return df["country"].map(lambda c: isinstance(c, str) and c.strip().casefold() in names)
+    return df["country"].map(lambda c: isinstance(c, str) and c.strip().casefold() in names).astype(bool)
 
 
 def missing_countries(paths: Paths, countries: list[str] | None) -> list[str]:
@@ -285,7 +293,7 @@ def missing_countries(paths: Paths, countries: list[str] | None) -> list[str]:
     if "country" not in df:
         return []
     present = {c.strip().casefold() for c in df["country"].dropna().astype(str)}
-    return [c for c in countries if c.strip() and c.strip().casefold() not in present]
+    return [c for c in normalise_countries(countries) if c.casefold() not in present]
 
 
 def run_rate_skips(paths: Paths, owned: set[str], n: int, min_run_rate: float,

@@ -27,6 +27,10 @@ YEARS_AHEAD = 0.55       # (5) share of calendar years ahead of SPY, both period
 CHECK_BEAT_SPY = 0.01    # (6) top 20, recent: above SPY by this much (hold-out: not below)
 EPS = 1e-9               # every bound is inclusive to this tolerance
 
+# The settings the pass rule was fixed for; a run with any other is shown but does not count.
+FIXED = {"recent_start": "2015-07-01", "holdout_start": "2005-01-03", "holdout_end": "2015-06-30",
+         "positions": 10, "check_positions": 20, "cost_per_side": 0.005, "market_filter": True}
+
 SENSITIVITY = [("positions", [10, 20, 30]), ("cost_per_side", [0.0, 0.0035, 0.005, 0.0075]),
                ("market_filter", [False])]
 
@@ -90,8 +94,13 @@ def sleeve(closes: pd.DataFrame, spy: pd.Series, added: dict[str, str], m: dict,
     return {"metrics": result, "trades": out["trades"]}
 
 
-def _pct(x: float) -> str:
-    return f"{x * 100:.1f}%"
+def _pct(x: float | None) -> str:
+    return "–" if x is None else f"{x * 100:.1f}%"
+
+
+def differing(settings: dict) -> dict:
+    """The ``FIXED`` keys whose value in ``settings`` is different, with the value used."""
+    return {k: settings.get(k) for k, v in FIXED.items() if settings.get(k) != v}
 
 
 def verdict(recent: dict, holdout: dict, recent_check: dict, holdout_check: dict) -> dict:
@@ -180,6 +189,10 @@ def run(paths: Paths, cfg: dict, today: date | None = None, fetch: bool = True,
     the fund record. ``fetch=False`` reads the caches only. Nothing trades."""
     today = today or date.today()
     m = {**DEFAULTS["momentum"], **(cfg.get("momentum") or {})}
+    if fetch:
+        # trend.load_closes fetches SPY with no date; without this a cached SPY can end weeks back.
+        backtest.price_history(trend.BENCHMARK, paths, fetch=True, stale_before=(
+            today - timedelta(days=backtest.PRICE_SLACK_DAYS)).isoformat())
     added = backtest._join_dates(paths, fetch, None)
     if not added:
         raise ValueError("no S&P 500 join dates in the cache; run without --no-fetch")
@@ -209,7 +222,7 @@ def run(paths: Paths, cfg: dict, today: date | None = None, fetch: bool = True,
                    for period in periods for name, values in SENSITIVITY for value in values]
     filled = closes.attrs.get("filled", {})
     return {
-        "generated": today.isoformat(), "settings": m, "members": len(tickers),
+        "generated": today.isoformat(), "settings": m, "as_fixed": not differing(m), "members": len(tickers),
         "used": len(closes.columns), "periods": info, "results": results, "trades": trades,
         "sensitivity": sensitivity,
         "verdict": verdict(results[("recent", primary)], results[("holdout", primary)],
@@ -243,6 +256,14 @@ def _rule_lines(positions: int, check: int, cost: float) -> list[str]:
         "A pass turns nothing on. It would only justify designing a small live sleeve.", ""]
 
 
+def _unfixed_lines(settings: dict, as_fixed: bool) -> list[str]:
+    if as_fixed:
+        return []
+    diff = ", ".join(f"{k} {v}" for k, v in differing(settings).items())
+    return [f"These settings differ from the ones the rule was fixed for ({diff}), so this "
+            "verdict does not count.", ""]
+
+
 def _count(items: list, noun: str) -> str:
     return f"{len(items)} {noun}{'' if len(items) == 1 else 's'}"
 
@@ -266,6 +287,7 @@ def render_report(result: dict) -> str:
         "have done.", "",
         "## Verdict", "", *_rule_lines(primary, check, s["cost_per_side"]),
         result["verdict"]["sentence"], "",
+        *_unfixed_lines(s, result.get("as_fixed", True)),
         "## Results", "",
         "| Period | Positions | CAGR | SPY | Equal-weight universe | Max drawdown | SPY drawdown "
         "| Years ahead of SPY | Trades a year | Costs a year |",
@@ -305,7 +327,9 @@ def render_report(result: dict) -> str:
               "- Fills are at the next close after the signal.",
               "- Cash earns nothing.",
               "- A Swedish investor's currency moves are not modelled.",
-              "- Ten positions is a concentrated book."]
+              "- The last day's close can come from an unfinished session if the prices were "
+              "cached during US trading hours.",
+              f"- {primary} positions is a concentrated book."]
     if result["missing"]:
         lines.append(f"- No price history for {_count(result['missing'], 'ticker')}: "
                      f"{', '.join(result['missing'])}.")

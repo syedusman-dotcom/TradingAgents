@@ -141,7 +141,8 @@ def rows(paths: Paths, today: date | None = None, price_fn=None) -> list[dict]:
                "bear_probability": _leg(sc, "bear", "probability"),
                "bull_probability": _leg(sc, "bull", "probability"),
                "entry_price": entry, "expected_return": _num(r.get("expected_return")),
-               "paper": paper.flags(r), "currency": r.get("currency")}
+               "paper": paper.flags(r), "currency": r.get("currency"),
+               "reached": [n for n in HORIZONS if reviewed + timedelta(days=n) <= today]}
         for n in HORIZONS:
             at = reviewed + timedelta(days=n)
             later = price_fn(ticker, at.isoformat()) if at <= today else None
@@ -279,11 +280,22 @@ def counted(rs: list[dict], rule: str | None = None, gap_days: int = PAPER_GAP_D
     return out
 
 
+def _scored(h: dict | None) -> bool:
+    return bool(h) and h.get("excess") is not None
+
+
+def _reached(r: dict) -> list[int]:
+    """The horizons whose day has come for a row (a hand-made row without ``reached`` gives the
+    horizons it has a close for)."""
+    got = r.get("reached")
+    return got if got is not None else [n for n in HORIZONS if r.get(f"h{n}")]
+
+
 def _paper_horizon(rows_: list[dict], n: int) -> dict:
-    reached = [r[f"h{n}"] for r in rows_ if r.get(f"h{n}")]
-    hs = [h for h in reached if h.get("excess") is not None]
+    hs = [r[f"h{n}"] for r in rows_ if r.get(f"h{n}") and r[f"h{n}"].get("excess") is not None]
     excess = [h["excess"] for h in hs]
-    return {"n": len(hs), "no_dollar_result": len(reached) - len(hs),
+    unscored = sum(n in _reached(r) and not _scored(r.get(f"h{n}")) for r in rows_)
+    return {"n": len(hs), "no_dollar_result": unscored,
             "mean_ret_usd": statistics.fmean(h["ret_usd"] for h in hs) if hs else None,
             "mean_excess": statistics.fmean(excess) if hs else None,
             "median_excess": _median(excess),
@@ -356,6 +368,19 @@ def _paper_cell(h: dict) -> str:
     return f"{_points(h['mean_excess'])} over SPY ({h['ahead']['k']}/{h['ahead']['n']} ahead, n={h['n']})"
 
 
+DIVIDEND_NOTE = ("Returns are price changes without dividends, for the stock and for SPY alike, "
+                 "which understates high-yield names a little.")
+
+
+def _missing_text(missing: int) -> str:
+    """The sentence about counted results with no dollar return ("" for none)."""
+    if not missing:
+        return ""
+    who = "1 counted result has" if missing == 1 else f"{missing} counted results have"
+    return (f"{who} no dollar return (a currency rate or SPY close is missing); "
+            "run `calibration` to fetch them.")
+
+
 def paper_view(paper_scores_: dict) -> dict:
     """What the paper Buys section prints, as text: ``table`` (a name and its counted number and
     one cell per horizon, for each rule and then every review), ``listed`` (the counted rows of
@@ -365,27 +390,29 @@ def paper_view(paper_scores_: dict) -> dict:
     for name, g in [*paper_scores_["rules"].items(), ("every review", paper_scores_["baseline"])]:
         table.append({"name": name, "counted": len(g["counted"]),
                       "cells": [_paper_cell(g["horizons"][n]) for n in HORIZONS]})
-    seen, rows_ = set(), []
-    for g in paper_scores_["rules"].values():
+    seen, rows_ = {}, []
+    for name, g in paper_scores_["rules"].items():
         for r in g["counted"]:
             if id(r) not in seen:
-                seen.add(id(r))
+                seen[id(r)] = []
                 rows_.append(r)
+            seen[id(r)].append(name)
     rows_.sort(key=lambda r: (r["date"], r["ticker"], r.get("folder") or ""))
     listed, missing = [], 0
     for r in rows_:
         reached = [n for n in HORIZONS if r.get(f"h{n}")]
         h = r[f"h{reached[-1]}"] if reached else None
-        missing += sum(r[f"h{n}"].get("excess") is None for n in reached)
+        missing += sum(not _scored(r.get(f"h{n}")) for n in _reached(r))
         price = r.get("price")
         cur = r.get("currency")
         then = "–" if price is None else (
             f"{price:,.2f}" if not cur or cur == "USD" else f"{price:,.2f} {cur}")
-        listed.append({"date": r["date"], "ticker": r["ticker"], "rules": ", ".join(r["paper"]),
+        listed.append({"date": r["date"], "ticker": r["ticker"], "rules": ", ".join(seen[id(r)]),
                        "price": then, "horizon": f"{reached[-1]} days" if reached else "–",
                        "ret_usd": _pct1(h and h.get("ret_usd")),
                        "excess": _pct1(h and h.get("excess"))})
-    return {"table": table, "listed": listed, "missing": missing}
+    return {"table": table, "listed": listed, "missing": missing, "note": DIVIDEND_NOTE,
+            "missing_text": _missing_text(missing)}
 
 
 def _pct1(x: float | None) -> str:
@@ -420,14 +447,15 @@ def markdown(rs: list[dict], scores: dict, horizon: int = 180) -> str:
     if not has_horizons(rs):
         lines += ["No decisions old enough yet.", ""]
     lines += ["| Date | Ticker | Lane | Rating | Price then | Value | Return "
-              "| Reached value | Below bear |",
-              "|---|---|---|---|--:|--:|--:|---|---|"]
+              "| Reached value | Below bear | Paper |",
+              "|---|---|---|---|--:|--:|--:|---|---|---|"]
     for r in rs:
         h = r.get(f"h{horizon}") or {}
         lines.append(f"| {r['date']} | {r['ticker']} | {r.get('lane') or '–'} "
                      f"| {r.get('rating') or '–'} | "
                      f"{_money(r.get('price'))} | {_money(r.get('value'))} | {_pct(h.get('ret'))} | "
-                     f"{_yes(h.get('reached_value'))} | {_yes(h.get('below_bear'))} |")
+                     f"{_yes(h.get('reached_value'))} | {_yes(h.get('below_bear'))} | "
+                     f"{', '.join(r.get('paper') or []) or '–'} |")
     lines += ["", "## Scores", ""]
     for title, key in (("By rating", "by_rating"), ("By lane", "by_lane")):
         lines += [f"### {title}", "",
@@ -468,9 +496,7 @@ def markdown(rs: list[dict], scores: dict, horizon: int = 180) -> str:
         lines += [f"| {x['date']} | {x['ticker']} | {x['rules']} | {x['price']} | {x['horizon']} "
                   f"| {x['ret_usd']} | {x['excess']} |" for x in view["listed"]]
         if view["missing"]:
-            lines += ["", f"{view['missing']} counted results have no dollar return (a currency "
-                      "rate or SPY close is missing); run `calibration` to fetch them.", ""]
-        else:
-            lines.append("")
+            lines += ["", view["missing_text"]]
+        lines += ["", view["note"], ""]
     lines += ["## Verdicts", "", *[f"- {v}" for v in scores["verdicts"]], ""]
     return "\n".join(lines)

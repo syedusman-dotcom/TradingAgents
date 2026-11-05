@@ -156,10 +156,13 @@ def actions_markdown(date: str, actions: list[Action], summary: dict, *, reports
         for p in paper:
             unit = p.get("currency")
             tail = "" if not unit or unit == "USD" else f" {unit}"
+            margin = p.get("margin_of_safety")
+            stated = ("" if margin is None
+                      else f", margin of safety {margin:.0%} as the agents stated it")
             lines.append(f"- {who(p['ticker'])}: {', '.join(p['rules'])} (price "
                          f"{_figure(p.get('price'))}{tail if p.get('price') is not None else ''}, "
                          f"agents' value {_figure(p.get('value'))}"
-                         f"{tail if p.get('value') is not None else ''})")
+                         f"{tail if p.get('value') is not None else ''}{stated})")
         lines.append("")
     if knives:
         lines += ["## Watch: falling knives", "", "Ranked well in the screen but in FREEFALL: " + ", ".join(knives), ""]

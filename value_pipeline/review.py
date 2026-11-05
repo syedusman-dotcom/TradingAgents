@@ -337,7 +337,7 @@ def preview(paths: Paths, cfg: dict, only: list[str] | None = None,
     countries: list[str] = []
     missing: list[str] = []
     if not only:
-        countries = list(rcfg.get("candidate_countries") or [])
+        countries = screener.normalise_countries(rcfg.get("candidate_countries"))
         missing = screener.missing_countries(paths, countries)
         n_themes = len({t for t in discovered or [] if t not in owned})
         inflections = max(0, int(lanes.get("inflection_candidates", 0)) - n_themes)
@@ -728,7 +728,8 @@ def paper_buys(rows: list[dict], dry_run: bool) -> list[dict] | None:
     if dry_run:
         return None
     return [{"ticker": r["ticker"], "rules": rules, "price": r.get("price"),
-             "value": r.get("intrinsic_value"), "currency": r.get("currency")}
+             "value": r.get("intrinsic_value"),
+             "margin_of_safety": r.get("margin_of_safety"), "currency": r.get("currency")}
             for r in rows if (rules := paper.flags(r))]
 
 

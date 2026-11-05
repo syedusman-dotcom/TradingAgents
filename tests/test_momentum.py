@@ -1,6 +1,6 @@
 """Momentum sleeve engine, fixed verdict and fund record on synthetic prices (no network)."""
 
-from datetime import date
+from datetime import date, timedelta
 
 import numpy as np
 import pandas as pd
@@ -448,3 +448,66 @@ def test_cli_momentum_backtest_prints_and_saves(tmp_path, monkeypatch, capsys):
     assert calls == {"fetch": False}
     assert "Saved" in out and "momentum_2026-11-05.md" in out and "live sleeve" in out
     assert (data / "reports" / "backtest" / "momentum_2026-11-05.html").exists()
+
+
+def test_a_fetching_run_refreshes_spy_before_loading_closes(tmp_path, monkeypatch):
+    order = []
+
+    def fake_history(ticker, paths, fetch=True, refresh=False, stale_before=None):
+        order.append(("history", ticker, fetch, stale_before))
+        return None
+
+    monkeypatch.setattr(backtest, "price_history", fake_history)
+    closes, spy, idx = _twelve(1000)
+    closes.attrs = {}
+    monkeypatch.setattr(backtest, "_join_dates",
+                        lambda paths, fetch, fn: dict.fromkeys(closes.columns, OLD))
+    monkeypatch.setattr(trend, "load_closes",
+                        lambda paths, tickers, start, fetch=True, progress=None:
+                        order.append(("load",)) or (closes, spy))
+    monkeypatch.setattr(momentum, "fund_record", lambda *a, **k: [])
+    cfg = {"momentum": {"holdout_start": str(idx[WARM].date()), "holdout_end": str(idx[620].date()),
+                        "recent_start": str(idx[650].date())}}
+    momentum.run(Paths(tmp_path / "data"), cfg, today=date(2026, 11, 5), fetch=True)
+    assert order[0] == ("history", trend.BENCHMARK, True,
+                        (date(2026, 11, 5) - timedelta(days=backtest.PRICE_SLACK_DAYS)).isoformat())
+    assert order.index(("load",)) > 0
+    order.clear()
+    momentum.run(Paths(tmp_path / "data"), cfg, today=date(2026, 11, 5), fetch=False)
+    assert order == [("load",)]
+
+
+def test_run_says_whether_the_settings_are_the_fixed_ones(tmp_path, monkeypatch):
+    result, _, _, _ = _patched_run(tmp_path, monkeypatch)
+    assert result["as_fixed"] is False       # the helper moves the period dates
+    assert momentum.FIXED["positions"] == 10 and momentum.FIXED["cost_per_side"] == 0.005
+    assert momentum.differing({**DEFAULTS["momentum"]}) == {}
+    assert momentum.differing({**DEFAULTS["momentum"], "positions": 12}) == {"positions": 12}
+
+
+def test_report_flags_settings_that_differ_from_the_fixed_ones():
+    r = _result()
+    text = momentum.render_report(r)
+    assert "do not count" not in text and "The rule was fixed before any run" in text
+    assert "10 positions is a concentrated book." in text
+    r["settings"] = {**r["settings"], "positions": 12, "cost_per_side": 0.0075}
+    r["as_fixed"] = False
+    r["results"] = {(p, 12 if n == 10 else n): m for (p, n), m in r["results"].items()}
+    text = momentum.render_report(r)
+    assert ("These settings differ from the ones the rule was fixed for (positions 12, "
+            "cost_per_side 0.0075), so this verdict does not count.") in text
+    assert text.index("so this verdict does not count") > text.index(r["verdict"]["sentence"])
+    assert "12 positions is a concentrated book." in text
+
+
+def test_report_renders_a_dash_for_a_missing_spy_return():
+    r = _result()
+    r["results"][("recent", 10)]["years"][2015] = {"system": 0.1, "spy": None}
+    r["results"][("recent", 10)]["spy_cagr"] = None
+    text = momentum.render_report(r)
+    assert "| 2015 | 10.0% | – |" in text
+
+
+def test_report_limits_name_the_unfinished_last_session():
+    assert ("The last day's close can come from an unfinished session if the prices were "
+            "cached during US trading hours.") in momentum.render_report(_result())

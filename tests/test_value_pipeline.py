@@ -1843,7 +1843,7 @@ def test_dry_run_results_carry_still_investing(tmp_path, monkeypatch):
 
 
 PAPER = [{"ticker": "AAA", "rules": ["fair_price", "discount_15"], "price": 96.2,
-          "value": 120.0, "currency": "USD"}]
+          "value": 120.0, "margin_of_safety": 0.2, "currency": "USD"}]
 
 
 @pytest.mark.unit
@@ -1859,18 +1859,20 @@ def test_actions_paper_buys_sit_between_candidates_and_falling_knives():
             "Each name is one the agents call a good business with good management, priced at "
             "or below their own value: a looser rule than the live one, recorded to see whether "
             "it would have paid.\n\n"
-            "- Alpha (AAA): fair_price, discount_15 (price 96.20, agents' value 120.00)\n") in md
+            "- Alpha (AAA): fair_price, discount_15 (price 96.20, agents' value 120.00, "
+            "margin of safety 20% as the agents stated it)\n") in md
 
 
 @pytest.mark.unit
 def test_actions_paper_buys_quote_currency_and_absence():
     uk = [{"ticker": "BAB.L", "rules": ["fair_price"], "price": 4376.1, "value": 5000.0,
-           "currency": "GBp"}]
+           "margin_of_safety": None, "currency": "GBp"}]
     md = render.actions_markdown("2026-11-07", [], {"total_value": 1.0, "cash": 1.0,
                                                      "target_weight": 0.1, "cash_after": 1.0},
                                  reports={}, comparison=None, cost=0.0, failures=[],
                                  dry_run=False, paper=uk)
     assert "- BAB.L: fair_price (price 4,376.10 GBp, agents' value 5,000.00 GBp)" in md
+    assert "margin of safety" not in md.split("BAB.L")[1]    # a missing margin leaves the clause out
     for none in (None, []):
         md = render.actions_markdown("2026-11-07", [], {"total_value": 1.0, "cash": 1.0,
                                                          "target_weight": 0.1, "cash_after": 1.0},
@@ -1889,7 +1891,7 @@ def test_paper_buys_list_comes_from_the_flagged_rows_and_never_a_dry_run():
     other = {**row, "ticker": "BBB", "rating": "Sell"}
     assert review.paper_buys([row, other], dry_run=False) == [
         {"ticker": "AAA", "rules": ["fair_price", "discount_15"], "price": 96.2, "value": 120.0,
-         "currency": "USD"}]
+         "margin_of_safety": 0.2, "currency": "USD"}]
     assert review.paper_buys([row], dry_run=True) is None
 
 

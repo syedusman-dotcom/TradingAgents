@@ -177,3 +177,49 @@ def test_the_preview_page_shows_the_list(tmp_path):
     ops.init_portfolio(paths, 1000.0)
     r = client.post("/run/preview", data={"kind": "review", "tickers": "", "token": app.state.token})
     assert r.status_code == 200 and "Value candidates from: Sweden, Norge" in r.text
+
+
+def test_an_all_owned_screen_gives_no_candidates_with_a_list(tmp_path):
+    paths = Paths(tmp_path)
+    _screen(paths)
+    owned = {row[0] for row in ROWS}
+    assert top_candidates(paths, owned, 3, countries=["Sweden"]) == []
+    assert run_rate_skips(paths, owned, 3, 0.8, countries=["Sweden"]) == []
+
+
+def test_a_header_only_screen_gives_no_candidates_with_a_list(tmp_path):
+    paths = Paths(tmp_path)
+    paths.screens.mkdir(parents=True, exist_ok=True)
+    (paths.screens / "screen_2026-11-05.csv").write_text(
+        "ticker,country,mf_position,trend,lane_hint,hints,ttm_vs_5y_ebit\n")
+    assert top_candidates(paths, set(), 3, countries=["Sweden"]) == []
+    assert run_rate_skips(paths, set(), 3, 0.8, countries=["Sweden"]) == []
+
+
+def test_a_bare_string_list_is_one_country(tmp_path):
+    paths = Paths(tmp_path)
+    _screen(paths)
+    assert _t(top_candidates(paths, set(), 2, countries="Sweden")) == ["SE1"]
+    assert missing_countries(paths, "Norge") == ["Norge"]
+    _portfolio(paths)
+    plan = review.preview(paths, _cfg("Sweden"))
+    assert plan["candidate_countries"] == ["Sweden"]
+
+
+def test_non_string_and_blank_entries_are_dropped(tmp_path):
+    paths = Paths(tmp_path)
+    _screen(paths)
+    odd = ["Sweden", 3, " "]
+    assert _t(top_candidates(paths, set(), 2, countries=odd)) == ["SE1"]
+    assert missing_countries(paths, odd + ["Norge"]) == ["Norge"]
+    _portfolio(paths)
+    plan = review.preview(paths, _cfg(odd))
+    assert plan["candidate_countries"] == ["Sweden"]
+
+
+def test_validate_config_still_rejects_a_bare_string_and_odd_entries():
+    for bad in ("Sweden", ["Sweden", 3], ["Sweden", " "]):
+        cfg = copy.deepcopy(DEFAULTS)
+        cfg["review"]["candidate_countries"] = bad
+        with pytest.raises(ValueError, match=r"review\.candidate_countries"):
+            validate_config(cfg)
