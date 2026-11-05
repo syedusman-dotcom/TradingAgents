@@ -486,8 +486,9 @@ def _picked(rule, rows, bars=None) -> set:
 def test_rules_pick_at_the_bar():
     cfg = _bt_cfg()
     rules = backtest.rules(cfg)
-    assert list(rules) == ["value", "magic_formula", "compounder", "compounder_overweight",
-                           "compounder_record", "compounder_hint", "inflection", "dislocation"]
+    assert list(rules)[:8] == ["value", "magic_formula", "compounder", "compounder_overweight",
+                               "compounder_record", "compounder_hint", "inflection",
+                               "dislocation"]
     top_n, mos = cfg["backtest"]["value_top_n"], cfg["watch"]["buy_margin_of_safety"]
     assert rules["value"].bars == {"top_n": top_n, "mos": mos}
     assert rules["magic_formula"].bars == {"top_n": top_n}
@@ -699,7 +700,7 @@ def test_sensitivity_grid_rows():
     expected = [(name, bar, value) for name, rule in rules.items() for bar in rule.bars
                 for value in backtest.SENSITIVITY_GRID[bar]]
     assert [(r["rule"], r["bar"], r["value"]) for r in rows] == expected
-    assert len(rows) == 30
+    assert len(rows) == 75
     assert all(set(r) == {"rule", "bar", "value", "n", "beat_spy", "cohorts", "mean_excess_spy"}
                for r in rows)
     by = {(r["rule"], r["bar"], r["value"]): r for r in rows}
@@ -866,7 +867,7 @@ def _e2e_run(tmp_path, monkeypatch, **kw):
 def test_run_end_to_end_with_patched_caches(tmp_path, monkeypatch):
     paths, result, seen = _e2e_run(tmp_path, monkeypatch)
     assert set(result) >= {"generated", "cohorts", "holds", "universe_size", "with_data", "picks",
-                           "summary", "sensitivity", "bound", "survivorship", "skipped"}
+                           "summary", "bar_verdicts", "sensitivity", "bound", "survivorship", "skipped"}
     assert result["generated"] == "2024-10-24"
     assert result["cohorts"] == E2E_COHORTS and result["holds"] == [1, 3]
     assert result["universe_size"] == 4                     # BANK's sector is excluded
@@ -885,6 +886,18 @@ def test_run_end_to_end_with_patched_caches(tmp_path, monkeypatch):
     assert result["summary"]["magic_formula"][3]["cohorts_with_picks"] == 1
     assert result["summary"]["magic_formula"][1]["beat_spy"] == 2     # rising faster than SPY
     assert result["sensitivity"] and backtest.BOUND in result["bound"]
+    assert list(result["bar_verdicts"]) == list(backtest.BAR_CANDIDATES)
+    mf = result["summary"]["magic_formula"]
+    for name, v in result["bar_verdicts"].items():
+        assert v == backtest.bar_verdict(result["summary"][name][1], result["summary"][name][3],
+                                         mf[1], rule=name)
+        assert v["supports"] is False and v["sentence"].startswith(f"{name}: ")
+    assert {"min_er", "pool", "min_fcf_yield"} <= {p["bar"] for p in result["sensitivity"]}
+    report = backtest.markdown(result)
+    assert "## Buy-bar candidates" in report
+    assert all(v["sentence"] in report for v in result["bar_verdicts"].values())
+    assert all(f"### {n}\n" in report for n in backtest.BAR_CANDIDATES)
+    assert "| min_er |" in report and "| pool |" in report and "| min_fcf_yield |" in report
     assert result["survivorship"] == {"2022-06-30": 1, "2023-06-30": 0}
     assert result["joins_known"] is True
     assert result["defaults"]["value"] == backtest.rules(_bt_cfg())["value"].bars
@@ -1066,6 +1079,9 @@ def _fake_result() -> dict:
     return {"generated": "2026-10-24", "cohorts": [C1, C2], "holds": holds, "universe_size": 900,
             "with_data": 850, "rows_per_cohort": {C1: 600, C2: 640}, "picks": picks,
             "summary": summary,
+            "bar_verdicts": {name: backtest.bar_verdict(summary[name][1], summary[name][3],
+                                                        summary["magic_formula"][1], rule=name)
+                             for name in backtest.BAR_CANDIDATES},
             "sensitivity": [{"rule": "value", "bar": "mos", "value": 0.3, "n": 2, "beat_spy": 1,
                              "cohorts": 2, "mean_excess_spy": 0.025},
                             {"rule": "value", "bar": "mos", "value": 0.4, "n": 1, "beat_spy": 1,
@@ -1080,8 +1096,8 @@ def _fake_result() -> dict:
 def test_markdown_sections_in_order():
     text = backtest.markdown(_fake_result())
     heads = [line for line in text.splitlines() if line.startswith(("# ", "## "))]
-    assert heads == ["# Lane-rule backtest", "## What was tested", "## Verdict", "## By cohort",
-                     "## Sensitivity", "## The bar that bound", "## Coverage"]
+    assert heads == ["# Lane-rule backtest", "## What was tested", "## Verdict",
+                     "## Buy-bar candidates", "## By cohort", "## Sensitivity", "## The bar that bound", "## Coverage"]
     assert ("today's members only: N of today's S&P 500 names joined the S&P 500 after this "
             "date (some from the S&P 400, where they were already in the universe) and are "
             "left out of this cohort; names that left either index since are not in the sample "
@@ -1137,3 +1153,177 @@ def test_cli_backtest_no_fetch(tmp_path, monkeypatch, capsys):
     text = reports[0].read_text(encoding="utf-8")
     assert "2022-06-30" in text and "2023-06-30" in text and "2024-06-30" not in text
     assert "3-year" not in text.split("## Verdict")[1].split("## By cohort")[0]
+
+
+# --- buy-bar candidates --------------------------------------------------------------------
+
+def _row(t, **kw) -> dict:
+    """A passing, BASING row with no lane hint and no record, unless ``kw`` says otherwise."""
+    row = _lane_row(t, trend="BASING", expected_return=None, momentum_12_1=None, fcf_yield=None)
+    row.update(kw)
+    return row
+
+
+def _tickers(rule_name, rows, **bars) -> list[str]:
+    rule = backtest.rules(_bt_cfg())[rule_name]
+    return [r["ticker"] for r in rule.picks(rows, {**rule.bars, **bars})]
+
+
+@pytest.mark.unit
+def test_the_six_candidates_follow_the_existing_eight_with_their_default_bars():
+    rules = backtest.rules(_bt_cfg())
+    assert list(rules)[8:] == list(backtest.BAR_CANDIDATES) == [
+        "er_hurdle", "er_momentum", "trending_value", "value_graded", "value_no_downtrend",
+        "compounder_fcf"]
+    assert rules["er_hurdle"].bars == {"min_er": 0.12, "top_n": 20}
+    assert rules["er_momentum"].bars == {"min_er": 0.12, "top_n": 20}
+    assert rules["trending_value"].bars == {"pool": 60, "top_n": 20}
+    assert rules["value_graded"].bars == {"top_n": 30, "mos": 0.20}
+    assert rules["value_no_downtrend"].bars == {"top_n": 30, "mos": 0.30}
+    assert rules["compounder_fcf"].bars == {"min_fcf_yield": 0.04, "top_n": 20}
+    grid = backtest.SENSITIVITY_GRID
+    assert grid["min_er"] == (0.10, 0.12, 0.15) and grid["pool"] == (40, 60, 100)
+    assert grid["min_fcf_yield"] == (0.03, 0.04, 0.05) and grid["mos"] == (0.10, 0.20, 0.30, 0.40)
+    assert all(bar in grid for rule in rules.values() for bar in rule.bars)
+
+
+@pytest.mark.unit
+def test_er_hurdle_takes_the_best_expected_returns_above_the_bar():
+    rows = [_row("B", expected_return=0.13), _row("A", expected_return=0.20),
+            _row("C", expected_return=0.11), _row("D", expected_return=None),
+            _row("E", expected_return=0.30, trend="FREEFALL"),
+            _row("F", expected_return=0.25, passes_filters=False),
+            _row("G", expected_return=0.12)]
+    assert _tickers("er_hurdle", rows) == ["A", "B", "G"]            # sorted, the bar included
+    assert _tickers("er_hurdle", rows, top_n=1) == ["A"]
+    assert _tickers("er_hurdle", rows, min_er=0.15) == ["A"]
+
+
+@pytest.mark.unit
+def test_er_momentum_keeps_picks_at_or_above_the_passing_rows_median_momentum():
+    rows = [_row("A", expected_return=0.20, momentum_12_1=0.30),
+            _row("B", expected_return=0.15, momentum_12_1=0.10),
+            _row("C", expected_return=0.05, momentum_12_1=-0.05),    # under the hurdle, in the median
+            _row("G", expected_return=0.40, momentum_12_1=None),     # no momentum: dropped
+            _row("E", expected_return=0.40, momentum_12_1=9.0, trend="FREEFALL"),   # not counted
+            _row("F", expected_return=0.40, momentum_12_1=9.0, passes_filters=False)]
+    assert _tickers("er_momentum", rows) == ["A", "B"]   # median of .30, .10, -.05
+    rows[1]["momentum_12_1"] = 0.09
+    rows.append(_row("D", expected_return=0.01, momentum_12_1=0.50))   # median of four: 0.195
+    assert _tickers("er_momentum", rows) == ["A"]
+    assert _tickers("er_momentum", rows[:1]) == []                   # one row has no median
+    assert _tickers("er_momentum", [rows[0], _row("H", momentum_12_1=None)]) == []
+
+
+@pytest.mark.unit
+def test_trending_value_takes_the_pool_by_rank_then_the_strongest_momentum():
+    rows = [_row(f"T{i}", mf_position=i, momentum_12_1=m)
+            for i, m in enumerate((0.0, 0.4, 0.1, 0.5, 0.9), start=1)]
+    rows += [_row("N", mf_position=2, momentum_12_1=None),
+             _row("X", mf_position=3, momentum_12_1=2.0, trend="FREEFALL"),
+             _row("Y", mf_position=1, momentum_12_1=2.0, passes_filters=False)]
+    assert _tickers("trending_value", rows, pool=3, top_n=2) == ["T2", "T3"]
+    assert _tickers("trending_value", rows, pool=3, top_n=1) == ["T2"]
+    assert _tickers("trending_value", rows, pool=5, top_n=2) == ["T5", "T4"]
+
+
+@pytest.mark.unit
+def test_value_graded_and_value_no_downtrend():
+    rows = [_row("IN", mf_position=3, mos_formula=0.20), _row("OUT", mf_position=3, mos_formula=0.19),
+            _row("RANK", mf_position=31, mos_formula=0.9), _row("NONE", mf_position=4, mos_formula=None),
+            _row("FF", mf_position=5, mos_formula=0.9, trend="FREEFALL"),
+            _row("NOPASS", mf_position=6, mos_formula=0.9, passes_filters=False)]
+    assert _tickers("value_graded", rows) == ["IN"]
+    assert _tickers("value_graded", rows, mos=0.10) == ["IN", "OUT"]
+    down = [_row("A", mf_position=1, mos_formula=0.30), _row("D", mf_position=2, mos_formula=0.40,
+                                                            trend="DOWNTREND"),
+            _row("B", mf_position=3, mos_formula=0.29)]
+    assert _tickers("value", down) == ["A", "D"]
+    assert _tickers("value_no_downtrend", down) == ["A"]
+    assert _tickers("value_no_downtrend", down, mos=0.25) == ["A", "B"]
+
+
+@pytest.mark.unit
+def test_compounder_fcf_needs_the_record_and_the_yield():
+    rec = {"lane_hints": ["compounder"], "pm_record_ok": True}
+    rows = [_row("A", **rec, fcf_yield=0.05, expected_return=0.10),
+            _row("B", **rec, fcf_yield=0.04, expected_return=0.20),
+            _row("LOW", **rec, fcf_yield=0.03, expected_return=0.90),
+            _row("NOREC", lane_hints=["compounder"], pm_record_ok=False, fcf_yield=0.09,
+                 expected_return=0.90),
+            _row("NOHINT", pm_record_ok=True, fcf_yield=0.09, expected_return=0.90),
+            _row("NOER", **rec, fcf_yield=0.09, expected_return=None),
+            _row("NOFCF", **rec, fcf_yield=None, expected_return=0.90),
+            _row("FF", **rec, fcf_yield=0.09, expected_return=0.90, trend="FREEFALL"),
+            _row("NOPASS", **rec, fcf_yield=0.09, expected_return=0.90, passes_filters=False)]
+    assert _tickers("compounder_fcf", rows) == ["B", "A"]
+    assert _tickers("compounder_fcf", rows, top_n=1) == ["B"]
+    assert _tickers("compounder_fcf", rows, min_fcf_yield=0.03) == ["LOW", "B", "A"]
+    assert _tickers("compounder_fcf", rows, min_fcf_yield=0.05) == ["A"]
+
+
+_ONE = {"cohorts_min5": 30, "beat_universe_min5": 20, "mean_excess_universe_min5": 0.03,
+        "mean_excess_spy_min5": 0.01}
+_THREE = {"cohorts_min5": 20, "mean_excess_universe_min5": 0.01}
+_BASE = {"mean_excess_universe_min5": 0.01}
+
+
+@pytest.mark.unit
+def test_bar_verdict_conditions():
+    one, three, base = _ONE, _THREE, _BASE
+    assert backtest.bar_verdict(one, three, base)["supports"] is True
+    assert backtest.bar_verdict({**one, "cohorts_min5": 20, "beat_universe_min5": 12},
+                                three, base)["supports"] is True        # exactly 20 and 60%
+    assert backtest.bar_verdict({**one, "mean_excess_universe_min5": 0.02, "mean_excess_spy_min5": 0.0},
+                                three, base)["supports"] is True        # exactly +2 and 0
+    assert backtest.bar_verdict(one, {**three, "mean_excess_universe_min5": 0.0},
+                                base)["supports"] is True
+    assert backtest.bar_verdict({**one, "cohorts_min5": 19}, three, base)["supports"] is False      # 1
+    assert backtest.bar_verdict({**one, "beat_universe_min5": 17}, three, base)["supports"] is False  # 2
+    assert backtest.bar_verdict({**one, "mean_excess_universe_min5": 0.019}, three, base)["supports"] is False
+    assert backtest.bar_verdict({**one, "mean_excess_spy_min5": -0.001}, three, base)["supports"] is False
+    assert backtest.bar_verdict(one, {**three, "mean_excess_universe_min5": -0.001}, base)["supports"] is False
+    assert backtest.bar_verdict(one, three, {"mean_excess_universe_min5": 0.03})["supports"] is False  # 5
+    assert backtest.bar_verdict(one, three, {"mean_excess_universe_min5": None})["supports"] is False
+    assert backtest.bar_verdict(one, None, base)["supports"] is False
+    assert backtest.bar_verdict(one, {**three, "cohorts_min5": 0, "mean_excess_universe_min5": None},
+                                base)["supports"] is False
+    assert backtest.bar_verdict({**one, "mean_excess_universe_min5": None}, three, base)["supports"] is False
+    assert backtest.bar_verdict({**one, "mean_excess_spy_min5": None}, three, base)["supports"] is False
+
+
+@pytest.mark.unit
+def test_bar_verdict_values_and_sentence():
+    v = backtest.bar_verdict(_ONE, _THREE, _BASE, rule="er_hurdle")
+    assert set(v) == {"supports", "sentence", "cohorts", "beat_share", "mean_excess_universe",
+                      "mean_excess_spy", "mean_excess_universe_3y", "baseline"}
+    assert v["cohorts"] == 30 and v["beat_share"] == pytest.approx(20 / 30)
+    assert v["mean_excess_universe"] == 0.03 and v["mean_excess_spy"] == 0.01
+    assert v["mean_excess_universe_3y"] == 0.01 and v["baseline"] == 0.01
+    assert v["sentence"] == (
+        "er_hurdle: 30 cohorts with five or more picks; beat the universe in 67% of them; mean "
+        "one-year excess +3.0 points over the universe and +1.0 over SPY; three-year +1.0; the "
+        "plain screen +1.0: supports a live bar change.")
+    no = backtest.bar_verdict({**_ONE, "cohorts_min5": 19}, _THREE, _BASE)
+    assert no["sentence"].endswith("does not support a live bar change.")
+    empty = backtest.bar_verdict({"cohorts_min5": 0, "beat_universe_min5": 0,
+                                  "mean_excess_universe_min5": None,
+                                  "mean_excess_spy_min5": None}, None, {"mean_excess_universe_min5": None})
+    assert empty["supports"] is False and empty["beat_share"] == 0
+    assert ("0 cohorts with five or more picks; beat the universe in 0% of them; mean one-year "
+            "excess n/a points over the universe and n/a over SPY; three-year n/a; the plain "
+            "screen n/a: does not support") in empty["sentence"]
+    assert empty["mean_excess_universe_3y"] is None
+
+
+@pytest.mark.unit
+def test_the_report_prints_one_sentence_per_candidate():
+    result = _fake_result()
+    text = backtest.markdown(result)
+    section = text.split("## Buy-bar candidates")[1].split("\n## ")[0]
+    assert text.index("## Verdict") < text.index("## Buy-bar candidates") < text.index("## By cohort")
+    assert "overlap" in section and "not independent" in section
+    for name in backtest.BAR_CANDIDATES:
+        assert f"- {result['bar_verdicts'][name]['sentence']}" in section
+        assert result["bar_verdicts"][name]["sentence"].startswith(f"{name}: ")
+    assert "at least 20 such cohorts" in section and "60%" in section

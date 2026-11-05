@@ -357,8 +357,53 @@ def _dislocation(rows, bars):
     return [r for r in rows if _hinted(r, "dislocation")]
 
 
+def _eligible(row: dict) -> bool:
+    return bool(row.get("passes_filters")) and row.get("trend") != "FREEFALL"
+
+
+def _top_by(rows: list[dict], key: str, n) -> list[dict]:
+    """The ``n`` rows with the highest ``key``, best first; rows without it are dropped."""
+    have = [r for r in rows if r.get(key) is not None]
+    return sorted(have, key=lambda r: r[key], reverse=True)[:int(n)]
+
+
+def _er_hurdle(rows, bars):
+    return _top_by([r for r in rows if _eligible(r) and _at_least(r.get("expected_return"),
+                                                                 bars["min_er"])],
+                   "expected_return", bars["top_n"])
+
+
+def _er_momentum(rows, bars):
+    """``er_hurdle``'s picks at or above the median momentum of the cohort's eligible rows that
+    have one; with fewer than two such rows, nothing."""
+    moments = [r["momentum_12_1"] for r in rows
+               if _eligible(r) and r.get("momentum_12_1") is not None]
+    if len(moments) < 2:
+        return []
+    median = statistics.median(moments)
+    return [r for r in _er_hurdle(rows, bars) if _at_least(r.get("momentum_12_1"), median)]
+
+
+def _trending_value(rows, bars):
+    return _top_by([r for r in rows if _ranked(r, bars["pool"])], "momentum_12_1", bars["top_n"])
+
+
+def _value_no_downtrend(rows, bars):
+    return [r for r in _value(rows, bars) if r.get("trend") != "DOWNTREND"]
+
+
+def _compounder_fcf(rows, bars):
+    return _top_by([r for r in rows if _eligible(r) and _record(r)
+                    and _at_least(r.get("fcf_yield"), bars["min_fcf_yield"])],
+                   "expected_return", bars["top_n"])
+
+
+BAR_CANDIDATES = ("er_hurdle", "er_momentum", "trending_value", "value_graded",
+                  "value_no_downtrend", "compounder_fcf")
+
+
 def rules(cfg: dict) -> dict[str, Rule]:
-    """The eight lane rules under test, with their default bars taken from the code they mirror
+    """The eight lane rules under test, then the six buy-bar candidates, with their default bars taken from the code they mirror
     (``decision_math`` and the config), in the report's order."""
     top_n = cfg["backtest"]["value_top_n"]
     specs = [
@@ -372,6 +417,12 @@ def rules(cfg: dict) -> dict[str, Rule]:
         ("compounder_hint", {}, _compounder_hint),
         ("inflection", {"incremental_roic": INFLECTION_INCREMENTAL_ROIC}, _inflection),
         ("dislocation", {}, _dislocation),
+        ("er_hurdle", {"min_er": 0.12, "top_n": 20}, _er_hurdle),
+        ("er_momentum", {"min_er": 0.12, "top_n": 20}, _er_momentum),
+        ("trending_value", {"pool": 60, "top_n": 20}, _trending_value),
+        ("value_graded", {"top_n": 30, "mos": 0.20}, _value),
+        ("value_no_downtrend", {"top_n": 30, "mos": 0.30}, _value_no_downtrend),
+        ("compounder_fcf", {"min_fcf_yield": 0.04, "top_n": 20}, _compounder_fcf),
     ]
     return {name: Rule(name, bars, picks) for name, bars, picks in specs}
 
@@ -483,8 +534,9 @@ def picks_for(rule: Rule, rows_by_cohort: dict[str, list[dict]], holds: list[int
 # --- summary -------------------------------------------------------------------------------
 
 SENSITIVITY_GRID = {"premium": (1.0, 1.15, 1.25, 1.5), "min_return": (0.08, 0.10, 0.12, 0.15),
-                    "mos": (0.20, 0.30, 0.40), "top_n": (10, 20, 30, 50),
-                    "incremental_roic": (0.15, 0.20, 0.30)}
+                    "mos": (0.10, 0.20, 0.30, 0.40), "top_n": (10, 20, 30, 50),
+                    "incremental_roic": (0.15, 0.20, 0.30), "min_er": (0.10, 0.12, 0.15),
+                    "pool": (40, 60, 100), "min_fcf_yield": (0.03, 0.04, 0.05)}
 
 
 def _diff(a, b) -> float | None:
@@ -574,6 +626,45 @@ def sensitivity(rules: dict[str, Rule], rows_by_cohort: dict[str, list[dict]], b
                             "beat_spy": s["beat_spy"], "cohorts": s["cohorts_with_picks"],
                             "mean_excess_spy": s["mean_excess_spy"]})
     return out
+
+
+def _points_text(x) -> str:
+    return "n/a" if x is None else f"{x * 100:+.1f}"
+
+
+def bar_verdict(one_year: dict, three_year: dict | None, baseline: dict, rule: str = "") -> dict:
+    """The pass rule, fixed before any run. Over the one-year hold, counting cohorts with at
+    least ``MIN_BASKET`` picks, the rule supports a live bar change when it has at least 20 such
+    cohorts, beat the equal-weight universe in at least 60% of them, averaged at least +2 points
+    over the universe and at least 0 over SPY, averaged at least 0 over the universe across the
+    three-year hold (which needs a cohort), and averaged more over the universe than the
+    baseline (``magic_formula``). A missing mean fails its condition. Arguments are summaries
+    from ``summarize``; ``rule`` names the rule in the sentence."""
+    cohorts = one_year["cohorts_min5"]
+    beat = one_year["beat_universe_min5"]
+    beat_share = beat / cohorts if cohorts else 0
+    excess_universe = one_year["mean_excess_universe_min5"]
+    excess_spy = one_year["mean_excess_spy_min5"]
+    three = three_year if three_year and three_year["cohorts_min5"] >= 1 else None
+    excess_3y = None if three_year is None else three_year["mean_excess_universe_min5"]
+    base = baseline["mean_excess_universe_min5"]
+    supports = (cohorts >= 20
+                and beat * 5 >= cohorts * 3            # at least 60%, without float rounding
+                and _at_least(excess_universe, 0.02)
+                and _at_least(excess_spy, 0.0)
+                and three is not None and _at_least(excess_3y, 0.0)
+                and excess_universe is not None and base is not None
+                and excess_universe > base)
+    sentence = (f"{rule + ': ' if rule else ''}{cohorts} cohorts with five or more picks; beat "
+                f"the universe in {beat_share:.0%} of them; mean one-year excess "
+                f"{_points_text(excess_universe)} points over the universe and "
+                f"{_points_text(excess_spy)} over SPY; three-year {_points_text(excess_3y)}; the "
+                f"plain screen {_points_text(base)}: "
+                f"{'supports' if supports else 'does not support'} a live bar change.")
+    return {"supports": supports, "sentence": sentence, "cohorts": cohorts,
+            "beat_share": beat_share, "mean_excess_universe": excess_universe,
+            "mean_excess_spy": excess_spy, "mean_excess_universe_3y": excess_3y,
+            "baseline": base}
 
 
 BOUND = "compounder_price_bar"
@@ -734,6 +825,16 @@ def _missing_fields(inputs: dict[str, tuple]) -> dict[str, int]:
     return {field: sum(year.get(field) is None for year in newest) for field in MISSING_FIELDS}
 
 
+def _bar_verdicts(summary: dict) -> dict:
+    """``bar_verdict`` for each candidate against ``magic_formula``'s one-year summary; a hold
+    that was not run counts as no summary."""
+    baseline = summary["magic_formula"].get(1) or {"mean_excess_universe_min5": None}
+    return {name: bar_verdict(summary[name].get(1) or {
+                "cohorts_min5": 0, "beat_universe_min5": 0, "mean_excess_universe_min5": None,
+                "mean_excess_spy_min5": None}, summary[name].get(3), baseline, rule=name)
+            for name in BAR_CANDIDATES}
+
+
 def run(paths: Paths, cfg: dict, today: date | None = None, tickers: list[str] | None = None,
         refresh: bool = False, fetch: bool = True, progress=None,
         universe_fn=market_data.universe, added_fn=None, keep_rows: bool = False) -> dict:
@@ -792,12 +893,13 @@ def run(paths: Paths, cfg: dict, today: date | None = None, tickers: list[str] |
     bench = benchmarks(spy, rows, holds)
     rule_set = rules(cfg)
     picks = [p for rule in rule_set.values() for p in picks_for(rule, rows, holds, bench)]
+    summary = summarize(picks, bench, holds, names=list(rule_set))
     result = {
         "generated": today.isoformat(), "cohorts": cohorts, "holds": holds,
         "universe_size": len(members), "with_data": with_data,
         "rows_per_cohort": {c: len(rows[c]) for c in cohorts}, "picks": picks,
         "missing_fields": {c: _missing_fields(inputs[c]) for c in cohorts},
-        "summary": summarize(picks, bench, holds, names=list(rule_set)),
+        "summary": summary, "bar_verdicts": _bar_verdicts(summary),
         "sensitivity": sensitivity(rule_set, rows, bench),
         "bound": bound_by_price(rule_set, rows, bench, holds),
         "survivorship": _joined_after(added, cohorts), "joins_known": bool(added),
@@ -833,6 +935,9 @@ BAR_MEANINGS = {
     "mos": "formula margin of safety at least this",
     "top_n": "Magic Formula rank within the top n",
     "incremental_roic": "at least this",
+    "min_er": "expected return at least this",
+    "pool": "Magic Formula rank within the best pool, before the momentum cut",
+    "min_fcf_yield": "free cash flow yield at least this",
 }
 
 
@@ -887,6 +992,19 @@ def _cohort_table(lines: list[dict]) -> list[str]:
             f"| {_ret(c['spy'])} | {_ret(c['universe'])} | {_points(c['excess_spy'])} "
             f"| {c['hit_rate']:.0%} |" for c in lines]
     return out
+
+
+def _candidates(result: dict) -> list[str]:
+    lines = ["## Buy-bar candidates", "",
+             "Pass rule, fixed before any run: over the one-year hold, counting cohorts with at "
+             "least five picks, a rule supports a live bar change only if it has at least 20 such "
+             "cohorts, beat the equal-weight universe in at least 60% of them, averaged at least "
+             "+2 points over the universe and at least 0 over SPY, averaged at least 0 over the "
+             "universe across the three-year hold, and averaged more over the universe than "
+             "`magic_formula`. Quarterly cohorts with one-year holds overlap, so the cohorts are "
+             "not independent samples.", ""]
+    lines += [f"- {result['bar_verdicts'][name]['sentence']}" for name in BAR_CANDIDATES]
+    return lines + [""]
 
 
 def _by_cohort(result: dict) -> list[str]:
@@ -967,13 +1085,13 @@ def _coverage(result: dict) -> list[str]:
 
 
 def markdown(result: dict) -> str:
-    """The report: what was tested, the verdict, each rule by cohort, the sensitivity, the bar
+    """The report: what was tested, the verdict, the buy-bar candidates, each rule by cohort, the sensitivity, the bar
     that bound and the coverage."""
     lines = ["# Lane-rule backtest", "", f"Generated {result['generated']}. Nothing trades; "
              "no agent was called.", "",
              "The backtest covers the S&P 500 and 400 only: non-US companies have no point-in-time "
              "filings.", ""]
-    lines += _tested(result) + [verdict(result)] + _by_cohort(result) + _sensitivity(result)
+    lines += _tested(result) + [verdict(result)] + _candidates(result) + _by_cohort(result) + _sensitivity(result)
     lines += _bound(result) + _coverage(result)
     return "\n".join(lines)
 
