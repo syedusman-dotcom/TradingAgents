@@ -607,7 +607,7 @@ def test_actions_header_mentions_fx_for_foreign_names():
     from value_pipeline import render
 
     summary = {"total_value": 1000.0, "cash": 1000.0, "target_weight": 0.1, "cash_after": 1000.0}
-    kw = dict(reports={}, comparison=None, cost=0.0, failures=[], dry_run=False)
+    kw = {"reports": {}, "comparison": None, "cost": 0.0, "failures": [], "dry_run": False}
     sentence = "Nordnet charges FX and, in the UK and Ireland, stamp duty."
     assert sentence in render.actions_markdown("2026-11-05", [], summary, foreign=True, **kw)
     assert sentence not in render.actions_markdown("2026-11-05", [], summary, **kw)
