@@ -339,23 +339,33 @@ Six more rules ask whether the live Buy bar (the Magic Formula top 30 with a mar
 at least 30%) could be better. All require the screen's filters and a trend other than FREEFALL;
 "top n by x" sorts descending and drops rows without x. `er_hurdle`: expected return at least 12%,
 then the top 20 by expected return. `er_momentum`: `er_hurdle`'s picks whose 12-1 month momentum is
-at or above the median of the cohort's passing rows (nothing with fewer than two such rows).
+at or above the median momentum of the cohort's rows that pass the filters, are not FREEFALL and
+have a momentum value (nothing with fewer than two such rows).
 `trending_value`: the best 60 by Magic Formula rank, then the 20 with the strongest momentum.
-`value_graded`: the top 30 with a margin of safety of at least 20%. `value_no_downtrend`: the
-`value` rule (top 30, margin 30%) without DOWNTREND names. `compounder_fcf`: the compounder hint and
+`value_graded`: the top 30 (`backtest.value_top_n`) with a margin of safety of at least 20%.
+`value_no_downtrend`: the `value` rule (top `value_top_n`, margin `watch.buy_margin_of_safety`,
+30%) without DOWNTREND names. `compounder_fcf`: the compounder hint and
 the PM's record bars with a free cash flow yield of at least 4%, then the top 20 by expected return.
 The Sensitivity table moves their bars too.
 
 The report's *Buy-bar candidates* section gives each a verdict by a pass rule fixed before any run.
 Over the one-year hold, counting cohorts where the rule picked at least five names, a rule
-**supports a live bar change** only if: (1) it has at least 20 such cohorts; (2) its basket beat the
-equal-weight universe in at least 60% of them; (3) its mean cohort excess over the universe is at
-least +2 points and over SPY at least 0; (4) over the three-year hold its mean cohort excess over the
-universe is at least 0; (5) its mean one-year excess over the universe is higher than
-`magic_formula`'s. Otherwise it does not support one; a missing number fails its condition. The
-quarterly cohorts overlap, so 20 cohorts are far fewer than 20 independent trials: a pass is
-evidence to look closer, not proof, and the bars are not to be tuned after seeing the result. The
-backtest changes no live setting.
+**supports a live bar change** only if: (1) it has at least 20 such cohorts, falling in at least 7
+different calendar years; (2) its basket beat the equal-weight universe in at least 60% of them;
+(3) its mean cohort excess over the universe is at least +2 points and over SPY at least 0; (4) over
+the three-year hold its mean cohort excess over the universe is at least 0; (5) its mean one-year
+excess over the universe is higher than `magic_formula`'s over the same cohorts (the plain screen
+measured on exactly the cohorts the candidate counted in). Otherwise it does not support one; a
+missing number fails its condition, and the sentence names the conditions that failed. After each
+sentence the report gives, as information only, the mean and standard error of the calendar-year
+averages of the cohort excesses.
+
+Read the cohort counts with care: one-year holds on quarterly dates overlap, so the cohorts are not
+independent and amount to about eleven separate years; three-year holds overlap far more and amount
+to fewer than four separate periods; six candidates were tried against one threshold, so one
+passing by luck is plausible; returns are before trading costs. A pass is evidence to look closer,
+not proof, and the bars are not to be tuned after seeing the result. The backtest changes no live
+setting.
 
 What it cannot test or correct:
 

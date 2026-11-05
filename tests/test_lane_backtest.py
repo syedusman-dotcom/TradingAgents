@@ -2,6 +2,8 @@
 
 import copy
 import json
+import math
+import statistics
 from datetime import date, timedelta
 
 import pandas as pd
@@ -684,7 +686,8 @@ def test_picks_for_builds_one_pick_per_hold():
     assert [(p["ticker"], p["hold"]) for p in picks] == [("V1", 1), ("V1", 3)]
     one, three = picks
     assert set(one) == {"cohort", "ticker", "rule", "price", "value_base", "mos_formula",
-                        "market_cap", "hold", "start_date", "end_date", "ret", "spy", "universe",
+                        "market_cap", "expected_return", "momentum_12_1", "fcf_yield", "trend",
+                        "hold", "start_date", "end_date", "ret", "spy", "universe",
                         "excess_spy", "ended_early"}
     assert one["rule"] == "value" and one["cohort"] == C1 and one["ret"] == 0.20
     assert one["excess_spy"] == pytest.approx(0.05) and one["end_date"] == C2
@@ -889,8 +892,9 @@ def test_run_end_to_end_with_patched_caches(tmp_path, monkeypatch):
     assert list(result["bar_verdicts"]) == list(backtest.BAR_CANDIDATES)
     mf = result["summary"]["magic_formula"]
     for name, v in result["bar_verdicts"].items():
-        assert v == backtest.bar_verdict(result["summary"][name][1], result["summary"][name][3],
-                                         mf[1], rule=name)
+        assert v == backtest.bar_verdict(
+            result["summary"][name][1], result["summary"][name][3],
+            backtest.matched_baseline(result["summary"][name][1], mf[1]), rule=name)
         assert v["supports"] is False and v["sentence"].startswith(f"{name}: ")
     assert {"min_er", "pool", "min_fcf_yield"} <= {p["bar"] for p in result["sensitivity"]}
     report = backtest.markdown(result)
@@ -907,8 +911,10 @@ def test_run_end_to_end_with_patched_caches(tmp_path, monkeypatch):
     md_path, csv_path = backtest.write(paths, result, "2024-10-24")
     picks = pd.read_csv(csv_path)
     assert list(picks.columns) == ["cohort", "ticker", "rule", "price", "value_base",
-                                   "mos_formula", "market_cap", "hold", "start_date", "end_date",
-                                   "ret", "spy", "universe", "excess_spy", "ended_early"]
+                                   "mos_formula", "market_cap", "expected_return",
+                                   "momentum_12_1", "fcf_yield", "trend", "hold", "start_date",
+                                   "end_date", "ret", "spy", "universe", "excess_spy",
+                                   "ended_early"]
     assert len(picks) == len(result["picks"])
 
 
@@ -1079,9 +1085,7 @@ def _fake_result() -> dict:
     return {"generated": "2026-10-24", "cohorts": [C1, C2], "holds": holds, "universe_size": 900,
             "with_data": 850, "rows_per_cohort": {C1: 600, C2: 640}, "picks": picks,
             "summary": summary,
-            "bar_verdicts": {name: backtest.bar_verdict(summary[name][1], summary[name][3],
-                                                        summary["magic_formula"][1], rule=name)
-                             for name in backtest.BAR_CANDIDATES},
+            "bar_verdicts": backtest._bar_verdicts(summary),
             "sensitivity": [{"rule": "value", "bar": "mos", "value": 0.3, "n": 2, "beat_spy": 1,
                              "cohorts": 2, "mean_excess_spy": 0.025},
                             {"rule": "value", "bar": "mos", "value": 0.4, "n": 1, "beat_spy": 1,
@@ -1262,58 +1266,143 @@ def test_compounder_fcf_needs_the_record_and_the_yield():
     assert _tickers("compounder_fcf", rows, min_fcf_yield=0.05) == ["A"]
 
 
-_ONE = {"cohorts_min5": 30, "beat_universe_min5": 20, "mean_excess_universe_min5": 0.03,
-        "mean_excess_spy_min5": 0.01}
+def _one(**over) -> dict:
+    """A one-year summary that passes conditions 1-3 (30 cohorts in 8 years, 20 beat the
+    universe, +3 points over it and +1 over SPY), with ``over`` applied."""
+    return {"cohorts_min5": 30, "years_min5": 8, "beat_universe_min5": 20,
+            "mean_excess_universe_min5": 0.03, "mean_excess_spy_min5": 0.01,
+            "year_mean_excess_universe": 0.025, "year_se_excess_universe": 0.01, **over}
+
+
 _THREE = {"cohorts_min5": 20, "mean_excess_universe_min5": 0.01}
-_BASE = {"mean_excess_universe_min5": 0.01}
+_BASE = 0.01
+
+
+def _failed(one=None, three=_THREE, base=_BASE) -> list[int]:
+    v = backtest.bar_verdict(_one() if one is None else one, three, base)
+    assert v["supports"] is (v["failed"] == [])
+    return v["failed"]
 
 
 @pytest.mark.unit
-def test_bar_verdict_conditions():
-    one, three, base = _ONE, _THREE, _BASE
-    assert backtest.bar_verdict(one, three, base)["supports"] is True
-    assert backtest.bar_verdict({**one, "cohorts_min5": 20, "beat_universe_min5": 12},
-                                three, base)["supports"] is True        # exactly 20 and 60%
-    assert backtest.bar_verdict({**one, "mean_excess_universe_min5": 0.02, "mean_excess_spy_min5": 0.0},
-                                three, base)["supports"] is True        # exactly +2 and 0
-    assert backtest.bar_verdict(one, {**three, "mean_excess_universe_min5": 0.0},
-                                base)["supports"] is True
-    assert backtest.bar_verdict({**one, "cohorts_min5": 19}, three, base)["supports"] is False      # 1
-    assert backtest.bar_verdict({**one, "beat_universe_min5": 17}, three, base)["supports"] is False  # 2
-    assert backtest.bar_verdict({**one, "mean_excess_universe_min5": 0.019}, three, base)["supports"] is False
-    assert backtest.bar_verdict({**one, "mean_excess_spy_min5": -0.001}, three, base)["supports"] is False
-    assert backtest.bar_verdict(one, {**three, "mean_excess_universe_min5": -0.001}, base)["supports"] is False
-    assert backtest.bar_verdict(one, three, {"mean_excess_universe_min5": 0.03})["supports"] is False  # 5
-    assert backtest.bar_verdict(one, three, {"mean_excess_universe_min5": None})["supports"] is False
-    assert backtest.bar_verdict(one, None, base)["supports"] is False
-    assert backtest.bar_verdict(one, {**three, "cohorts_min5": 0, "mean_excess_universe_min5": None},
-                                base)["supports"] is False
-    assert backtest.bar_verdict({**one, "mean_excess_universe_min5": None}, three, base)["supports"] is False
-    assert backtest.bar_verdict({**one, "mean_excess_spy_min5": None}, three, base)["supports"] is False
+def test_bar_verdict_passes_and_its_exact_boundaries_pass():
+    assert _failed() == []
+    assert _failed(_one(cohorts_min5=20, years_min5=7, beat_universe_min5=12)) == []  # 20, 7, 60%
+    assert _failed(_one(beat_universe_min5=18)) == []                                 # 18 of 30
+    assert _failed(_one(mean_excess_universe_min5=0.02, mean_excess_spy_min5=0.0),
+                   base=0.0199) == []                                                 # +2.00, 0
+    assert _failed(three={**_THREE, "mean_excess_universe_min5": 0.0}) == []          # 0 over 3y
+    assert _failed(base=0.0299) == []                                                 # just above
+
+
+@pytest.mark.unit
+def test_bar_verdict_each_condition_failing_alone():
+    assert _failed(_one(cohorts_min5=19, beat_universe_min5=19)) == [1]       # 19 cohorts
+    assert _failed(_one(years_min5=6)) == [1]                                 # 6 calendar years
+    assert _failed(_one(beat_universe_min5=17)) == [2]                        # 17 of 30 < 60%
+    assert _failed(_one(cohorts_min5=20, years_min5=7, beat_universe_min5=11)) == [2]
+    assert _failed(_one(mean_excess_universe_min5=0.0199), base=0.0) == [3]
+    assert _failed(_one(mean_excess_spy_min5=-0.0001)) == [3]
+    assert _failed(_one(mean_excess_spy_min5=None)) == [3]
+    assert _failed(three={**_THREE, "mean_excess_universe_min5": -0.0001}) == [4]
+    assert _failed(three=None) == [4]
+    assert _failed(three={"cohorts_min5": 0, "mean_excess_universe_min5": None}) == [4]
+    assert _failed(base=0.03) == [5]                                          # equal: not above
+    assert _failed(base=0.04) == [5]
+    assert _failed(base=None) == [5]
 
 
 @pytest.mark.unit
 def test_bar_verdict_values_and_sentence():
-    v = backtest.bar_verdict(_ONE, _THREE, _BASE, rule="er_hurdle")
-    assert set(v) == {"supports", "sentence", "cohorts", "beat_share", "mean_excess_universe",
-                      "mean_excess_spy", "mean_excess_universe_3y", "baseline"}
-    assert v["cohorts"] == 30 and v["beat_share"] == pytest.approx(20 / 30)
+    v = backtest.bar_verdict(_one(), _THREE, _BASE, rule="er_hurdle")
+    assert set(v) == {"supports", "sentence", "failed", "cohorts", "years", "beat", "beat_share",
+                      "mean_excess_universe", "mean_excess_spy", "mean_excess_universe_3y",
+                      "baseline", "year_mean", "year_se"}
+    assert v["cohorts"] == 30 and v["years"] == 8 and v["beat"] == 20
+    assert v["beat_share"] == pytest.approx(20 / 30)
     assert v["mean_excess_universe"] == 0.03 and v["mean_excess_spy"] == 0.01
     assert v["mean_excess_universe_3y"] == 0.01 and v["baseline"] == 0.01
+    assert v["year_mean"] == 0.025 and v["year_se"] == 0.01
     assert v["sentence"] == (
-        "er_hurdle: 30 cohorts with five or more picks; beat the universe in 67% of them; mean "
-        "one-year excess +3.0 points over the universe and +1.0 over SPY; three-year +1.0; the "
-        "plain screen +1.0: supports a live bar change.")
-    no = backtest.bar_verdict({**_ONE, "cohorts_min5": 19}, _THREE, _BASE)
-    assert no["sentence"].endswith("does not support a live bar change.")
-    empty = backtest.bar_verdict({"cohorts_min5": 0, "beat_universe_min5": 0,
-                                  "mean_excess_universe_min5": None,
-                                  "mean_excess_spy_min5": None}, None, {"mean_excess_universe_min5": None})
-    assert empty["supports"] is False and empty["beat_share"] == 0
-    assert ("0 cohorts with five or more picks; beat the universe in 0% of them; mean one-year "
-            "excess n/a points over the universe and n/a over SPY; three-year n/a; the plain "
-            "screen n/a: does not support") in empty["sentence"]
-    assert empty["mean_excess_universe_3y"] is None
+        "er_hurdle: 30 cohorts with five or more picks in 8 calendar years; beat the universe in "
+        "20 of 30; mean one-year excess +3.00 points over the universe and +1.00 over SPY; "
+        "three-year +1.00; the plain screen on the same cohorts +1.00: supports a live bar change.")
+    # Rounds to +2.00 but is under +2 points: the sentence names the failed condition.
+    no = backtest.bar_verdict(_one(cohorts_min5=19, beat_universe_min5=19,
+                                   mean_excess_universe_min5=0.01999), _THREE, 0.04, rule="r")
+    assert no["supports"] is False and no["failed"] == [1, 3, 5]
+    assert no["sentence"] == (
+        "r: 19 cohorts with five or more picks in 8 calendar years; beat the universe in 19 of "
+        "19; mean one-year excess +2.00 points over the universe and +1.00 over SPY; three-year "
+        "+1.00; the plain screen on the same cohorts +4.00: does not support a live bar change. "
+        "Failed: (1) fewer than 20 cohorts in 7 calendar years; (3) mean excess under +2 points "
+        "over the universe or under 0 over SPY; (5) not above the plain screen on the same "
+        "cohorts.")
+    every = backtest.bar_verdict(_one(cohorts_min5=0, years_min5=0, beat_universe_min5=0,
+                                      mean_excess_universe_min5=None, mean_excess_spy_min5=None,
+                                      year_mean_excess_universe=None,
+                                      year_se_excess_universe=None), None, None)
+    assert every["failed"] == [1, 2, 3, 4, 5] and every["beat_share"] == 0
+    assert every["sentence"] == (
+        "0 cohorts with five or more picks in 0 calendar years; beat the universe in 0 of 0; mean "
+        "one-year excess n/a points over the universe and n/a over SPY; three-year n/a; the plain "
+        "screen on the same cohorts n/a: does not support a live bar change. Failed: (1) fewer "
+        "than 20 cohorts in 7 calendar years; (2) beat the universe in under 60%; (3) mean excess "
+        "under +2 points over the universe or under 0 over SPY; (4) three-year mean excess under "
+        "0; (5) not above the plain screen on the same cohorts.")
+    assert every["year_mean"] is None and every["year_se"] is None
+
+
+@pytest.mark.unit
+def test_summary_years_cohort_excesses_and_calendar_year_averages():
+    bench = {("2020-03-31", 1): {"spy": 0.05, "universe": 0.10},
+             ("2020-06-30", 1): {"spy": 0.05, "universe": 0.00},
+             ("2021-03-31", 1): {"spy": 0.05, "universe": 0.10},
+             ("2022-03-31", 1): {"spy": 0.05, "universe": 0.00}}
+    picks = (_picks_at("2020-03-31", 5, 0.20) + _picks_at("2020-06-30", 6, 0.00)
+             + _picks_at("2021-03-31", 5, 0.40) + _picks_at("2022-03-31", 4, 0.90))
+    s = backtest._summary("r", 1, picks, bench)
+    assert s["cohorts_min5"] == 3 and s["years_min5"] == 2       # 2022 has four picks
+    assert s["cohort_excess_universe_min5"] == pytest.approx(
+        {"2020-03-31": 0.10, "2020-06-30": 0.0, "2021-03-31": 0.30})
+    # Calendar-year averages: 2020 = (0.10 + 0.0) / 2 = 0.05, 2021 = 0.30.
+    assert s["year_mean_excess_universe"] == pytest.approx(0.175)
+    assert s["year_se_excess_universe"] == pytest.approx(
+        statistics.stdev([0.05, 0.30]) / math.sqrt(2))
+    one_year = backtest._summary("r", 1, _picks_at("2020-03-31", 5, 0.2), bench)
+    assert one_year["years_min5"] == 1 and one_year["year_mean_excess_universe"] == pytest.approx(0.1)
+    assert one_year["year_se_excess_universe"] is None            # one year has no spread
+    none = backtest._summary("r", 1, _picks_at("2020-03-31", 2, 0.2), bench)
+    assert none["years_min5"] == 0 and none["cohort_excess_universe_min5"] == {}
+    assert none["year_mean_excess_universe"] is None and none["year_se_excess_universe"] is None
+
+
+@pytest.mark.unit
+def test_matched_baseline_is_the_plain_screen_on_the_candidates_cohorts():
+    candidate = {"cohort_excess_universe_min5": {"A": 0.05, "B": 0.02, "C": 0.01}}
+    plain = {"cohorts": [{"cohort": "A", "excess_universe": 0.04},
+                         {"cohort": "B", "excess_universe": -0.02},
+                         {"cohort": "D", "excess_universe": 0.90},      # not the candidate's
+                         {"cohort": "C", "excess_universe": None}]}      # no universe: left out
+    assert backtest.matched_baseline(candidate, plain) == pytest.approx(0.01)
+    assert backtest.matched_baseline({"cohort_excess_universe_min5": {"E": 0.1}}, plain) is None
+    assert backtest.matched_baseline(candidate, None) is None
+
+
+@pytest.mark.unit
+def test_bar_verdicts_use_the_matched_baseline():
+    names = list(backtest.rules(_bt_cfg()))
+    bench = {(f"{y}-06-30", 1): {"spy": 0.0, "universe": 0.0} for y in range(2015, 2018)}
+    picks = [{**p, "rule": "er_hurdle"} for y in (2015, 2016)
+             for p in _picks_at(f"{y}-06-30", 5, 0.10)]
+    picks += [{**p, "rule": "magic_formula"} for y, r in ((2015, 0.02), (2016, 0.04), (2017, 0.90))
+              for p in _picks_at(f"{y}-06-30", 5, r)]
+    summary = backtest.summarize(picks, bench, [1], names=names)
+    verdicts = backtest._bar_verdicts(summary)
+    assert list(verdicts) == list(backtest.BAR_CANDIDATES)
+    assert verdicts["er_hurdle"]["baseline"] == pytest.approx(0.03)   # 2017 is not er_hurdle's
+    assert verdicts["er_momentum"]["baseline"] is None                 # no cohorts of its own
+    assert 5 in verdicts["er_momentum"]["failed"]
 
 
 @pytest.mark.unit
@@ -1324,6 +1413,51 @@ def test_the_report_prints_one_sentence_per_candidate():
     assert text.index("## Verdict") < text.index("## Buy-bar candidates") < text.index("## By cohort")
     assert "overlap" in section and "not independent" in section
     for name in backtest.BAR_CANDIDATES:
-        assert f"- {result['bar_verdicts'][name]['sentence']}" in section
-        assert result["bar_verdicts"][name]["sentence"].startswith(f"{name}: ")
-    assert "at least 20 such cohorts" in section and "60%" in section
+        v = result["bar_verdicts"][name]
+        assert v["sentence"].startswith(f"{name}: ")
+        assert (f"- {v['sentence']} Calendar-year averages: mean n/a points, standard error n/a, "
+                f"0 years.") in section
+    assert "at least 20 such cohorts" in section and "7 different calendar years" in section
+    assert "60%" in section and "on the same cohorts" in section
+    assert ("The S&P 400 has no join dates, so names that entered it after rising are in every "
+            "cohort; a 20-name basket ranked on momentum can hold several while the universe "
+            "holds each at a small weight; the S&P 500-only run (`--indexes sp500`) is the "
+            "check.") in section
+
+
+@pytest.mark.unit
+def test_calendar_year_line_formats_the_mean_and_standard_error():
+    assert backtest._year_line({"year_mean": 0.0123, "year_se": 0.0045, "years": 8}) == (
+        "Calendar-year averages: mean +1.23 points, standard error 0.45, 8 years.")
+    assert backtest._year_line({"year_mean": -0.02, "year_se": None, "years": 1}) == (
+        "Calendar-year averages: mean -2.00 points, standard error n/a, 1 year.")
+
+
+@pytest.mark.unit
+def test_what_was_tested_states_the_overlap_caveat():
+    tested = backtest.markdown(_fake_result()).split("## What was tested")[1].split("## Verdict")[0]
+    for words in ("one-year holds on quarterly dates overlap", "about eleven separate years",
+                  "fewer than four separate periods",
+                  "six candidates were tried against one threshold",
+                  "one passing by luck is plausible", "before trading costs",
+                  "a pass is evidence to look closer, not proof"):
+        assert words in tested
+
+
+@pytest.mark.unit
+def test_candidate_rules_read_the_live_value_bars_from_the_config():
+    cfg = _bt_cfg(value_top_n=25)
+    cfg["watch"]["buy_margin_of_safety"] = 0.35
+    rules = backtest.rules(cfg)
+    assert rules["value_graded"].bars == {"top_n": 25, "mos": 0.20}
+    assert rules["value_no_downtrend"].bars == {"top_n": 25, "mos": 0.35}
+
+
+@pytest.mark.unit
+def test_picks_carry_the_audit_columns():
+    cfg, by_cohort = _cohort_rows()
+    by_cohort[C1][0].update(expected_return=0.14, momentum_12_1=0.2, fcf_yield=0.05, trend="UPTREND")
+    pick = backtest.picks_for(backtest.rules(cfg)["value"], by_cohort, [1], BENCH)[0]
+    assert (pick["expected_return"], pick["momentum_12_1"], pick["fcf_yield"], pick["trend"]) == (
+        0.14, 0.2, 0.05, "UPTREND")
+    assert {"expected_return", "momentum_12_1", "fcf_yield", "trend"} <= set(backtest.PICK_COLUMNS)

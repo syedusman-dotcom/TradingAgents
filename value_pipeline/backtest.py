@@ -374,8 +374,9 @@ def _er_hurdle(rows, bars):
 
 
 def _er_momentum(rows, bars):
-    """``er_hurdle``'s picks at or above the median momentum of the cohort's eligible rows that
-    have one; with fewer than two such rows, nothing."""
+    """``er_hurdle``'s picks at or above the median ``momentum_12_1`` of the cohort's rows that
+    pass the filters, are not FREEFALL and have a momentum value; with fewer than two such rows,
+    nothing."""
     moments = [r["momentum_12_1"] for r in rows
                if _eligible(r) and r.get("momentum_12_1") is not None]
     if len(moments) < 2:
@@ -420,8 +421,9 @@ def rules(cfg: dict) -> dict[str, Rule]:
         ("er_hurdle", {"min_er": 0.12, "top_n": 20}, _er_hurdle),
         ("er_momentum", {"min_er": 0.12, "top_n": 20}, _er_momentum),
         ("trending_value", {"pool": 60, "top_n": 20}, _trending_value),
-        ("value_graded", {"top_n": 30, "mos": 0.20}, _value),
-        ("value_no_downtrend", {"top_n": 30, "mos": 0.30}, _value_no_downtrend),
+        ("value_graded", {"top_n": top_n, "mos": 0.20}, _value),
+        ("value_no_downtrend", {"top_n": top_n, "mos": cfg["watch"]["buy_margin_of_safety"]},
+         _value_no_downtrend),
         ("compounder_fcf", {"min_fcf_yield": 0.04, "top_n": 20}, _compounder_fcf),
     ]
     return {name: Rule(name, bars, picks) for name, bars, picks in specs}
@@ -522,7 +524,9 @@ def picks_for(rule: Rule, rows_by_cohort: dict[str, list[dict]], holds: list[int
                     "cohort": cohort, "ticker": row["ticker"], "rule": rule.name,
                     "price": row.get("price"), "value_base": row.get("value_base"),
                     "mos_formula": row.get("mos_formula"), "market_cap": row.get("market_cap"),
-                    "hold": h, "start_date": row.get("start_date"),
+                    "expected_return": row.get("expected_return"),
+                    "momentum_12_1": row.get("momentum_12_1"), "fcf_yield": row.get("fcf_yield"),
+                    "trend": row.get("trend"), "hold": h, "start_date": row.get("start_date"),
                     "end_date": row.get(f"end_date_{h}"), "ret": ret, "spy": spy,
                     "universe": b.get("universe"),
                     "excess_spy": None if ret is None or spy is None else ret - spy,
@@ -571,6 +575,19 @@ def _measured_dates(bench: dict, hold: int) -> int:
     return len({c for (c, h), b in bench.items() if h == hold and b.get("spy") is not None})
 
 
+def _year_stats(full: list[dict]) -> tuple[float | None, float | None]:
+    """The mean and standard error (sample standard deviation / sqrt(n); None with fewer than
+    two years) of the calendar-year averages of the cohort lines' excess over the universe."""
+    by_year: dict[str, list[float]] = {}
+    for line in full:
+        by_year.setdefault(line["cohort"][:4], []).append(line["excess_universe"])
+    years = [sum(v) / len(v) for v in by_year.values()]
+    if not years:
+        return None, None
+    se = statistics.stdev(years) / len(years) ** 0.5 if len(years) >= 2 else None
+    return sum(years) / len(years), se
+
+
 def _summary(rule: str, hold: int, picks: list[dict], bench: dict) -> dict:
     """One rule and hold. A pick counts when it has a return and its cohort a SPY return; a
     cohort is listed when it has such a pick."""
@@ -585,6 +602,7 @@ def _summary(rule: str, hold: int, picks: list[dict], bench: dict) -> dict:
     median_excess = _median(excess)
     worst = min(lines, key=lambda line: line["excess_spy"]) if lines else None
     full = [line for line in lines if line["n"] >= MIN_BASKET and line["universe"] is not None]
+    year_mean, year_se = _year_stats(full)
     return {
         "cohorts": lines, "beat_spy": beat, "cohorts_with_picks": len(lines),
         "mean_excess_spy": _mean(excess), "median_excess_spy": median_excess,
@@ -592,6 +610,9 @@ def _summary(rule: str, hold: int, picks: list[dict], bench: dict) -> dict:
                                       if line["excess_universe"] is not None),
         "all_picks_median": _median(p["ret"] for p in usable),
         "cohorts_min5": len(full),
+        "years_min5": len({line["cohort"][:4] for line in full}),
+        "cohort_excess_universe_min5": {line["cohort"]: line["excess_universe"] for line in full},
+        "year_mean_excess_universe": year_mean, "year_se_excess_universe": year_se,
         "beat_universe_min5": sum(line["basket"] > line["universe"] for line in full),
         "mean_excess_universe_min5": _mean(line["excess_universe"] for line in full),
         "mean_excess_spy_min5": _mean(line["excess_spy"] for line in full),
@@ -629,42 +650,73 @@ def sensitivity(rules: dict[str, Rule], rows_by_cohort: dict[str, list[dict]], b
 
 
 def _points_text(x) -> str:
-    return "n/a" if x is None else f"{x * 100:+.1f}"
+    return "n/a" if x is None else f"{x * 100:+.2f}"
 
 
-def bar_verdict(one_year: dict, three_year: dict | None, baseline: dict, rule: str = "") -> dict:
-    """The pass rule, fixed before any run. Over the one-year hold, counting cohorts with at
-    least ``MIN_BASKET`` picks, the rule supports a live bar change when it has at least 20 such
-    cohorts, beat the equal-weight universe in at least 60% of them, averaged at least +2 points
-    over the universe and at least 0 over SPY, averaged at least 0 over the universe across the
-    three-year hold (which needs a cohort), and averaged more over the universe than the
-    baseline (``magic_formula``). A missing mean fails its condition. Arguments are summaries
-    from ``summarize``; ``rule`` names the rule in the sentence."""
+FAILED_TEXT = {
+    1: "fewer than 20 cohorts in 7 calendar years",
+    2: "beat the universe in under 60%",
+    3: "mean excess under +2 points over the universe or under 0 over SPY",
+    4: "three-year mean excess under 0",
+    5: "not above the plain screen on the same cohorts",
+}
+
+
+def matched_baseline(one_year: dict, baseline: dict | None) -> float | None:
+    """``magic_formula``'s mean one-year excess over the universe on the candidate's five-pick
+    cohorts (``one_year["cohort_excess_universe_min5"]``); a cohort where the baseline has no
+    line (or its line no universe return) is left out. None when no cohort is left."""
+    by_cohort = {line["cohort"]: line["excess_universe"]
+                 for line in (baseline or {}).get("cohorts", [])}
+    return _mean(by_cohort[c] for c in one_year.get("cohort_excess_universe_min5", {})
+                 if by_cohort.get(c) is not None)
+
+
+def bar_verdict(one_year: dict, three_year: dict | None, baseline_matched: float | None,
+                rule: str = "") -> dict:
+    """The pass rule, fixed before any run (amended 2026-11-05, still before any run). Over the
+    one-year hold, counting cohorts with at least ``MIN_BASKET`` picks, the rule supports a live
+    bar change when (1) it has at least 20 such cohorts in at least 7 calendar years, (2) beat
+    the equal-weight universe in at least 60% of them, (3) averaged at least +2 points over the
+    universe and at least 0 over SPY, (4) averaged at least 0 over the universe across the
+    three-year hold (which needs a cohort), and (5) averaged more over the universe than
+    ``magic_formula`` on the same cohorts (``baseline_matched``, from ``matched_baseline``). A
+    missing mean fails its condition. ``failed`` lists the conditions that failed; ``rule``
+    names the rule in the sentence."""
     cohorts = one_year["cohorts_min5"]
+    years = one_year.get("years_min5", 0)
     beat = one_year["beat_universe_min5"]
     beat_share = beat / cohorts if cohorts else 0
     excess_universe = one_year["mean_excess_universe_min5"]
     excess_spy = one_year["mean_excess_spy_min5"]
     three = three_year if three_year and three_year["cohorts_min5"] >= 1 else None
     excess_3y = None if three_year is None else three_year["mean_excess_universe_min5"]
-    base = baseline["mean_excess_universe_min5"]
-    supports = (cohorts >= 20
-                and beat * 5 >= cohorts * 3            # at least 60%, without float rounding
-                and _at_least(excess_universe, 0.02)
-                and _at_least(excess_spy, 0.0)
-                and three is not None and _at_least(excess_3y, 0.0)
-                and excess_universe is not None and base is not None
-                and excess_universe > base)
-    sentence = (f"{rule + ': ' if rule else ''}{cohorts} cohorts with five or more picks; beat "
-                f"the universe in {beat_share:.0%} of them; mean one-year excess "
-                f"{_points_text(excess_universe)} points over the universe and "
+    held = {
+        1: cohorts >= 20 and years >= 7,
+        2: cohorts > 0 and beat * 5 >= cohorts * 3,       # at least 60%, without float rounding
+        3: _at_least(excess_universe, 0.02) and _at_least(excess_spy, 0.0),
+        4: three is not None and _at_least(excess_3y, 0.0),
+        5: (excess_universe is not None and baseline_matched is not None
+            and excess_universe > baseline_matched),
+    }
+    failed = [n for n, ok in held.items() if not ok]
+    supports = not failed
+    sentence = (f"{rule + ': ' if rule else ''}{cohorts} cohorts with five or more picks in "
+                f"{years} calendar years; beat the universe in {beat} of {cohorts}; mean one-year "
+                f"excess {_points_text(excess_universe)} points over the universe and "
                 f"{_points_text(excess_spy)} over SPY; three-year {_points_text(excess_3y)}; the "
-                f"plain screen {_points_text(base)}: "
-                f"{'supports' if supports else 'does not support'} a live bar change.")
-    return {"supports": supports, "sentence": sentence, "cohorts": cohorts,
-            "beat_share": beat_share, "mean_excess_universe": excess_universe,
-            "mean_excess_spy": excess_spy, "mean_excess_universe_3y": excess_3y,
-            "baseline": base}
+                f"plain screen on the same cohorts {_points_text(baseline_matched)}: ")
+    if supports:
+        sentence += "supports a live bar change."
+    else:
+        sentence += ("does not support a live bar change. Failed: "
+                     + "; ".join(f"({n}) {FAILED_TEXT[n]}" for n in failed) + ".")
+    return {"supports": supports, "sentence": sentence, "failed": failed, "cohorts": cohorts,
+            "years": years, "beat": beat, "beat_share": beat_share,
+            "mean_excess_universe": excess_universe, "mean_excess_spy": excess_spy,
+            "mean_excess_universe_3y": excess_3y, "baseline": baseline_matched,
+            "year_mean": one_year.get("year_mean_excess_universe"),
+            "year_se": one_year.get("year_se_excess_universe")}
 
 
 BOUND = "compounder_price_bar"
@@ -825,14 +877,22 @@ def _missing_fields(inputs: dict[str, tuple]) -> dict[str, int]:
     return {field: sum(year.get(field) is None for year in newest) for field in MISSING_FIELDS}
 
 
+_NO_SUMMARY = {"cohorts_min5": 0, "years_min5": 0, "beat_universe_min5": 0,
+               "mean_excess_universe_min5": None, "mean_excess_spy_min5": None,
+               "cohort_excess_universe_min5": {}, "year_mean_excess_universe": None,
+               "year_se_excess_universe": None}
+
+
 def _bar_verdicts(summary: dict) -> dict:
-    """``bar_verdict`` for each candidate against ``magic_formula``'s one-year summary; a hold
-    that was not run counts as no summary."""
-    baseline = summary["magic_formula"].get(1) or {"mean_excess_universe_min5": None}
-    return {name: bar_verdict(summary[name].get(1) or {
-                "cohorts_min5": 0, "beat_universe_min5": 0, "mean_excess_universe_min5": None,
-                "mean_excess_spy_min5": None}, summary[name].get(3), baseline, rule=name)
-            for name in BAR_CANDIDATES}
+    """``bar_verdict`` for each candidate against ``magic_formula``'s one-year summary on the
+    candidate's own cohorts; a hold that was not run counts as no summary."""
+    baseline = summary["magic_formula"].get(1)
+    out = {}
+    for name in BAR_CANDIDATES:
+        one = summary[name].get(1) or _NO_SUMMARY
+        out[name] = bar_verdict(one, summary[name].get(3), matched_baseline(one, baseline),
+                                rule=name)
+    return out
 
 
 def run(paths: Paths, cfg: dict, today: date | None = None, tickers: list[str] | None = None,
@@ -917,7 +977,7 @@ def run(paths: Paths, cfg: dict, today: date | None = None, tickers: list[str] |
 # --- report --------------------------------------------------------------------------------
 
 PICK_COLUMNS = ["cohort", "ticker", "rule", "price", "value_base", "mos_formula", "market_cap",
-                "hold", "start_date", "end_date", "ret", "spy", "universe", "excess_spy",
+                "expected_return", "momentum_12_1", "fcf_yield", "trend", "hold", "start_date", "end_date", "ret", "spy", "universe", "excess_spy",
                 "ended_early"]
 SURVIVORSHIP = ("today's members only: N of today's S&P 500 names joined the S&P 500 after this "
                 "date (some from the S&P 400, where they were already in the universe) and are "
@@ -953,6 +1013,13 @@ def _points(x) -> str:
     return "–" if x is None else f"{x * 100:+.1f}"
 
 
+OVERLAP = ("Counting cohorts — one-year holds on quarterly dates overlap, so the cohorts are not "
+           "independent and amount to about eleven separate years; three-year holds overlap far "
+           "more and amount to fewer than four separate periods; six candidates were tried "
+           "against one threshold, so one passing by luck is plausible; returns are before "
+           "trading costs; a pass is evidence to look closer, not proof.")
+
+
 def _tested(result: dict) -> list[str]:
     cohorts, surv = result["cohorts"], result["survivorship"]
     span = f"{cohorts[0]} to {cohorts[-1]}" if cohorts else "none (no hold has ended)"
@@ -970,7 +1037,8 @@ def _tested(result: dict) -> list[str]:
             "each cohort sees only the statements filed on or before its date (EDGAR) and the "
             "closes dated on or before it; returns start at the first close on or after it. The "
             "metrics see the newest four fiscal years known then, as the live screen does. "
-            "Sectors are today's (EDGAR has none), a mild look-ahead. " + survivorship, ""]
+            "Sectors are today's (EDGAR has none), a mild look-ahead. " + survivorship, "",
+            OVERLAP, ""]
 
 
 def verdict(result: dict) -> str:
@@ -994,17 +1062,40 @@ def _cohort_table(lines: list[dict]) -> list[str]:
     return out
 
 
+SURVIVORSHIP_SHARED = ("The S&P 400 has no join dates, so names that entered it after rising are "
+                       "in every cohort; a 20-name basket ranked on momentum can hold several "
+                       "while the universe holds each at a small weight; the S&P 500-only run "
+                       "(`--indexes sp500`) is the check.")
+
+
+def _year_line(v: dict) -> str:
+    """The information line after a candidate's sentence: the calendar-year averages."""
+    mean, se, n = v.get("year_mean"), v.get("year_se"), v.get("years", 0)
+    se_text = "n/a" if se is None else f"{se * 100:.2f}"
+    return (f"Calendar-year averages: mean {_points_text(mean)} points, standard error "
+            f"{se_text}, {n} year{'' if n == 1 else 's'}.")
+
+
 def _candidates(result: dict) -> list[str]:
     lines = ["## Buy-bar candidates", "",
              "Pass rule, fixed before any run: over the one-year hold, counting cohorts with at "
-             "least five picks, a rule supports a live bar change only if it has at least 20 such "
-             "cohorts, beat the equal-weight universe in at least 60% of them, averaged at least "
-             "+2 points over the universe and at least 0 over SPY, averaged at least 0 over the "
-             "universe across the three-year hold, and averaged more over the universe than "
-             "`magic_formula`. Quarterly cohorts with one-year holds overlap, so the cohorts are "
-             "not independent samples.", ""]
-    lines += [f"- {result['bar_verdicts'][name]['sentence']}" for name in BAR_CANDIDATES]
+             "least five picks, a rule supports a live bar change only if (1) it has at least 20 "
+             "such cohorts in at least 7 different calendar years, (2) it beat the equal-weight "
+             "universe in at least 60% of them, (3) it averaged at least +2 points over the "
+             "universe and at least 0 over SPY, (4) it averaged at least 0 over the universe "
+             "across the three-year hold, and (5) it averaged more over the universe than "
+             "`magic_formula` on the same cohorts. Quarterly cohorts with one-year holds overlap, "
+             "so the cohorts are not independent samples. The calendar-year averages are "
+             "information, not part of the rule. " + SURVIVORSHIP_SHARED, ""]
+    for name in BAR_CANDIDATES:
+        v = result["bar_verdicts"][name]
+        lines.append(f"- {v['sentence']} {_year_line(v)}")
     return lines + [""]
+
+
+def candidates(result: dict) -> str:
+    """The ``## Buy-bar candidates`` section: the pass rule and one verdict per candidate."""
+    return "\n".join(_candidates(result))
 
 
 def _by_cohort(result: dict) -> list[str]:
