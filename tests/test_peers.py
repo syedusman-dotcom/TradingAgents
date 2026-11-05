@@ -190,6 +190,29 @@ def test_usd_rate_does_not_cache_a_failure(monkeypatch):
 
 
 @pytest.mark.unit
+def test_usd_rate_is_refetched_after_an_hour(monkeypatch):
+    monkeypatch.setattr(common, "_RATES", {})
+    clock = [1_000.0]
+    monkeypatch.setattr(common.time, "monotonic", lambda: clock[0])
+    rates = iter([1.30, 1.35])
+    calls = []
+
+    class Moving:
+        def __init__(self, symbol):
+            calls.append(symbol)
+
+        def history(self, period="5d"):
+            return pd.DataFrame({"Close": [next(rates)]})
+
+    monkeypatch.setattr(common.yf, "Ticker", Moving)
+    assert common.usd_rate("GBP") == pytest.approx(1.30)
+    clock[0] += 3_599
+    assert common.usd_rate("GBP") == pytest.approx(1.30) and len(calls) == 1   # still fresh
+    clock[0] += 2
+    assert common.usd_rate("GBP") == pytest.approx(1.35) and len(calls) == 2   # an hour old: refetched
+
+
+@pytest.mark.unit
 def test_tool_returns_not_available_for_a_past_date(monkeypatch):
     from tradingagents.agents.tools import get_peer_comparison
     monkeypatch.setattr(peers, "is_historical", lambda d: True)

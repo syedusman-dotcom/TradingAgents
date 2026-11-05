@@ -78,7 +78,8 @@ def yf_retry(func, max_retries=3, base_delay=2.0):
 
 # Quote currencies Yahoo gives in a minor unit, and the major unit each is 1/100 of.
 MINOR_UNITS = {"GBp": "GBP", "GBX": "GBP", "ZAc": "ZAR", "ILA": "ILS"}
-_RATES: dict[str, float] = {}
+_RATES: dict[str, tuple[float, float]] = {}   # code -> (rate, time.monotonic() when fetched)
+RATE_MAX_AGE = 3600.0                          # seconds; a long-running process refetches after this
 
 
 def usd_rate(currency: str | None) -> float | None:
@@ -86,21 +87,23 @@ def usd_rate(currency: str | None) -> float | None:
 
     A minor-unit code (pence) answers with its major unit's rate: the caller divides a
     minor-unit *price* by 100, while Yahoo's market cap is already in the major unit.
-    Successful rates are cached for the process; a failure is not, so a transient one
-    does not switch off conversion for a whole batch run.
+    Successful rates are cached for ``RATE_MAX_AGE`` (an hour), so a long-running process
+    such as the website does not keep an old rate; a failure is not cached, so a transient
+    one does not switch off conversion for a whole batch run.
     """
     if not currency:
         return None
     code = MINOR_UNITS.get(currency, currency)
     if code == "USD":
         return 1.0
-    if code not in _RATES:
+    cached = _RATES.get(code)
+    if cached is None or time.monotonic() - cached[1] > RATE_MAX_AGE:
         try:
             history = yf_retry(lambda: yf.Ticker(f"{code}USD=X").history(period="5d"))
             close = history["Close"].dropna()
             if not len(close):
                 return None
-            _RATES[code] = float(close.iloc[-1])
+            cached = _RATES[code] = (float(close.iloc[-1]), time.monotonic())
         except Exception:
             return None
-    return _RATES[code]
+    return cached[0]
