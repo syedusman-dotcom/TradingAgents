@@ -86,13 +86,28 @@ def trade_fx(ticker: str, fx: float | None, position: pfmod.Position | None = No
     return currency, market_rate
 
 
+def trade_line(action: str, shares: float, ticker: str, price: float, currency: str | None, fx: float) -> str:
+    """One fill in both units: the quote-unit price, the rate used and the dollar amount (fees excluded)."""
+    dollars = f"${shares * price * fx:,.2f}"
+    if currency in (None, "USD"):
+        return f"{action} {shares:g} {ticker} @ ${price:,.2f} = {dollars}"
+    return f"{action} {shares:g} {ticker} @ {price:,.2f} {currency} (fx {fx:g}) = {dollars}"
+
+
+def last_fill_line(paths: Paths) -> str:
+    """``trade_line`` for the trade just recorded: its row carries the rate that was used."""
+    fill = pfmod.read_trades(paths)[-1]
+    return trade_line(fill["action"], float(fill["shares"]), fill["ticker"], float(fill["price"]),
+                      fill.get("currency") or None, pfmod.row_fx(fill))
+
+
 def record_buy(paths: Paths, ticker: str, shares: float, price: float, fees: float = 0.0,
                on: str | None = None, note: str = "",
-               fx: float | None = None) -> tuple[pfmod.Position, pfmod.Portfolio]:
+               fx: float | None = None, how: str = "pass --fx") -> tuple[pfmod.Position, pfmod.Portfolio]:
     pf = pfmod.load(paths)
     ticker, on = ticker.strip().upper(), on or date.today().isoformat()
     currency, rate = trade_fx(ticker, fx, pf.position(ticker),
-                              fx_fn=lambda t: market_data.quote_fx(t))   # late-bound, patchable
+                              fx_fn=lambda t: market_data.quote_fx(t), how=how)   # late-bound, patchable
     found = review.latest_result(paths, ticker) if pf.position(ticker) is None else None
     held = pfmod.apply_buy(pf, ticker, shares, price, fees, on=on,
                            thesis=(found or {}).get("thesis", ""),
@@ -110,11 +125,11 @@ def record_buy(paths: Paths, ticker: str, shares: float, price: float, fees: flo
 
 def record_sell(paths: Paths, ticker: str, shares: float, price: float, fees: float = 0.0,
                 on: str | None = None, note: str = "",
-                fx: float | None = None) -> tuple[float, pfmod.Portfolio]:
+                fx: float | None = None, how: str = "pass --fx") -> tuple[float, pfmod.Portfolio]:
     pf = pfmod.load(paths)
     ticker, on = ticker.strip().upper(), on or date.today().isoformat()
     currency, rate = trade_fx(ticker, fx, pf.position(ticker),
-                              fx_fn=lambda t: market_data.quote_fx(t))   # late-bound, patchable
+                              fx_fn=lambda t: market_data.quote_fx(t), how=how)   # late-bound, patchable
     gain = pfmod.apply_sell(pf, ticker, shares, price, fees, fx=rate)
     before = pfmod.save(paths, pf)
     pfmod.append_trade(paths, {"date": on, "ticker": ticker, "action": "SELL", "shares": shares,

@@ -675,7 +675,46 @@ def test_trade_post_shows_a_missing_rate_on_the_form(tmp_path, monkeypatch):
     monkeypatch.setattr(market_data, "quote_fx", lambda t: ("PLN", None))
     r = client.post("/trade/buy", data={"ticker": "XYZ.WA", "shares": "1", "price": "10",
                                         "token": app.state.token})
-    assert r.status_code == 400 and "--fx" in r.text and pfmod.load(paths).position("XYZ.WA") is None
+    assert r.status_code == 400 and "Rate field" in r.text and "--fx" not in r.text
+    assert pfmod.load(paths).position("XYZ.WA") is None
+
+
+@pytest.mark.unit
+def test_trade_confirmation_states_the_unit_rate_and_dollars(tmp_path, monkeypatch):
+    client, app, paths = _client(tmp_path)
+    ops.init_portfolio(paths, 10_000.0)
+    monkeypatch.setattr(market_data, "quote_fx", lambda t: ("GBp", 0.013))
+    body = {"ticker": "DNLM.L", "shares": "84", "price": "900", "fx": "0.01348", "token": app.state.token}
+    r = client.post("/trade/buy", data=body)
+    assert "BUY 84 DNLM.L @ 900.00 GBp (fx 0.01348) = $1,019.09" in r.text
+    r = client.post("/trade/sell", data={**body, "price": "1000", "fx": "0.014"})
+    assert "SELL 84 DNLM.L @ 1,000.00 GBp (fx 0.014) = $1,176.00" in r.text
+    monkeypatch.setattr(market_data, "quote_fx", lambda t: ("USD", 1.0))
+    r = client.post("/trade/buy", data={**body, "ticker": "HRB", "shares": "2", "price": "44", "fx": ""})
+    assert "BUY 2 HRB @ $44.00 = $88.00" in r.text
+
+
+@pytest.mark.unit
+def test_trade_form_refuses_a_rate_left_over_from_another_ticker(tmp_path, monkeypatch):
+    client, app, paths = _client(tmp_path)
+    ops.init_portfolio(paths, 10_000.0)
+    r = client.post("/trade/buy", data={"ticker": "AAPL", "shares": "1", "price": "200", "fx": "0.0135",
+                                        "token": app.state.token})
+    assert r.status_code == 400 and "quoted in US dollars" in r.text
+    assert pfmod.load(paths).position("AAPL") is None
+
+
+@pytest.mark.unit
+def test_history_shows_the_unit_and_rate_of_a_foreign_trade(tmp_path, monkeypatch):
+    client, app, paths = _client(tmp_path)
+    ops.init_portfolio(paths, 10_000.0, on="2026-10-01")
+    monkeypatch.setattr(market_data, "quote_fx", lambda t: ("GBp", 0.0135))
+    ops.record_buy(paths, "DNLM.L", 84, 900.0, on="2026-10-02")
+    monkeypatch.setattr(market_data, "quote_fx", lambda t: ("USD", 1.0))
+    ops.record_buy(paths, "HRB", 2, 44.0, on="2026-10-02")
+    text = client.get("/trades").text
+    assert "900.0 GBp" in text and "fx 0.0135" in text
+    assert "44.0 USD" not in text and "fx 1" not in text
 
 
 @pytest.mark.unit

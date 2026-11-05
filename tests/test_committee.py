@@ -326,3 +326,28 @@ def test_committee_payload_carries_the_consensus_growth_and_target():
     stocks = {s["ticker"]: s for s in build_payload(decisions, results, pf, summary, SIZING)["stocks"]}
     assert stocks["HRB"]["consensus_growth"] == 0.06 and stocks["HRB"]["consensus_target"] == 60.0
     assert stocks["KO"]["consensus_growth"] is None and stocks["KO"]["consensus_target"] is None
+
+
+@pytest.mark.unit
+def test_payload_skips_the_fund_and_tells_the_committee_it_is_cash():
+    from value_pipeline import portfolio as pfmod
+    from value_pipeline.committee import PROMPT, build_payload
+
+    fund = "0P0001K6NL.ST"
+    d = Decision(ticker="HRB", rating="Hold", price=50.0, held_shares=10)
+    pf = pfmod.Portfolio(cash=1_000.0, positions=[
+        pfmod.Position("HRB", 10, 45.0, "2026-01-01"),
+        pfmod.Position("DNLM.L", 84, 900.0, "2026-01-01", currency="GBp", avg_fx=0.01348),
+        pfmod.Position(fund, 240, 280.0, "2026-01-01", currency="SEK", avg_fx=0.102)])
+    parked = 240 * 285.0 * 0.105
+    _, summary = plan([d], pf.cash, SIZING, [("DNLM.L", 1_019.09, None)], parked=parked)
+    payload = build_payload([d], [{"ticker": "HRB", "error": None}], pf, summary, SIZING, skip=fund)
+    assert payload["index_fund_value"] == pytest.approx(parked)
+    assert payload["other_holdings"] == [{"ticker": "DNLM.L", "shares": 84, "avg_price": 900.0,
+                                          "currency": "GBp", "cost_usd": pytest.approx(84 * 900.0 * 0.01348)}]
+    assert payload["cash"] == 1_000.0
+    assert "index_fund_value" in PROMPT and "treat it as cash" in PROMPT
+    plain = build_payload([d], [{"ticker": "HRB", "error": None}], pf, summary, SIZING)
+    assert {h["ticker"] for h in plain["other_holdings"]} == {"DNLM.L", fund}
+    hrb_only = pfmod.Portfolio(cash=1.0, positions=[pfmod.Position("X", 1, 2.0, "2026-01-01")])
+    assert build_payload([], [], hrb_only, {"total_value": 3.0}, SIZING)["other_holdings"][0]["currency"] == "USD"

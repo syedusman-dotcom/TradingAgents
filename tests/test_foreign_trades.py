@@ -160,7 +160,8 @@ def test_benchmark_and_realised_gains_use_the_trade_rate():
 
 @pytest.mark.unit
 def test_trade_line_states_both_units():
-    assert cli.trade_line("BUY", 84, "DNLM.L", 900.0, "GBp", 0.01348) \
+    assert cli.trade_line is ops.trade_line
+    assert ops.trade_line("BUY", 84, "DNLM.L", 900.0, "GBp", 0.01348) \
         == "BUY 84 DNLM.L @ 900.00 GBp (fx 0.01348) = $1,019.09"
     assert cli.trade_line("SELL", 10, "HRB", 50.0, None, 1.0) == "SELL 10 HRB @ $50.00 = $500.00"
 

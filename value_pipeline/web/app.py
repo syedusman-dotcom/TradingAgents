@@ -173,12 +173,15 @@ def create_app(paths: Paths, *, config_path: Path = CONFIG_PATH, price_fn=market
                 fees = parse_number(values.get("fees") or "0", "Fees")
                 note = values.get("note", "")
                 fx = parse_number(values["fx"], "Rate") if values.get("fx", "").strip() else None
+                how = "fill in the Rate field"
                 if kind == "buy":
-                    held, pf = ops.record_buy(paths, ticker, shares, price, fees, on=on, note=note, fx=fx)
-                    msg = f"Recorded: bought {shares:g} {ticker} @ {price:,.2f}. Now {held.shares:g} sh; cash {pf.cash:,.2f}"
+                    held, pf = ops.record_buy(paths, ticker, shares, price, fees, on=on, note=note, fx=fx, how=how)
+                    msg = (f"Recorded: {ops.last_fill_line(paths)}. Now {held.shares:g} sh; "
+                           f"cash {pf.cash:,.2f}")
                 else:
-                    gain, pf = ops.record_sell(paths, ticker, shares, price, fees, on=on, note=note, fx=fx)
-                    msg = f"Recorded: sold {shares:g} {ticker} @ {price:,.2f} (realised {gain:+,.2f}); cash {pf.cash:,.2f}"
+                    gain, pf = ops.record_sell(paths, ticker, shares, price, fees, on=on, note=note, fx=fx, how=how)
+                    msg = (f"Recorded: {ops.last_fill_line(paths)} (realised {gain:+,.2f}); "
+                           f"cash {pf.cash:,.2f}")
             elif kind == "deposit":
                 pf = ops.record_deposit(paths, parse_number(values.get("amount", ""), "Amount"), on=on)
                 msg = f"Recorded. Cash is now {pf.cash:,.2f}"

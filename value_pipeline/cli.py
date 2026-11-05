@@ -46,18 +46,7 @@ def cmd_deposit(args, paths: Paths, cfg) -> None:
     console.print(f"Cash is now {pf.cash:,.2f} {pf.currency}")
 
 
-def trade_line(action: str, shares: float, ticker: str, price: float, currency: str | None, fx: float) -> str:
-    """One fill in both units: the quote-unit price, the rate used and the dollar amount (fees excluded)."""
-    dollars = f"${shares * price * fx:,.2f}"
-    if currency in (None, "USD"):
-        return f"{action} {shares:g} {ticker} @ ${price:,.2f} = {dollars}"
-    return f"{action} {shares:g} {ticker} @ {price:,.2f} {currency} (fx {fx:g}) = {dollars}"
-
-
-def _print_fill(action: str, args, ticker: str, paths: Paths) -> None:
-    fill = pfmod.read_trades(paths)[-1]          # the row just appended carries the rate that was used
-    console.print(trade_line(action, args.shares, ticker, args.price, fill.get("currency") or None,
-                             pfmod.row_fx(fill)))
+trade_line = ops.trade_line          # kept importable from here
 
 
 def cmd_buy(args, paths: Paths, cfg) -> None:
@@ -66,7 +55,7 @@ def cmd_buy(args, paths: Paths, cfg) -> None:
                                   note=args.note, fx=args.fx)
     except pfmod.TradeError as exc:
         raise SystemExit(str(exc)) from exc
-    _print_fill("BUY", args, held.ticker, paths)
+    console.print(ops.last_fill_line(paths))
     console.print(f"Now {held.shares:g} sh, avg {held.avg_price:,.2f}. Cash {pf.cash:,.2f}")
 
 
@@ -77,7 +66,7 @@ def cmd_sell(args, paths: Paths, cfg) -> None:
     except pfmod.TradeError as exc:
         raise SystemExit(str(exc)) from exc
     ticker = args.ticker.strip().upper()
-    _print_fill("SELL", args, ticker, paths)
+    console.print(ops.last_fill_line(paths))
     left = pf.position(ticker)
     console.print(f"Realised {gain:+,.2f}. "
                   f"{'Now ' + format(left.shares, 'g') + ' sh' if left else 'Position closed'}. Cash {pf.cash:,.2f}")

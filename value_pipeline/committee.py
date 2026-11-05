@@ -21,6 +21,8 @@ PROMPT = (
     "paragraph of rationale per action. Never recommend buying a stock whose own review rated it Sell. "
     "Nothing is traded automatically; this is advice for a human. "
     "Prices are in each stock's quote currency (its \"currency\" field); held weights and cash are in "
+    "US dollars. index_fund_value is money parked in an index fund; it is sold to fund buys, treat it "
+    "as cash beside \"cash\". An other holding's avg_price is in its currency; cost_usd is its cost in "
     "US dollars. A null field is unknown. Never estimate an expected return, downside or sector yourself; "
     "say it is unknown and rank that stock on what is known. "
     "Lanes: value is the core; compounder positions are capped at {compounder_cap:.0%} and inflection "
@@ -101,10 +103,11 @@ def build_payload(decisions: list[Decision], results: list[dict], portfolio, sum
             "lane": d.lane, "lane_evidence": row.get("lane_evidence") or [],
             "consensus_growth": row.get("consensus_growth"), "consensus_target": row.get("consensus_target"),
         })
-    others = [{"ticker": p.ticker, "shares": p.shares, "avg_price": p.avg_price}
+    others = [{"ticker": p.ticker, "shares": p.shares, "avg_price": p.avg_price,
+               "currency": p.currency or "USD", "cost_usd": p.cost_usd}
               for p in portfolio.positions if p.ticker not in reviewed and p.ticker != skip]
     return _clean({"stocks": stocks, "not_reviewed": not_reviewed, "other_holdings": others,
-                   "cash": portfolio.cash,
+                   "cash": portfolio.cash, "index_fund_value": summary.get("parked") or 0.0,
                    "total_value": total, "sizing": dict(sizing)})
 
 
