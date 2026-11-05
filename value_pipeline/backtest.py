@@ -949,7 +949,9 @@ def markdown(result: dict) -> str:
     """The report: what was tested, the verdict, each rule by cohort, the sensitivity, the bar
     that bound and the coverage."""
     lines = ["# Lane-rule backtest", "", f"Generated {result['generated']}. Nothing trades; "
-             "no agent was called.", ""]
+             "no agent was called.", "",
+             "The backtest covers the S&P 500 and 400 only: non-US companies have no point-in-time "
+             "filings.", ""]
     lines += _tested(result) + [verdict(result)] + _by_cohort(result) + _sensitivity(result)
     lines += _bound(result) + _coverage(result)
     return "\n".join(lines)

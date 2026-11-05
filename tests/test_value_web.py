@@ -573,3 +573,39 @@ def test_backtest_page_empty_and_populated(tmp_path):
     assert r.status_code == 200 and "No backtest yet" not in r.text
     assert "<table>" in r.text and "<td>2024-06-30</td>" in r.text and "old one" not in r.text
     assert "2026-10-24" in r.text
+
+
+@pytest.mark.unit
+def test_screen_page_shows_market_column_and_filter(tmp_path):
+    import pandas as pd
+
+    client, app, paths = _client(tmp_path)
+    rows = [{"ticker": "SHEL.L", "sector": "Energy", "mf_position": 1, "market": "ftse100",
+             "country": "UK", "quote_currency": "GBp", "passes_filters": True}]
+    paths.screens.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(rows).to_csv(paths.screens / "screen_2026-10-20.csv", index=False)
+    text = client.get("/screen").text
+    assert "<option>UK</option>" in text and "<td>UK</td>" in text and "<th>Market</th>" in text
+    assert 'data-market="UK"' in text and "f-market" in text.split("<script>")[1]
+
+
+@pytest.mark.unit
+def test_screen_page_renders_a_csv_without_market_columns(tmp_path):
+    import pandas as pd
+
+    client, app, paths = _client(tmp_path)
+    paths.screens.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame([{"ticker": "OLD", "sector": "Technology", "mf_position": 1,
+                   "passes_filters": True}]).to_csv(paths.screens / "screen_2026-10-21.csv", index=False)
+    r = client.get("/screen")
+    assert r.status_code == 200 and 'data-market=""' in r.text
+
+
+@pytest.mark.unit
+def test_stock_page_shows_the_quote_currency(tmp_path):
+    client, app, paths = _client(tmp_path, price_fn={"HRB": 800.0}.get)
+    _review(paths, "2026-11-07", [dict(ROW, currency="GBp")])
+    assert "Price 800.00 GBp" in client.get("/stock/HRB").text
+    client2, app2, paths2 = _client(tmp_path / "b", price_fn={"HRB": 800.0}.get)
+    _review(paths2, "2026-11-07", [ROW])
+    assert "Price 800.00 ·" in client2.get("/stock/HRB").text

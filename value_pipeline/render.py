@@ -29,7 +29,7 @@ def actions_markdown(date: str, actions: list[Action], summary: dict, *, reports
                      names: dict[str, str] | None = None,
                      committee: tuple[committee_mod.Committee, list[str]] | None = None,
                      committee_unavailable: str | None = None, max_weight: float = 0.10,
-                     themes_report: str | None = None) -> str:
+                     themes_report: str | None = None, foreign: bool = False) -> str:
     def who(ticker: str) -> str:
         return f"{names[ticker]} ({ticker})" if names and names.get(ticker) else ticker
 
@@ -39,6 +39,8 @@ def actions_markdown(date: str, actions: list[Action], summary: dict, *, reports
     lines = [f"# Value review {date}" + (" (DRY RUN: fake ratings, no agent calls)" if dry_run else ""), ""]
     lines.append("These are suggestions. Nothing was traded: place orders at your broker, then record "
                  "each fill with `buy` / `sell`. Place sells and trims before buys; buy amounts assume their proceeds.")
+    if foreign:
+        lines.append("Prices in each stock's quote currency; Nordnet charges FX and, in the UK and Ireland, stamp duty.")
     lines.append("")
 
     lines += ["## Portfolio", ""]

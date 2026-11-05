@@ -107,6 +107,9 @@ def pipeline_note(row: dict | None) -> str:
         return ""
     hints = row.get("hints") if isinstance(row.get("hints"), str) and row.get("hints") else _hint(row)
     parts = []
+    country, quote = row.get("country"), row.get("quote_currency")
+    if isinstance(country, str) and country and country != "US" and quote != "USD":
+        parts.append(f"{country} ({row.get('market')}), quoted in {quote}; screen figures in dollars")
     if hints:
         theme = row.get("theme")
         parts.append(f"lane hint {', '.join(hints.split(';'))}"
@@ -611,7 +614,8 @@ def _run(paths: Paths, cfg: dict, *, yes: bool, dry_run: bool, today: str | None
                                  max_weight=cfg["sizing"]["max_position_weight"],
                                  themes_report=themes_report.name
                                  if themes_report and (set(discovered) & set(tickers) or scares)
-                                 else None)
+                                 else None,
+                                 foreign=any(r.get("currency") not in (None, "USD") for r in rows))
     (out_dir / "ACTIONS.md").write_text(md, encoding="utf-8")
     (out_dir / "ACTIONS.html").write_text(render.actions_html(md, f"Value review {today}"), encoding="utf-8")
     # Written whole: the website reads these files while a review may be finishing.

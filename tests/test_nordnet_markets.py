@@ -587,3 +587,35 @@ def test_unserialisable_refresh_is_a_warned_cache_hit(tmp_path, monkeypatch, cap
         data = market_data.fundamentals("ABC", paths, cache_days=7, price_days=1)
     assert data["price"] == 10.0 and "price_refreshed" not in data
     assert "price refresh failed for ABC" in caplog.text
+
+
+@pytest.mark.unit
+def test_pipeline_note_names_the_market_and_currency():
+    from value_pipeline import review
+
+    note = review.pipeline_note({"country": "UK", "market": "ftse100", "quote_currency": "GBp",
+                                 "hints": "compounder", "move_3m": -0.12})
+    assert note.startswith("UK (ftse100), quoted in GBp; screen figures in dollars; lane hint compounder")
+    assert not review.pipeline_note({"country": "US", "quote_currency": "USD", "hints": "compounder"}).startswith("US")
+    assert review.pipeline_note({"country": "UK", "market": "ftse100", "quote_currency": "GBp"}) \
+        == "UK (ftse100), quoted in GBp; screen figures in dollars."
+    assert review.pipeline_note({"hints": "compounder"}) == "lane hint compounder."
+
+
+@pytest.mark.unit
+def test_actions_header_mentions_fx_for_foreign_names():
+    from value_pipeline import render
+
+    summary = {"total_value": 1000.0, "cash": 1000.0, "target_weight": 0.1, "cash_after": 1000.0}
+    kw = dict(reports={}, comparison=None, cost=0.0, failures=[], dry_run=False)
+    sentence = "Nordnet charges FX and, in the UK and Ireland, stamp duty."
+    assert sentence in render.actions_markdown("2026-11-05", [], summary, foreign=True, **kw)
+    assert sentence not in render.actions_markdown("2026-11-05", [], summary, **kw)
+
+
+@pytest.mark.unit
+def test_backtest_report_says_us_only():
+    from value_pipeline import backtest
+
+    from tests.test_lane_backtest import _fake_result
+    assert "S&P 500 and 400 only" in backtest.markdown(_fake_result())

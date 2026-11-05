@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
 <h1>{{ data.ticker }}</h1>
-<p class="muted">Price {{ "{:,.2f}".format(price) if price is not none else "unavailable" }} · <a href="/trade?ticker={{ data.ticker }}">record a trade</a></p>
+<p class="muted">Price {{ "{:,.2f}".format(price) if price is not none else "unavailable" }}{% if data.currency and price is not none %} {{ data.currency }}{% endif %} · <a href="/trade?ticker={{ data.ticker }}">record a trade</a></p>
 {% if chart %}<h2>Intrinsic value over time</h2>{{ chart | safe }}{% endif %}
 <h2>Ratings</h2>
 <div class="table"><table>

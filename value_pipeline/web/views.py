@@ -73,8 +73,9 @@ def stock_history(paths: Paths, ticker: str) -> dict:
         if not match.empty:
             screen = {k: (None if pd.isna(v) else v) for k, v in match.iloc[0].to_dict().items()}
     trades = [t for t in pfmod.read_trades(paths) if t["ticker"] == ticker]
+    currency = next((r["currency"] for r in reviews if r.get("currency")), None)
     return {"ticker": ticker, "reviews": reviews, "latest": reviews[0] if reviews else None,
-            "screen": screen, "trades": trades}
+            "currency": currency, "screen": screen, "trades": trades}
 
 
 def safe_report_path(paths: Paths, rel: str) -> Path | None:
@@ -114,7 +115,8 @@ def _csv_records(path: Path) -> list[dict]:
 
 _SCREEN_COLUMNS = ("ticker", "sector", "mf_position", "earnings_yield_avg", "roic_avg", "fcf_yield", "fscore",
                    "altman_z", "mos_formula", "expected_return", "superinvestors", "superinvestor_names", "trend", "passes_filters",
-                   "fail_reasons", "accounting_flags", "lane_hint", "hints", "sector_scare")
+                   "fail_reasons", "accounting_flags", "lane_hint", "hints", "sector_scare",
+                   "market", "country", "quote_currency")
 
 
 def screen_table(paths: Paths) -> dict | None:
@@ -130,6 +132,7 @@ def screen_table(paths: Paths) -> dict | None:
         "date": day,
         "rows": rows,
         "sectors": sorted({r["sector"] for r in rows if r.get("sector")}),
+        "markets": sorted({r["country"] for r in rows if isinstance(r.get("country"), str) and r["country"]}),
         "excluded": _csv_records(paths.screens / f"screen_{day}_excluded.csv"),
         "skipped": _csv_records(paths.screens / f"screen_{day}_skipped.csv"),
     }

@@ -2,7 +2,7 @@
 
 A weekly routine on top of the value-investing TradingAgents agents (see `VALUE_INVESTING.md`):
 
-1. **Screen** the S&P 500 + S&P 400 for good, cheap, financially healthy businesses (Magic Formula ranked).
+1. **Screen** every Nordnet market (S&P 500 and 400, UK, Europe, Canada; see The screen) for good, cheap, financially healthy businesses (Magic Formula ranked).
 2. **Review**: run the agents on every stock you own and on the top new candidates.
 3. **Act**: get a short action list (`ACTIONS.md` / `ACTIONS.html`) with amounts and share counts.
 
@@ -53,7 +53,7 @@ uv run python -m value_pipeline status
 | `web [--port 8765] [--no-browser]` | Open the local website (this Mac only): dashboard, trades, history with undo, reviews and reports, stock pages, the screen, running jobs and settings. Stop with Ctrl+C. |
 | `calibration [--horizon {30,90,180,365}]` | Every past decision against the closes that followed it, then the scores and one verdict per lane (see Calibration below). Fetches and caches the closes it has not seen. Default horizon 180 days. |
 | `backtest [--from YEAR] [--to YEAR] [--holds 1,3] [--tickers A,B] [--refresh] [--no-fetch]` | The lane rules replayed on past cohort dates against SPY (see Backtest below). No agents. Writes `reports/backtest/backtest_<date>.md` and `_picks.csv` and prints the verdict. |
-| `screen [--top N]` | Rank the universe; writes `data/screens/screen_YYYY-MM-DD.csv`. |
+| `screen [--top N]` | Rank the universe (every market in `universe.indexes`); writes `data/screens/screen_YYYY-MM-DD.csv`. |
 | `review [--yes] [--dry-run] [--candidates N]` | Run the agents and write the action list. |
 | `run-all [--yes] [--dry-run]` | `screen`, then the theme scan (when `lanes.themes` names any), then `review` with the scan's inflection candidates. |
 | `themes` | The theme scan alone (see Themes below): one quick model call per theme in `lanes.themes`, the named tickers fetched and checked, `reports/themes_<date>.md` written and printed. No review. |
@@ -63,7 +63,35 @@ Use `--data-dir PATH` before the command (or `VALUE_PIPELINE_DATA`) to keep data
 
 ## The screen
 
-- **Universe**: S&P 500 + S&P 400 from Wikipedia (cached in `data/universe.csv` when Wikipedia is down). Financials, real estate and utilities are excluded, because EBIT/EV, ROIC and the Z-Score don't describe them; they are listed in `screen_<date>_excluded.csv`.
+- **Universe**: the markets named in `universe.indexes`, by default every Nordnet market below, from Wikipedia (cached in `data/universe.csv` when Wikipedia is down or returns fewer than 10 tickers for a market). A company listed in two markets is kept once. The ATX has no usable Wikipedia table, so its 20 members are a static list in `market_data.py` (`ATX_MEMBERS`), to be checked yearly. Financials, real estate and utilities are excluded, because EBIT/EV, ROIC and the Z-Score don't describe them; they are listed in `screen_<date>_excluded.csv`.
+
+| Key | Country | Wikipedia list | Yahoo suffix |
+|---|---|---|---|
+| `sp500` | US | List_of_S&P_500_companies |  |
+| `sp400` | US | List_of_S&P_400_companies |  |
+| `ftse100` | UK | FTSE_100_Index | `.L` |
+| `ftse250` | UK | FTSE_250_Index | `.L` |
+| `dax` | Germany | DAX | `.DE` |
+| `mdax` | Germany | MDAX | `.DE` |
+| `cac40` | France | CAC_40 | `.PA` |
+| `cacnext20` | France | CAC_Next_20 | `.PA` |
+| `aex` | Netherlands | AEX_index | `.AS` |
+| `amx` | Netherlands | AMX_index | `.AS` |
+| `bel20` | Belgium | BEL_20 | `.BR` |
+| `psi` | Portugal | PSI-20 | `.LS` |
+| `iseq20` | Ireland | ISEQ_20 | `.IR` |
+| `ftsemib` | Italy | FTSE_MIB | `.MI` |
+| `smi` | Switzerland | Swiss_Market_Index | `.SW` |
+| `smim` | Switzerland | SMI_MID | `.SW` |
+| `atx` | Austria | static list in `market_data.py` (check yearly) | `.VI` |
+| `ibex35` | Spain | IBEX_35 | `.MC` |
+| `omxs30` | Sweden | OMX_Stockholm_30 | `.ST` |
+| `omxc25` | Denmark | OMX_Copenhagen_25 | `.CO` |
+| `omxh25` | Finland | OMX_Helsinki_25 | `.HE` |
+| `obx` | Norway | OBX_Index | `.OL` |
+| `tsxcomp` | Canada | S&P/TSX_Composite_Index | `.TO` |
+
+- **Currency**: each statement and price is converted to dollars at that day's FX, and the dollar figures drive the ranking, the filters, market cap and EV. Price, per-share values and the entry price stay in the stock's quote unit (`GBp` pence for London, `EUR`, `USD`, ...); screen rows carry `market`, `country`, `quote_currency` and `fx_quote`, and a review's note and the stock page name the quote currency. Prices refresh every `screen.price_days` (1) days; statements are cached `screen.cache_days` (7).
 - **Metrics**, from Yahoo annual statements (cached per ticker for 7 days in `data/cache/`):
   - Earnings yield = EBIT / EV; ROIC = EBIT / (net working capital + net PP&E). Working capital excludes cash and is floored at zero, as in Greenblatt.
   - The same two averaged over up to 5 years (`earnings_yield_avg`, `roic_avg`), plus the worst year's ROIC (`roic_min`) and the yearly change in share count (`dilution_per_year`).
@@ -258,7 +286,7 @@ rule's picks: `value` (top 30 by the Magic Formula with a margin of safety of at
 Overweight price bars), `compounder_record` (hint and record bars, no price bar),
 `compounder_hint`, `inflection` and `dislocation`. Each pick is held 1 and 3 years, equal
 weight, dividends reinvested, and compared with SPY and with the equal-weight universe of that
-cohort. No agent is called, nothing trades and no bar is changed.
+cohort. No agent is called, nothing trades and no bar is changed. The backtest covers the S&P 500 and 400 only: non-US companies have no point-in-time filings (EDGAR), so the UK and European markets are screened live but not replayed.
 
 What it cannot test or correct:
 
