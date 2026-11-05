@@ -15,6 +15,14 @@ def _money(x: float | None) -> str:
     return "–" if x is None else f"${x:,.2f}"
 
 
+def _quoted(x: float | None, d) -> str:
+    """A per-share figure in the stock's quote unit: dollars unless the decision says otherwise."""
+    if x is None:
+        return "–"
+    currency = getattr(d, "currency", None)
+    return f"${x:,.2f}" if not currency or currency == "USD" else f"{x:,.2f} {currency}"
+
+
 def _pct(x: float | None) -> str:
     return "–" if x is None else f"{x:.1%}"
 
@@ -101,7 +109,7 @@ def actions_markdown(date: str, actions: list[Action], summary: dict, *, reports
         for a in new:
             d = a.decision
             shares = "–" if a.shares is None else f"{a.shares:g}"
-            values = f"{_money(d.intrinsic_value)} / {_money(d.formula_value)}"
+            values = f"{_quoted(d.intrinsic_value, d)} / {_quoted(d.formula_value, d)}"
             flags = "".join(f" **⚑ {f}**" for f in a.flags)
             lines.append(f"| {who(a.ticker)}{_hint_note(a.decision)}{flags} | {a.rating} | {a.lane} | {_money(a.amount)} | {shares} | {values} | {_pct(d.margin_of_safety)} | {_er(d.expected_return, '–')} | "
                          f"{d.fscore if d.fscore is not None else '–'} | {d.trend or '–'} | {_link(reports, a.ticker)} |")

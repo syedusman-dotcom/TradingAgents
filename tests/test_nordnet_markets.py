@@ -617,6 +617,22 @@ def test_actions_header_mentions_fx_for_foreign_names():
 
 
 @pytest.mark.unit
+def test_actions_table_values_in_the_quote_unit():
+    from value_pipeline import render
+    from value_pipeline.actions import Decision, plan
+
+    uk = Decision("IMB.L", "Buy", 3020.0, intrinsic_value=4376.1, formula_value=5749.0,
+                  margin_of_safety=0.31, currency="GBp", fx_to_usd=0.013464)
+    us = Decision("DECK", "Buy", 100.0, intrinsic_value=140.0, formula_value=150.0, margin_of_safety=0.3)
+    actions, summary = plan([uk, us], cash=50_000.0, sizing=config.DEFAULTS["sizing"])
+    md = render.actions_markdown("2026-11-05", actions, summary, reports={}, comparison=None, cost=0.0,
+                                 failures=[], dry_run=False)
+    assert "| 4,376.10 GBp / 5,749.00 GBp |" in md
+    assert "| $140.00 / $150.00 |" in md
+    assert "$4,376" not in md
+
+
+@pytest.mark.unit
 def test_backtest_report_says_us_only():
     from tests.test_lane_backtest import _fake_result
     from value_pipeline import backtest
