@@ -347,21 +347,26 @@ def load_closes(paths: Paths, tickers: list[str], start: str, fetch: bool = True
                 progress=None) -> tuple[pd.DataFrame, pd.Series]:
     """Adjusted closes (splits and dividends in) of ``tickers`` on SPY's trading days from
     ``WARM_ROWS`` days before ``start``, from the backtest price cache (``fetch`` fills a missing
-    cache from Yahoo), and SPY's adjusted closes on the same days. Short gaps inside a history
-    are filled (see ``_fill_gaps``). ``attrs["filled"]`` holds the cells filled per ticker and
-    ``attrs["missing"]`` the tickers with no close in the span; neither is a column."""
+    cache from Yahoo and refetches one that ends more than ``PRICE_SLACK_DAYS`` before SPY's last
+    close), and SPY's adjusted closes on the same days. Short gaps inside a history are filled
+    (see ``_fill_gaps``). ``attrs["filled"]`` holds the cells filled per ticker,
+    ``attrs["missing"]`` the tickers with no close in the span and ``attrs["short"]`` those whose
+    closes still end more than ``PRICE_SLACK_DAYS`` before SPY's; none is a column."""
     spy_hist = backtest.price_history(BENCHMARK, paths, fetch=fetch)
     if spy_hist is None:
         raise ValueError(f"no {BENCHMARK} price history in the backtest cache; run without --no-fetch")
     spy = _adj_closes(spy_hist).dropna()
     first = max(0, int(spy.index.searchsorted(pd.Timestamp(start))) - WARM_ROWS)
     spy = spy.iloc[first:]
-    columns, missing = {}, []
+    stale = (spy.index[-1] - timedelta(days=backtest.PRICE_SLACK_DAYS)).date().isoformat()
+    columns, missing, short = {}, [], []
     for i, ticker in enumerate(tickers, start=1):
         if progress:
             progress(i, len(tickers), ticker)
-        fetched = fetch and not backtest._price_path(ticker, paths).exists()
-        hist = backtest.price_history(ticker, paths, fetch=fetch)
+        path = backtest._price_path(ticker, paths)
+        fetched = fetch and backtest._needs_fetch(backtest._read_prices(path) if path.exists() else None,
+                                                  False, stale)
+        hist = backtest.price_history(ticker, paths, fetch=fetch, stale_before=stale)
         if fetched:
             market_data.throttle(DEFAULTS["screen"]["throttle_seconds"])
         series = None if hist is None else _adj_closes(hist).reindex(spy.index)
@@ -369,8 +374,10 @@ def load_closes(paths: Paths, tickers: list[str], start: str, fetch: bool = True
             missing.append(ticker)
             continue
         columns[ticker] = series
+        if series.last_valid_index() < pd.Timestamp(stale):
+            short.append(ticker)
     closes, filled = _fill_gaps(pd.DataFrame(columns, index=spy.index, dtype=float))
-    closes.attrs = {"filled": filled, "missing": missing}
+    closes.attrs = {"filled": filled, "missing": missing, "short": short}
     return closes, spy
 
 
@@ -497,6 +504,7 @@ def run(paths: Paths, cfg: dict, today: date | None = None, fetch: bool = True, 
         "results": results, "trades": trades, "sensitivity": sensitivity, "verdicts": verdicts,
         "filled": {"cells": sum(filled.values()), "tickers": len(filled)},
         "missing": list(closes.attrs.get("missing", [])),
+        "short": list(closes.attrs.get("short", [])),
         "quality_from": min(lane["rows"], default=None), "joins_known": bool(added),
     }
 
@@ -553,8 +561,18 @@ def _limits(result: dict) -> list[str]:
         "bought and held on its adjusted closes over the identical span is the benchmark.",
         f"- **Gaps**: {_plural(filled['cells'], 'missing close')} in {_plural(filled['tickers'], 'ticker')} "
         f"took the close before them (runs of at most {GAP_ROWS} trading days inside a ticker's history); "
-        "longer gaps stay empty and block that name's signals.",
+        "longer gaps stay empty and block that name's signals. A filled day carries the prior close, so "
+        "an order due that day fills at that carried price.",
+        f"- **Cash runs out before the slots**: with each position capped at {_pct(s.max_position_weight, 0)} "
+        "of equity, about five full positions use the cash, so later entries are small leftovers that still "
+        "take a slot; the `max_positions` 5 row of the sensitivity table shows the system without them.",
     ]
+    short = result.get("short") or []
+    if short:
+        shown = ", ".join(short[:30]) + (" …" if len(short) > 30 else "")
+        lines.append(f"- **Stale prices**: {_plural(len(short), 'ticker')} end more than "
+                     f"{backtest.PRICE_SLACK_DAYS} days before SPY's last close ({shown}); a position "
+                     "held at their last close cannot be sold and keeps its slot. Run without --no-fetch.")
     if missing:
         shown = ", ".join(missing[:30]) + (" …" if len(missing) > 30 else "")
         lines.append(f"- **No prices** in the span for {_plural(len(missing), 'ticker')}: {shown}.")

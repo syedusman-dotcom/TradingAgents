@@ -456,6 +456,36 @@ def test_load_closes_aligns_to_spy_and_fills_short_inside_gaps(tmp_path):
     assert closes.attrs["missing"] == ["NOPE"]
 
 
+def test_load_closes_refetches_a_cache_that_ends_before_spy(tmp_path, monkeypatch):
+    from value_pipeline import backtest
+    from value_pipeline.config import Paths
+
+    paths = Paths(tmp_path / "data")
+    days = pd.bdate_range("2019-01-01", periods=420)
+    _write_prices(paths, "SPY", days, [100.0 + i for i in range(420)])
+    _write_prices(paths, "OLD", days[:380], [10.0 + i for i in range(380)])     # a month short of SPY
+    _write_prices(paths, "NOW", days[:418], [20.0 + i for i in range(418)])     # within the week's slack
+    fetched = []
+
+    def fake_fetch(ticker):
+        fetched.append(ticker)
+        return pd.DataFrame({"date": days, "close": [10.0 + i for i in range(420)],
+                             "adj_close": [5.0 + i / 2 for i in range(420)], "split": 0.0})
+
+    monkeypatch.setattr(backtest, "_fetch_prices", fake_fetch)
+    monkeypatch.setattr(trend.market_data, "throttle", lambda s: None)
+    closes, _ = load_closes(paths, ["OLD", "NOW"], str(days[400].date()), fetch=True)
+    assert fetched == ["OLD"]
+    assert closes["OLD"].last_valid_index() == days[-1]
+    assert closes.attrs["short"] == []
+
+    stale = Paths(tmp_path / "offline")
+    _write_prices(stale, "SPY", days, [100.0 + i for i in range(420)])
+    _write_prices(stale, "OLD", days[:380], [10.0 + i for i in range(380)])
+    closes, _ = load_closes(stale, ["OLD"], str(days[400].date()), fetch=False)
+    assert fetched == ["OLD"] and closes.attrs["short"] == ["OLD"]             # cache only: named, not fetched
+
+
 # --- universes, verdict ----------------------------------------------------------------------
 
 def test_quality_windows_run_from_cohort_to_cohort_and_the_last_to_the_end():
@@ -513,7 +543,7 @@ def _run_closes(rows: int = 700) -> tuple[pd.DataFrame, pd.Series]:
         steps = rng.normal(0.0008 * (k + 1), 0.015, rows)
         cols[t] = 50.0 * np.cumprod(1 + steps)
     closes = pd.DataFrame(cols, index=idx)
-    closes.attrs = {"filled": {"BBB": 2}, "missing": ["ZZZ"]}
+    closes.attrs = {"filled": {"BBB": 2}, "missing": ["ZZZ"], "short": ["YYY"]}
     spy = pd.Series(200.0 * np.cumprod(1 + rng.normal(0.0004, 0.01, rows)), index=idx)
     return closes, spy
 
@@ -565,6 +595,7 @@ def test_run_reports_every_system_and_universe(tmp_path, monkeypatch):
     for m in result["results"].values():
         assert {"cagr", "max_drawdown", "spy_cagr", "years_gained"} <= set(m)
     assert result["filled"] == {"cells": 2, "tickers": 1} and result["missing"] == ["ZZZ"]
+    assert result["short"] == ["YYY"]
     # quality trades only in AAA and BBB; CCC trades in `all` only from its join date
     assert {t["ticker"] for t in result["trades"][("breakout_20_10", "quality")]} <= {"AAA", "BBB"}
     assert all(t["signal_date"] >= date(2015, 3, 1)
@@ -590,7 +621,8 @@ def test_report_states_the_verdict_and_the_limits(tmp_path, monkeypatch):
     for v in result["verdicts"].values():
         assert v["sentence"] in text
     for want in ("survivorship", "next close", "fractional", "close-only", "shorted",
-                 "2 missing closes in 1 ticker", "ZZZ"):
+                 "2 missing closes in 1 ticker", "ZZZ", "Stale prices", "YYY", "carried price",
+                 "max_positions` 5 row"):
         assert want in text.lower() or want in text, want
     assert "| Year | System | SPY |" in text
     years = text.split("| Year | System | SPY |")[1].split("\n## ")[0]
