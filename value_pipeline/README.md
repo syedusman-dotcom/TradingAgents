@@ -428,6 +428,10 @@ launchctl bootout gui/$(id -u)/local.value-pipeline
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.value-pipeline.plist
 ```
 
+### A message when there is a buy
+
+Both scheduled scripts end with `python -m value_pipeline publish --push`: it writes the day's buys, sells and trims (ticker, shares, dollar amount, price and entry price in the quote unit; never the portfolio's value or cash) to `value_pipeline/data/status/latest.md` and pushes that file to the private GitHub repo `syedusman-dotcom/value-status`. A Claude routine (claude.ai/code/routines) clones that repo Monday to Saturday after the review and messages you when `latest.md` has a buy, sell or trim for the day. Setup, once: create the private repo (`gh repo create syedusman-dotcom/value-status --private`), make `value_pipeline/data/status` a clone of it (`git init -b main`, `git remote add origin https://github.com/syedusman-dotcom/value-status.git`), and create the routine. `python -m value_pipeline publish` without `--push` prints today's file. Without the clone the file is still written and the push is skipped with a warning in the log.
+
 ## Tests
 
 ```bash

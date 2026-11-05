@@ -50,6 +50,8 @@ case "$mode" in
       uv run python -m value_pipeline watch --no-notify >> "$log" 2>&1 || true
       # Refresh the cached closes so the Calibration page is current; never fails the run.
       uv run python -m value_pipeline calibration >> "$log" 2>&1 || true
+      # The day's buys, sells and trims for the Claude routine that messages the user.
+      uv run python -m value_pipeline publish --push >> "$log" 2>&1 || true
       notify "Value review done" "Open the website or value_pipeline/data/reports for ACTIONS.md"
     else
       notify "Value review failed" "Nothing to act on. See $log"
