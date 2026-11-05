@@ -615,7 +615,6 @@ def test_actions_header_mentions_fx_for_foreign_names():
 
 @pytest.mark.unit
 def test_backtest_report_says_us_only():
-    from value_pipeline import backtest
-
     from tests.test_lane_backtest import _fake_result
+    from value_pipeline import backtest
     assert "S&P 500 and 400 only" in backtest.markdown(_fake_result())
