@@ -15,6 +15,9 @@ class FakeResponse:
     def __init__(self, text: str):
         self.text = text
 
+    def raise_for_status(self):
+        pass
+
 
 def members_table(rows, head=("Ticker", "Company")) -> str:
     body = "".join(f"<tr><td>{a}</td><td>{b}</td></tr>" for a, b in rows)
@@ -62,6 +65,8 @@ def test_universe_normalises_ticker_codes():
     assert market_data.normalise_code("BT.A", uk) == "BT-A.L"
     assert market_data.normalise_code("NOVO B", dk) == "NOVO-B.CO"
     assert market_data.normalise_code("BRK.B", us) == "BRK-B"
+    assert market_data.normalise_code("Euronext Dublin:\xa0A5G", market_data.MARKETS["iseq20"]) \
+        == "A5G.IR"
 
 
 @pytest.mark.unit
@@ -143,7 +148,7 @@ def test_universe_falls_back_to_the_cache(tmp_path, monkeypatch):
 def test_markets_table_matches_the_spec():
     assert {k: m.suffix for k, m in market_data.MARKETS.items()} == {
         "sp500": "", "sp400": "", "ftse100": ".L", "ftse250": ".L", "dax": ".DE",
-        "mdax": ".DE", "cac40": ".PA", "sbf120": ".PA", "aex": ".AS", "amx": ".AS",
+        "mdax": ".DE", "cac40": ".PA", "cacnext20": ".PA", "aex": ".AS", "amx": ".AS",
         "bel20": ".BR", "psi": ".LS", "iseq20": ".IR", "ftsemib": ".MI", "smi": ".SW",
         "smim": ".SW", "atx": ".VI", "ibex35": ".MC", "omxs30": ".ST", "omxc25": ".CO",
         "omxh25": ".HE", "obx": ".OL", "tsxcomp": ".TO",
@@ -156,3 +161,56 @@ def test_markets_table_matches_the_spec():
 @pytest.mark.unit
 def test_default_indexes_are_every_nordnet_market():
     assert set(config.DEFAULTS["universe"]["indexes"]) == set(market_data.MARKETS)
+
+
+@pytest.mark.unit
+def test_under_ten_market_keeps_its_cached_rows(tmp_path, monkeypatch):
+    paths = Paths(tmp_path)
+    cached = pd.DataFrame({
+        "ticker": [f"C{i}.AS" for i in range(12)], "name": [f"Cached {i}" for i in range(12)],
+        "sector": None, "index": "aex", "market": "aex", "country": "Netherlands"})
+    cached.to_csv(paths.universe, index=False)
+    serve(monkeypatch, {"FTSE_100": members_table(many(10, "U")),
+                        "AEX": members_table(many(3, "N"))})
+    df = market_data.universe(paths, ["ftse100", "aex"])
+    assert (df["market"] == "aex").sum() == 12 and (df["market"] == "ftse100").sum() == 10
+    assert len(pd.read_csv(paths.universe)) == 22
+
+
+@pytest.mark.unit
+def test_one_failing_market_does_not_discard_the_others(tmp_path, monkeypatch):
+    good = members_table(many(10, "U"))
+
+    def get(url, **k):
+        if "AEX" in url:
+            raise OSError("down")
+        return FakeResponse(good)
+    monkeypatch.setattr(market_data.requests, "get", get)
+    df = market_data.universe(Paths(tmp_path), ["ftse100", "aex"])
+    assert set(df["market"]) == {"ftse100"} and len(df) == 10
+
+
+@pytest.mark.unit
+def test_old_cache_without_market_columns_is_filled(tmp_path, monkeypatch):
+    paths = Paths(tmp_path)
+    pd.DataFrame({"ticker": ["A"], "name": ["A Co"], "sector": ["X"], "index": ["sp500"]}) \
+        .to_csv(paths.universe, index=False)
+    monkeypatch.setattr(market_data.requests, "get",
+                        lambda url, **k: (_ for _ in ()).throw(OSError("offline")))
+    df = market_data.universe(paths, ["dax"])
+    assert {"market", "country"} <= set(df.columns) and list(df["ticker"]) == ["A"]
+
+
+@pytest.mark.unit
+def test_a_short_table_is_skipped_for_the_next_one(tmp_path, monkeypatch):
+    html = members_table(many(3, "Y"), head=("Year", "Company")) + members_table(many(12))
+    monkeypatch.setattr(market_data.requests, "get", lambda url, **k: FakeResponse(html))
+    assert len(market_data.fetch_market(market_data.MARKETS["dax"])) == 12
+
+
+@pytest.mark.unit
+def test_atx_is_static_and_needs_no_request(monkeypatch):
+    monkeypatch.setattr(market_data.requests, "get",
+                        lambda url, **k: (_ for _ in ()).throw(AssertionError("network")))
+    df = market_data.fetch_market(market_data.MARKETS["atx"])
+    assert len(df) == 20 and df["ticker"].str.endswith(".VI").all()

@@ -49,6 +49,7 @@ class Market:
     pages: tuple[str, ...]          # Wikipedia pages, tried in order; the first usable table wins
     suffix: str = ""                # Yahoo exchange suffix, e.g. ".L"
     gics_column: str | None = None  # only the S&P lists carry a GICS sector worth keeping
+    tickers: tuple[tuple[str, str], ...] = ()   # (code, name) when no Wikipedia page has them
 
 
 _WIKI = "https://en.wikipedia.org/wiki/"
@@ -59,6 +60,17 @@ def _market(key: str, country: str, page: str, suffix: str = "", *extra: str,
     return Market(key, country, tuple(_WIKI + p for p in (page, *extra)), suffix, gics)
 
 
+# ATX members 2026-11-05 (Wikipedia has names only); check yearly.
+ATX_MEMBERS = (
+    ("EBS", "Erste Group Bank"), ("VER", "Verbund"), ("OMV", "OMV"), ("BG", "BAWAG Group"),
+    ("ANDR", "Andritz"), ("WIE", "Wienerberger"), ("VOE", "voestalpine"),
+    ("RBI", "Raiffeisen Bank International"), ("POS", "Porr"), ("CAI", "CA Immo"),
+    ("EVN", "EVN"), ("ATS", "AT&S"), ("POST", "Österreichische Post"),
+    ("VIG", "Vienna Insurance Group"), ("LNZ", "Lenzing"), ("UQA", "Uniqa Insurance Group"),
+    ("SBO", "Schoeller-Bleckmann Oilfield Equipment"), ("IIA", "Immofinanz"),
+    ("STR", "Strabag"), ("DOC", "DO & CO"),
+)
+
 MARKETS: dict[str, Market] = {m.key: m for m in (
     _market("sp500", "US", "List_of_S%26P_500_companies", gics="GICS Sector"),
     _market("sp400", "US", "List_of_S%26P_400_companies", gics="GICS Sector"),
@@ -67,7 +79,7 @@ MARKETS: dict[str, Market] = {m.key: m for m in (
     _market("dax", "Germany", "DAX", ".DE"),
     _market("mdax", "Germany", "MDAX", ".DE"),
     _market("cac40", "France", "CAC_40", ".PA"),
-    _market("sbf120", "France", "SBF_120", ".PA"),
+    _market("cacnext20", "France", "CAC_Next_20", ".PA"),
     _market("aex", "Netherlands", "AEX_index", ".AS"),
     _market("amx", "Netherlands", "AMX_index", ".AS"),
     _market("bel20", "Belgium", "BEL_20", ".BR"),
@@ -76,7 +88,7 @@ MARKETS: dict[str, Market] = {m.key: m for m in (
     _market("ftsemib", "Italy", "FTSE_MIB", ".MI"),
     _market("smi", "Switzerland", "Swiss_Market_Index", ".SW"),
     _market("smim", "Switzerland", "SMI_MID", ".SW"),
-    _market("atx", "Austria", "Austrian_Traded_Index", ".VI"),
+    Market("atx", "Austria", (), ".VI", None, ATX_MEMBERS),
     _market("ibex35", "Spain", "IBEX_35", ".MC"),
     _market("omxs30", "Sweden", "OMX_Stockholm_30", ".ST"),
     _market("omxc25", "Denmark", "OMX_Copenhagen_25", ".CO"),
@@ -86,7 +98,7 @@ MARKETS: dict[str, Market] = {m.key: m for m in (
             "List_of_companies_listed_on_the_S%26P/TSX_Composite_Index"),
 )}
 
-TICKER_COLUMNS = ("ticker", "symbol", "code", "ticker symbol")
+TICKER_COLUMNS = ("ticker", "symbol", "code", "ticker symbol", "mnem code")
 NAME_COLUMNS = ("company", "name", "security", "constituent")
 MIN_TICKERS = 10
 _DROPPED_WORDS = {"plc", "nv", "sa", "ag", "se", "ab", "asa", "as", "oyj", "spa", "group",
@@ -95,7 +107,7 @@ _DROPPED_WORDS = {"plc", "nv", "sa", "ag", "se", "ab", "asa", "as", "oyj", "spa"
 
 def normalise_code(code: str, market: Market) -> str:
     """A Wikipedia ticker cell as Yahoo writes it: exchange prefix/suffix off, dashes, suffix on."""
-    code = re.sub(r"^[A-Z]+:\s*", "", str(code).strip())
+    code = re.sub(r"^[^:]+:\s*", "", str(code).strip())
     if market.suffix and code.endswith(market.suffix):
         code = code[: -len(market.suffix)]
     code = code.removesuffix(".")
@@ -117,12 +129,23 @@ def _column(table: pd.DataFrame, wanted: tuple[str, ...]):
 
 
 def fetch_market(market: Market) -> pd.DataFrame:
-    """One market's members as ticker, name, sector, market, country; empty when no page has a table."""
+    """One market's members as ticker, name, sector, market, country; empty when no page has a table.
+
+    A table is usable with a ticker column, a name column and at least MIN_TICKERS rows.
+    A failing request raises.
+    """
+    cols = ["ticker", "name", "sector", "market", "country"]
+    if market.tickers:
+        frame = pd.DataFrame(market.tickers, columns=["ticker", "name"])
+        frame["ticker"] = [normalise_code(t, market) for t in frame["ticker"]]
+        frame["sector"], frame["market"], frame["country"] = None, market.key, market.country
+        return frame[cols]
     for page in market.pages:
-        html = requests.get(page, headers=HEADERS, timeout=30).text
-        for table in pd.read_html(StringIO(html)):
+        response = requests.get(page, headers=HEADERS, timeout=30)
+        response.raise_for_status()
+        for table in pd.read_html(StringIO(response.text)):
             tick, name = _column(table, TICKER_COLUMNS), _column(table, NAME_COLUMNS)
-            if tick is None or name is None:
+            if tick is None or name is None or len(table) < MIN_TICKERS:
                 continue
             gics = _column(table, (market.gics_column.lower(),)) if market.gics_column else None
             frame = pd.DataFrame({
@@ -133,48 +156,67 @@ def fetch_market(market: Market) -> pd.DataFrame:
             frame["ticker"] = [normalise_code(t, market) for t in frame["ticker"]]
             frame["market"], frame["country"] = market.key, market.country
             return frame.reset_index(drop=True)
-    return pd.DataFrame(columns=["ticker", "name", "sector", "market", "country"])
+    return pd.DataFrame(columns=cols)
+
+
+UNIVERSE_COLUMNS = ["ticker", "name", "sector", "index", "market", "country"]
+
+
+def _cached_universe(paths: Paths) -> pd.DataFrame | None:
+    if not paths.universe.exists():
+        return None
+    cached = pd.read_csv(paths.universe)
+    for col in UNIVERSE_COLUMNS:
+        if col not in cached.columns:
+            cached[col] = None
+    return cached
 
 
 def universe(paths: Paths, indexes: list[str]) -> pd.DataFrame:
     """Members of every listed market as ticker, name, sector, index, market, country.
 
-    ``index`` equals ``market``. Falls back to the cached CSV when the lists cannot be fetched.
+    ``index`` equals ``market``. A market that cannot be fetched or gives under MIN_TICKERS
+    tickers keeps its rows from the cached CSV; with nothing fetched at all the cache is returned.
     """
     for key in indexes:
         if key not in MARKETS:
             raise ValueError(f"unknown universe.indexes entry: {key}")
-    try:
-        seen_names: dict[str, str] = {}
-        seen_tickers: set[str] = set()
-        rows = []
-        for key in indexes:
+    cached = _cached_universe(paths)
+    seen_names: dict[str, str] = {}
+    seen_tickers: set[str] = set()
+    rows = []
+    for key in indexes:
+        try:
             members = fetch_market(MARKETS[key])
-            if len(members) < MIN_TICKERS:
-                log.warning("%s gave %d tickers (under %d); skipped this run",
-                            key, len(members), MIN_TICKERS)
+        except Exception as exc:  # noqa: BLE001 - a market that fails is treated as empty
+            log.warning("%s: could not fetch (%s)", key, exc)
+            members = pd.DataFrame()
+        if len(members) < MIN_TICKERS:
+            kept = cached[cached["market"] == key] if cached is not None else pd.DataFrame()
+            log.warning("%s: %d tickers from Wikipedia; keeping %d cached rows",
+                        key, len(members), len(kept))
+            members = kept
+        for rec in members.to_dict("records"):
+            nk = name_key(rec["name"])
+            if nk and nk in seen_names:
+                log.info("cross-listing dropped: %s (%s) duplicates %s",
+                         rec["ticker"], key, seen_names[nk])
                 continue
-            for rec in members.to_dict("records"):
-                nk = name_key(rec["name"])
-                if nk and nk in seen_names:
-                    log.info("cross-listing dropped: %s (%s) duplicates %s",
-                             rec["ticker"], key, seen_names[nk])
-                    continue
-                if rec["ticker"] in seen_tickers:
-                    continue
-                seen_tickers.add(rec["ticker"])
-                if nk:
-                    seen_names[nk] = rec["ticker"]
-                rows.append({**rec, "index": key})
-        df = pd.DataFrame(rows, columns=["ticker", "name", "sector", "index", "market", "country"])
-        paths.root.mkdir(parents=True, exist_ok=True)
-        df.to_csv(paths.universe, index=False)
-        return df
-    except Exception as exc:  # noqa: BLE001 - any failure falls back to the cache
-        if paths.universe.exists():
-            log.warning("could not fetch the index lists (%s); using cached %s", exc, paths.universe)
-            return pd.read_csv(paths.universe)
-        raise DataUnavailable(f"could not fetch the index lists and no cache exists: {exc}") from exc
+            if rec["ticker"] in seen_tickers:
+                continue
+            seen_tickers.add(rec["ticker"])
+            if nk:
+                seen_names[nk] = rec["ticker"]
+            rows.append({**rec, "index": key})
+    if not rows:
+        if cached is not None:
+            log.warning("could not fetch the index lists; using cached %s", paths.universe)
+            return cached
+        raise DataUnavailable("could not fetch the index lists and no cache exists")
+    df = pd.DataFrame(rows, columns=UNIVERSE_COLUMNS)
+    paths.root.mkdir(parents=True, exist_ok=True)
+    df.to_csv(paths.universe, index=False)
+    return df
 
 
 # --- fundamentals --------------------------------------------------------------

@@ -22,7 +22,7 @@ def main() -> int:
             continue
         warn = count < market_data.MIN_TICKERS
         failed = failed or warn
-        print(f"{market.key} {market.country} {count}" + (" WARNING" if warn else ""))
+        print(f"{market.key} {market.country} {count}" + (" static" if market.tickers else "") + (" WARNING" if warn else ""))
     return 1 if failed else 0
 
 

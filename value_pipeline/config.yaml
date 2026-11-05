@@ -11,7 +11,7 @@ universe:
     - dax   # Germany
     - mdax   # Germany
     - cac40   # France
-    - sbf120   # France
+    - cacnext20   # France; SBF 120 has no constituents list on Wikipedia; CAC Next 20 is France's next 20
     - aex   # Netherlands
     - amx   # Netherlands
     - bel20   # Belgium
