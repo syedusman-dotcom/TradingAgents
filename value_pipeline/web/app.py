@@ -24,6 +24,7 @@ from value_pipeline import (
     history,
     lock,
     market_data,
+    momentum,
     operations as ops,
     portfolio as pfmod,
     review as reviewmod,
@@ -249,7 +250,11 @@ def create_app(paths: Paths, *, config_path: Path = CONFIG_PATH, price_fn=market
         trend_html = trend.latest_report(paths)
         trend_link = None if trend_html is None else (
             trend_html.stem.removeprefix("trend_"), trend_html.relative_to(paths.reports).as_posix())
-        return render(request, "backtest.html", report=backtest.latest_report(paths), trend=trend_link)
+        momentum_html = momentum.latest_report(paths)
+        momentum_link = None if momentum_html is None else (
+            momentum_html.stem.removeprefix("momentum_"), momentum_html.relative_to(paths.reports).as_posix())
+        return render(request, "backtest.html", report=backtest.latest_report(paths), trend=trend_link,
+                      momentum=momentum_link)
 
     @app.get("/screen", response_class=HTMLResponse)
     def screen(request: Request):

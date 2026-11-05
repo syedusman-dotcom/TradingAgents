@@ -735,3 +735,20 @@ def test_dashboard_shows_the_unit_next_to_a_foreign_price(tmp_path, monkeypatch)
     monkeypatch.setattr(market_data, "quote_fx", lambda t: ("GBp", 0.0135))
     ops.record_buy(paths, "DNLM.L", 10, 900.0)
     assert "900.00 GBp" in client.get("/").text
+
+
+@pytest.mark.unit
+def test_backtest_page_links_the_momentum_report(tmp_path):
+    client, app, paths = _client(tmp_path)
+    assert "Momentum sleeve backtest:" not in client.get("/backtest").text
+    folder = paths.reports / "backtest"
+    folder.mkdir(parents=True)
+    (folder / "momentum_2026-10-01.html").write_text("<html>old</html>")
+    (folder / "momentum_2026-11-05.html").write_text("<html>momentum</html>")
+    (folder / "trend_2026-11-05.html").write_text("<html>trend</html>")
+    r = client.get("/backtest")
+    assert "Momentum sleeve backtest:" in r.text
+    assert 'href="/reports/backtest/momentum_2026-11-05.html"' in r.text
+    assert "momentum_2026-10-01" not in r.text
+    assert 'href="/reports/backtest/trend_2026-11-05.html"' in r.text
+    assert client.get("/reports/backtest/momentum_2026-11-05.html").text == "<html>momentum</html>"

@@ -328,3 +328,123 @@ def test_config_defaults_validate_and_zero_positions_do_not():
     cfg["momentum"]["positions"] = 0
     with pytest.raises(ValueError, match="momentum.positions"):
         validate_config(cfg)
+
+
+# --- report, write, latest_report, command -----------------------------------------------------
+
+def _metrics(period: str, n: int, cagr: float = 0.15) -> dict:
+    first = 2015 if period == "recent" else 2005
+    years = {y: {"system": 0.10, "spy": 0.08} for y in (range(2015, 2018) if period == "recent"
+                                                          else range(2005, 2008))}
+    return {"cagr": cagr, "spy_cagr": 0.10, "universe_cagr": 0.11, "max_drawdown": 0.30,
+            "spy_max_drawdown": 0.25, "years": years, "years_ahead": 3, "years_counted": 3,
+            "trades_per_year": 40.5, "costs_per_year": 0.012, "start": f"{first}-07-01",
+            "end": "2026-11-04" if period == "recent" else "2015-06-30", "positions": n,
+            "cost_per_side": 0.005, "market_filter": True}
+
+
+def _result() -> dict:
+    trade = {"ticker": "AAA", "signal_date": "2016-01-04", "entry_date": "2016-01-05",
+             "entry_price": 10.0, "shares": 5.0, "n": 0.2, "exit_date": "2016-03-01",
+             "exit_price": 12.0, "reason": "rotation", "pnl": 9.0, "ret": 0.18, "days": 56}
+    results = {(p, n): _metrics(p, n) for p in ("recent", "holdout") for n in (10, 20)}
+    return {
+        "generated": "2026-11-05", "settings": {**DEFAULTS["momentum"]}, "members": 503,
+        "used": 480, "periods": {"recent": {"start": "2015-07-01", "end": "2026-11-04",
+                                            "eligible_at_start": 400},
+                                 "holdout": {"start": "2005-01-03", "end": "2015-06-30",
+                                             "eligible_at_start": 300}},
+        "results": results,
+        "trades": {("recent", 10): [trade, {**trade, "ticker": "BBB"}], ("holdout", 10): [trade]},
+        "sensitivity": [{"period": "recent", "setting": "positions", "value": 30,
+                         **_metrics("recent", 30)}],
+        "verdict": {"supports": False, "sentence": "The test does not support a live sleeve: X.",
+                    "checks": {}, "years_ahead": 6, "years_counted": 6},
+        "funds": [
+            {"fund": "MTUM", "parent": "SPY", "label": "MTUM label", "start": "2013-04-18",
+             "end": "2026-11-04", "fund_cagr": 0.12, "parent_cagr": 0.13, "excess": -0.01,
+             "fund_max_drawdown": 0.35, "parent_max_drawdown": 0.34, "error": None},
+            {"fund": "QDVA.DE", "parent": "SXR8.DE", "label": "QDVA label", "start": None,
+             "end": None, "fund_cagr": None, "parent_cagr": None, "excess": None,
+             "fund_max_drawdown": None, "parent_max_drawdown": None,
+             "error": "no price history for QDVA.DE"}],
+        "missing": ["GONE"], "short": ["NEW1", "NEW2"], "filled": {"cells": 0, "tickers": 0},
+    }
+
+
+def test_render_report_sections_in_order_and_columns():
+    text = momentum.render_report(_result())
+    heads = ["# Momentum sleeve backtest, 2026-11-05", "## Verdict", "## Results",
+             "## Calendar years", "## Sensitivity", "## Real momentum funds", "## Limits"]
+    positions = [text.index(h) for h in heads]
+    assert positions == sorted(positions)
+    assert "today's S&P 500 members, each from the day it joined the index" in text
+    assert "503 members" in text and "480 used" in text
+    assert "400" in text and "2005-01-03" in text
+    assert ("| Period | Positions | CAGR | SPY | Equal-weight universe | Max drawdown | SPY drawdown "
+            "| Years ahead of SPY | Trades a year | Costs a year |") in text
+    assert "| Year | Sleeve | SPY |" in text
+    assert "| Period | Setting | Value | CAGR | SPY | Max drawdown |" in text
+    assert ("| Fund | Against | From | To | Fund a year | Parent a year | Difference "
+            "| Fund drawdown | Parent drawdown |") in text
+    assert text.count("| recent | 10 |") == 1 and text.count("| holdout | 20 |") == 1
+    years = text.split("## Calendar years")[1].split("## Sensitivity")[0]
+    assert years.index("| 2007 |") < years.index("| 2015 |")        # hold-out years first
+
+
+def test_render_report_verdict_rule_and_sentence():
+    r = _result()
+    text = momentum.render_report(r)
+    assert r["verdict"]["sentence"] in text
+    for words in ("2 points", "1 point", "1.25 times", "55%", "top 20", "turns nothing on"):
+        assert words in text
+
+
+def test_render_report_funds_error_and_limits():
+    text = momentum.render_report(_result())
+    assert "QDVA label" in text and "unavailable: no price history for QDVA.DE" in text
+    assert "MTUM label" in text and "-1.0%" in text
+    for limit in ("names that left the index are missing", "next close", "cash earns nothing",
+                  "currency", "concentrated"):
+        assert limit in text.lower()
+    assert "1 ticker" in text and "2 tickers" in text      # missing and short counts
+    quiet = _result() | {"missing": [], "short": []}
+    assert "no price history" not in momentum.render_report(quiet).split("## Limits")[1]
+
+
+def test_write_creates_three_files_and_latest_report(tmp_path):
+    paths = Paths(tmp_path)
+    assert momentum.latest_report(paths) is None
+    md = momentum.write(paths, _result())
+    folder = paths.reports / "backtest"
+    assert md == folder / "momentum_2026-11-05.md"
+    assert sorted(p.name for p in folder.iterdir()) == [
+        "momentum_2026-11-05.html", "momentum_2026-11-05.md", "momentum_2026-11-05_trades.csv"]
+    csv = pd.read_csv(folder / "momentum_2026-11-05_trades.csv")
+    assert list(csv.columns[:2]) == ["period", "positions"] and len(csv) == 3
+    (folder / "momentum_2026-01-02.html").write_text("old")
+    assert momentum.latest_report(paths) == folder / "momentum_2026-11-05.html"
+
+
+def test_shipped_config_momentum_section_matches_defaults():
+    from value_pipeline.config import load_config
+    cfg = load_config()
+    assert cfg["momentum"] == DEFAULTS["momentum"]
+    validate_config(cfg)
+
+
+def test_cli_momentum_backtest_prints_and_saves(tmp_path, monkeypatch, capsys):
+    from value_pipeline import cli
+    calls = {}
+
+    def fake_run(paths, cfg, today=None, fetch=True, progress=None):
+        calls["fetch"] = fetch
+        return _result()
+
+    monkeypatch.setattr(momentum, "run", fake_run)
+    data = tmp_path / "data"
+    cli.main(["--data-dir", str(data), "momentum-backtest", "--no-fetch"])
+    out = " ".join(capsys.readouterr().out.split())
+    assert calls == {"fetch": False}
+    assert "Saved" in out and "momentum_2026-11-05.md" in out and "live sleeve" in out
+    assert (data / "reports" / "backtest" / "momentum_2026-11-05.html").exists()

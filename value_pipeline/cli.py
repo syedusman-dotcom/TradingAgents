@@ -17,6 +17,7 @@ from value_pipeline import (
     calibration,
     daily,
     market_data,
+    momentum,
     operations as ops,
     portfolio as pfmod,
     review,
@@ -228,6 +229,21 @@ def cmd_trend_backtest(args, paths: Paths, cfg) -> None:
     console.print(f"\nSaved {md} (and the .html and _trades.csv beside it)", soft_wrap=True)
 
 
+def cmd_momentum_backtest(args, paths: Paths, cfg) -> None:
+    console.print("Replaying the 12-1 momentum rule on daily closes of today's S&P 500 members, over a "
+                  "recent period and an earlier hold-out. With the caches this takes a few minutes. "
+                  "Nothing trades and no agent is called.")
+
+    def progress(i: int, n: int, ticker: str) -> None:
+        if i % 100 == 0 or i == n:
+            console.print(f"{i}/{n} tickers ({ticker})")
+
+    result = momentum.run(paths, cfg, fetch=not args.no_fetch, progress=progress)
+    md = momentum.write(paths, result)
+    console.print(Markdown(momentum.render_report(result)))
+    console.print(f"\nSaved {md} (and the .html and _trades.csv beside it)", soft_wrap=True)
+
+
 def cmd_web(args, paths: Paths, cfg) -> None:
     import threading
     import webbrowser
@@ -342,6 +358,11 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--from", dest="start", type=_iso_day, help="first day, YYYY-MM-DD (default trend.start)")
     s.add_argument("--no-fetch", action="store_true", help="read the statement and price caches only")
     s.set_defaults(func=cmd_trend_backtest)
+
+    s = sub.add_parser("momentum-backtest",
+                       help="12-1 momentum on today's S&P 500 members, two periods, fixed verdict (no agents)")
+    s.add_argument("--no-fetch", action="store_true", help="read the statement and price caches only")
+    s.set_defaults(func=cmd_momentum_backtest)
 
     s = sub.add_parser("web", help="open the local website (this Mac only)")
     s.add_argument("--port", type=int, default=8765)

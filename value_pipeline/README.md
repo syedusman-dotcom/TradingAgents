@@ -54,6 +54,7 @@ uv run python -m value_pipeline status
 | `calibration [--horizon {30,90,180,365}]` | Every past decision against the closes that followed it, then the scores and one verdict per lane (see Calibration below). Fetches and caches the closes it has not seen. Default horizon 180 days. |
 | `backtest [--from YEAR] [--to YEAR] [--holds 1,3] [--indexes sp500,sp400] [--tickers A,B] [--refresh] [--no-fetch]` | The lane rules replayed on past cohort dates against SPY (see Backtest below). No agents. Writes `reports/backtest/backtest_<date>.md` and `_picks.csv` (`backtest_<date>_sp500.md` for `--indexes sp500`) and prints the verdict and the buy-bar candidates. |
 | `trend-backtest [--from YYYY-MM-DD] [--no-fetch]` | Turtle-style breakouts and 12-1 momentum replayed on daily closes of today's S&P 500 and 400 members, after costs, with the fixed verdict (see Trend backtest below). No agents, nothing trades. Writes `reports/backtest/trend_<date>.md`, `.html` and `_trades.csv` and prints the report. |
+| `momentum-backtest [--no-fetch]` | 12-1 momentum on today's S&P 500 members, each from the day it joined, over a recent period and an earlier hold-out, after costs, with a fixed pass rule and the record of real momentum funds (see Momentum sleeve backtest below). No agents, nothing trades. Writes `reports/backtest/momentum_<date>.md`, `.html` and `_trades.csv` and prints the report. |
 | `screen [--top N]` | Rank the universe (every market in `universe.indexes`); writes `data/screens/screen_YYYY-MM-DD.csv`. |
 | `review [--yes] [--dry-run] [--candidates N]` | Run the agents and write the action list. |
 | `run-all [--yes] [--dry-run]` | `screen`, then the theme scan (when `lanes.themes` names any), then `review` with the scan's inflection candidates. |
@@ -493,6 +494,43 @@ cohorts (for the quality universe; the same caches; the four cohorts a year make
 four times longer than one a year did) and then reads the price caches, fetching
 a missing one or a stale one (ending before SPY's); `--no-fetch` reads the caches only and `--from 2018-01-02` moves the start.
 The website's Backtest page links the newest trend report.
+
+### Momentum sleeve backtest
+
+Would a momentum sleeve have beaten SPY, and the same names held equally, after costs?
+`momentum-backtest` holds the `momentum.positions` (10) names with the best 12-to-1-month
+return among those above their 200-day average, rebalanced on the first trading day of each
+month, on today's S&P 500 members, each from the day it joined the index. It runs two periods:
+the recent one from `momentum.recent_start` (2015-07-01) to today, and an earlier hold-out from
+`momentum.holdout_start` (2005-01-03) to `momentum.holdout_end` (2015-06-30). Each buy and sale
+costs `momentum.cost_per_side` (0.5%: Nordnet Mini outside the Nordics, 0.25% commission plus
+0.25% currency fee). A wider run with `momentum.check_positions` (20) names is the check, and
+the report adds sensitivity rows (positions 10/20/30, cost 0/0.35%/0.5%/0.75%, market filter
+on/off). `equity`, `positions` and `check_positions` must be more than zero.
+
+The pass rule was fixed before any run and is not to be tuned. For the top 10 at 0.5% a side:
+
+1. Recent period: CAGR at least SPY's plus 2 points.
+2. Recent period: CAGR at least the equal-weight universe's plus 1 point.
+3. Hold-out period: CAGR at least SPY's and at least the universe's.
+4. In each period, maximum drawdown at most 1.25 times SPY's over the same days.
+5. Over both periods, ahead of SPY in at least 55% of the calendar years (2015 counts once per
+   period, as two half years).
+6. The top 20 at the same cost: recent CAGR at least SPY's plus 1 point, and hold-out CAGR at
+   least SPY's.
+
+A pass turns nothing on; it would only justify designing a small live sleeve.
+
+The fund record beside it is information only: `momentum.funds` pairs (MTUM against SPY, and the
+Xetra funds IS3R.DE and QDVA.DE against their parents) are real funds after their own costs, with
+no survivorship bias. A fund with no price history shows as unavailable.
+
+Limits, stated in the report too: today's members only, so names that left the index are missing,
+which flatters the sleeve and the universe but not SPY; fills at the next close; cash earns
+nothing; a Swedish investor's currency moves are not modelled; ten positions is a concentrated book.
+
+How to run: `uv run python -m value_pipeline momentum-backtest`. It takes a few minutes with the
+caches; `--no-fetch` reads the caches only. The website's Backtest page links the newest report.
 
 ## Files
 

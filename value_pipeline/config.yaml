@@ -119,6 +119,28 @@ trend:
   cost_per_side: 0.0035      # commission plus the broker's currency fee, each buy and each sell (Nordnet Mini: ~0.005 outside the Nordics)
   market_filter: true        # new entries only while SPY closes above its 200-day average
 
+# The momentum sleeve backtest (python -m value_pipeline momentum-backtest): 12-1 momentum on today's
+# S&P 500 members from the day they joined, a recent period and an earlier hold-out. Nothing trades.
+momentum:
+  recent_start: "2015-07-01"   # first day of the recent period (runs to today)
+  holdout_start: "2005-01-03"  # first day of the earlier hold-out period
+  holdout_end: "2015-06-30"    # last day of the hold-out period
+  equity: 10000                # starting cash; must be more than zero
+  positions: 10                # names held in the main run; must be more than zero
+  check_positions: 20          # names held in the wider check run; must be more than zero
+  cost_per_side: 0.005         # each buy and sell (Nordnet Mini outside the Nordics: 0.25% commission plus 0.25% currency fee)
+  market_filter: true          # new entries only while SPY closes above its 200-day average
+  funds:                       # real momentum funds against their parent index fund (information only)
+    - fund: MTUM
+      parent: SPY
+      label: "iShares MSCI USA Momentum against the S&P 500 (US-listed; not sold to EU retail investors)"
+    - fund: IS3R.DE
+      parent: EUNL.DE
+      label: "iShares Edge MSCI World Momentum against iShares Core MSCI World (Xetra, at Nordnet)"
+    - fund: QDVA.DE
+      parent: SXR8.DE
+      label: "iShares Edge MSCI USA Momentum against iShares Core S&P 500 (Xetra, at Nordnet)"
+
 watch:
   # The weekly check flags a stock the agents rated Buy/Overweight once its price
   # is at least this far below their intrinsic value.

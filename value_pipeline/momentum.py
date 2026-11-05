@@ -10,11 +10,13 @@ closes; nothing trades and no agent is called.
 from __future__ import annotations
 
 from datetime import date, timedelta
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-from value_pipeline import backtest, trend
+from tradingagents.dataflows.files import replace_file
+from value_pipeline import backtest, render, trend
 from value_pipeline.config import DEFAULTS, Paths
 
 SYSTEM = "momentum_12_1"
@@ -217,3 +219,125 @@ def run(paths: Paths, cfg: dict, today: date | None = None, fetch: bool = True,
         "short": list(closes.attrs.get("short", [])),
         "filled": {"cells": sum(filled.values()), "tickers": len(filled)},
     }
+
+
+TRADE_COLUMNS = ["period", "positions", "ticker", "signal_date", "entry_date", "entry_price",
+                 "shares", "n", "exit_date", "exit_price", "reason", "pnl", "ret", "days"]
+PERIOD_NAMES = {"recent": "recent period", "holdout": "hold-out period"}
+
+
+def _rule_lines(positions: int, check: int, cost: float) -> list[str]:
+    at = f"for the top {positions} at {cost:.1%} a side"
+    return [
+        f"The rule was fixed before any run. It passes {at} when all six hold:", "",
+        f"1. Recent period: CAGR at least SPY's plus {BEAT_SPY * 100:g} points.",
+        f"2. Recent period: CAGR at least the equal-weight universe's plus "
+        f"{BEAT_UNIVERSE * 100:g} point.",
+        "3. Hold-out period: CAGR at least SPY's and at least the universe's.",
+        f"4. In each period, maximum drawdown at most {DRAWDOWN_RATIO:g} times SPY's over the "
+        "same days.",
+        f"5. Over both periods, ahead of SPY in at least {YEARS_AHEAD:.0%} of the calendar years "
+        "(2015 counts once per period, as two half years).",
+        f"6. The top {check} at the same cost: recent CAGR at least SPY's plus "
+        f"{CHECK_BEAT_SPY * 100:g} point, and hold-out CAGR at least SPY's.", "",
+        "A pass turns nothing on. It would only justify designing a small live sleeve.", ""]
+
+
+def _count(items: list, noun: str) -> str:
+    return f"{len(items)} {noun}{'' if len(items) == 1 else 's'}"
+
+
+def render_report(result: dict) -> str:
+    """The report: span and settings, the verdict and its rule, the results, the top 10's calendar
+    years, the sensitivity rows, the fund record and the limits."""
+    s = result["settings"]
+    primary, check = s["positions"], s["check_positions"]
+    settings_line = (f"top {primary} (check: top {check}), {s['cost_per_side']:.1%} a side, "
+                     f"{s['equity']:,} start equity, market filter {'on' if s['market_filter'] else 'off'}")
+    periods = result["periods"]
+    spans = "; ".join(f"the {PERIOD_NAMES[p]} runs {periods[p]['start']} to {periods[p]['end']} "
+                      f"with {periods[p]['eligible_at_start']} names eligible at the start"
+                      for p in ("recent", "holdout"))
+    lines = [
+        f"# Momentum sleeve backtest, {result['generated']}", "",
+        "The 12-1 momentum system on today's S&P 500 members, each from the day it joined the "
+        f"index: {result['members']} members, {result['used']} used. {spans[0].upper()}{spans[1:]}. "
+        f"Settings: {settings_line}. Nothing trades; this is a record of what the rule would "
+        "have done.", "",
+        "## Verdict", "", *_rule_lines(primary, check, s["cost_per_side"]),
+        result["verdict"]["sentence"], "",
+        "## Results", "",
+        "| Period | Positions | CAGR | SPY | Equal-weight universe | Max drawdown | SPY drawdown "
+        "| Years ahead of SPY | Trades a year | Costs a year |",
+        "|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|"]
+    for (period, n), m in result["results"].items():
+        lines.append(f"| {period} | {n} | {_pct(m['cagr'])} | {_pct(m['spy_cagr'])} "
+                     f"| {_pct(m['universe_cagr'])} | {_pct(m['max_drawdown'])} "
+                     f"| {_pct(m['spy_max_drawdown'])} | {m['years_ahead']} of {m['years_counted']} "
+                     f"| {m['trades_per_year']:.1f} | {_pct(m['costs_per_year'])} |")
+    lines += ["", f"## Calendar years: top {primary}", ""]
+    for period in ("holdout", "recent"):
+        lines += [f"### {PERIOD_NAMES[period].capitalize()}", "", "| Year | Sleeve | SPY |", "|---|--:|--:|"]
+        for year, y in result["results"][(period, primary)]["years"].items():
+            lines.append(f"| {year} | {_pct(y['system'])} | {_pct(y['spy'])} |")
+        lines.append("")
+    lines += [f"## Sensitivity: top {primary} against one change at a time", "",
+              "| Period | Setting | Value | CAGR | SPY | Max drawdown |", "|---|---|---|--:|--:|--:|"]
+    for row in result["sensitivity"]:
+        value = (f"{row['value']:.2%}" if row["setting"] == "cost_per_side" else str(row["value"]))
+        lines.append(f"| {row['period']} | {row['setting']} | {value} | {_pct(row['cagr'])} "
+                     f"| {_pct(row['spy_cagr'])} | {_pct(row['max_drawdown'])} |")
+    lines += ["", "## Real momentum funds", "",
+              "Information only: real funds after their own costs, with no survivorship bias.", "",
+              "| Fund | Against | From | To | Fund a year | Parent a year | Difference "
+              "| Fund drawdown | Parent drawdown |", "|---|---|---|---|--:|--:|--:|--:|--:|"]
+    for f in result["funds"]:
+        name = f["label"] or f["fund"]
+        if f["error"]:
+            lines.append(f"| {name} | {f['parent']} | unavailable: {f['error']} | | | | | | |")
+        else:
+            lines.append(f"| {name} | {f['parent']} | {f['start']} | {f['end']} "
+                         f"| {_pct(f['fund_cagr'])} | {_pct(f['parent_cagr'])} | {_pct(f['excess'])} "
+                         f"| {_pct(f['fund_max_drawdown'])} | {_pct(f['parent_max_drawdown'])} |")
+    lines += ["", "## Limits", "",
+              "- Today's members only: names that left the index are missing. This flatters the "
+              "sleeve and the universe, but not SPY.",
+              "- Fills are at the next close after the signal.",
+              "- Cash earns nothing.",
+              "- A Swedish investor's currency moves are not modelled.",
+              "- Ten positions is a concentrated book."]
+    if result["missing"]:
+        lines.append(f"- No price history for {_count(result['missing'], 'ticker')}: "
+                     f"{', '.join(result['missing'])}.")
+    if result["short"]:
+        lines.append(f"- Too short a history to rank for {_count(result['short'], 'ticker')}: "
+                     f"{', '.join(result['short'])}.")
+    return "\n".join(lines) + "\n"
+
+
+def _folder(paths: Paths) -> Path:
+    return paths.reports / "backtest"
+
+
+def write(paths: Paths, result: dict) -> Path:
+    """``momentum_<date>.md``, the same as ``.html`` and every top-N trade in
+    ``momentum_<date>_trades.csv`` under ``reports/backtest``; returns the Markdown's path."""
+    folder = _folder(paths)
+    folder.mkdir(parents=True, exist_ok=True)
+    stem = f"momentum_{result['generated']}"
+    text = render_report(result)
+    page = render.actions_html(text, f"Momentum sleeve backtest {result['generated']}")
+    md = folder / f"{stem}.md"
+    replace_file(md, lambda temp: Path(temp).write_text(text, encoding="utf-8"))
+    replace_file(folder / f"{stem}.html", lambda temp: Path(temp).write_text(page, encoding="utf-8"))
+    trades = pd.DataFrame([{"period": period, "positions": n, **t}
+                           for (period, n), ts in result["trades"].items() for t in ts],
+                          columns=TRADE_COLUMNS)
+    replace_file(folder / f"{stem}_trades.csv", lambda temp: trades.to_csv(temp, index=False))
+    return md
+
+
+def latest_report(paths: Paths) -> Path | None:
+    """The newest ``momentum_*.html``, None when there is none."""
+    reports = sorted(_folder(paths).glob("momentum_*.html"))
+    return reports[-1] if reports else None
