@@ -58,8 +58,10 @@ def test_rows_read_every_review_and_skip_dry_runs_and_errors(tmp_path):
         "Adobe", "compounder", "Overweight", 100.0, 120.0)
     assert (adbe["formula_value"], adbe["bear"], adbe["base"], adbe["bull"]) == (100.0, 80.0, 120.0, 150.0)
     assert (adbe["entry_price"], adbe["expected_return"]) == (95.0, 0.15)
-    assert adbe["h180"] == {"price": 125.0, "ret": pytest.approx(0.25), "reached_value": True,
-                            "below_bear": False, "below_entry": False}
+    assert {k: adbe["h180"][k] for k in ("price", "ret", "reached_value", "below_bear",
+                                         "below_entry")} == {
+        "price": 125.0, "ret": pytest.approx(0.25), "reached_value": True,
+        "below_bear": False, "below_entry": False}
     ci = rows[1]
     assert ci["h90"]["ret"] == pytest.approx(-0.1) and ci["h90"]["reached_value"] is True
     assert ci["h90"]["below_bear"] is None and ci["h90"]["below_entry"] is None
@@ -124,7 +126,8 @@ def test_default_prices_fetch_one_series_per_ticker(tmp_path, monkeypatch):
     rows = calibration.rows(paths, today=date(2026, 1, 20))
     assert sorted(calls) == [("ADBE", "2025-01-30", "2026-01-20"),
                              ("CI", "2025-01-30", "2026-01-20"),
-                             ("G", "2024-11-21", "2026-01-20")]
+                             ("G", "2024-11-21", "2026-01-20"),
+                             ("SPY", "2024-11-21", "2026-01-20")]
     adbe = rows[0]
     assert all(adbe[f"h{n}"]["price"] == 125.0 for n in calibration.HORIZONS)
     assert rows[2]["price"] == 33.0   # G's price then, from the same series
@@ -252,3 +255,172 @@ def test_cli_calibration(tmp_path, monkeypatch, capsys):
     assert "+25%" in out and "-10%" in out
     assert "value: 1 decision" in out
     assert (paths.cache / "prices" / "ADBE.json").exists()
+
+
+# --- paper Buys scored in dollars against SPY -----------------------------------------------
+
+def _paper_review(paths, folder, currency, price=1000.0, ticker="AAA", **over):
+    row = {"ticker": ticker, "rating": "Hold", "error": None, "price": price,
+           "margin_of_safety": 0.05, "currency": currency,
+           "checklist": {"good_business": {"passed": True}, "good_management": {"passed": True},
+                         "still_investing": {"passed": True}}, **over}
+    _write(paths, folder, [row])
+
+
+def _fn(table):
+    asked = []
+
+    def price_fn(symbol, day):
+        asked.append(symbol)
+        return table.get((symbol, day))
+
+    price_fn.asked = asked
+    return price_fn
+
+
+@pytest.mark.unit
+def test_pair():
+    assert calibration.pair(None) is None and calibration.pair("USD") is None
+    assert calibration.pair("GBp") == "GBPUSD=X" and calibration.pair("SEK") == "SEKUSD=X"
+
+
+@pytest.mark.unit
+def test_dollar_return_of_a_pence_quote(tmp_path):
+    paths = Paths(tmp_path / "data")
+    _paper_review(paths, "2026-01-05", "GBp")
+    fn = _fn({("AAA", "2026-02-04"): 1100.0, ("GBPUSD=X", "2026-01-05"): 1.25,
+              ("GBPUSD=X", "2026-02-04"): 1.30, ("SPY", "2026-01-05"): 500.0,
+              ("SPY", "2026-02-04"): 510.0})
+    row = calibration.rows(paths, today=date(2026, 2, 10), price_fn=fn)[0]
+    dollars = 1.10 * 1.30 / 1.25 - 1
+    assert row["paper"] == ["fair_price", "fair_price_investing"] and row["currency"] == "GBp"
+    h = row["h30"]
+    assert h["ret"] == pytest.approx(0.10) and h["ret_usd"] == pytest.approx(dollars)
+    assert h["spy"] == pytest.approx(0.02) and h["excess"] == pytest.approx(dollars - 0.02)
+    assert row["h90"] is None
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("currency", ["USD", None])
+def test_dollar_rows_need_no_pair(tmp_path, currency):
+    paths = Paths(tmp_path / "data")
+    _paper_review(paths, "2026-01-05", currency)
+    fn = _fn({("AAA", "2026-02-04"): 1100.0, ("SPY", "2026-01-05"): 500.0,
+              ("SPY", "2026-02-04"): 510.0})
+    h = calibration.rows(paths, today=date(2026, 2, 10), price_fn=fn)[0]["h30"]
+    assert h["ret_usd"] == h["ret"] and set(fn.asked) == {"AAA", "SPY"}
+
+
+@pytest.mark.unit
+def test_missing_rate_or_spy_leaves_no_excess(tmp_path):
+    paths = Paths(tmp_path / "data")
+    _paper_review(paths, "2026-01-05", "CHF")
+    fn = _fn({("AAA", "2026-02-04"): 1100.0, ("SPY", "2026-01-05"): 500.0,
+              ("SPY", "2026-02-04"): 510.0})
+    h = calibration.rows(paths, today=date(2026, 2, 10), price_fn=fn)[0]["h30"]
+    assert h["ret"] == pytest.approx(0.1) and h["ret_usd"] is None and h["excess"] is None
+    _paper_review(paths, "2026-01-05", "USD")
+    fn = _fn({("AAA", "2026-02-04"): 1100.0})
+    h = calibration.rows(paths, today=date(2026, 2, 10), price_fn=fn)[0]["h30"]
+    assert h["spy"] is None and h["excess"] is None and h["ret_usd"] == h["ret"]
+
+
+@pytest.mark.unit
+def test_prefetch_asks_for_spy_and_the_pair(tmp_path, monkeypatch):
+    paths = Paths(tmp_path / "data")
+    _paper_review(paths, "2026-01-05", "GBp")
+    asked = {}
+    monkeypatch.setattr(market_data, "fill_close_cache",
+                        lambda ticker, days, cache_dir=None, today=None: asked.update(
+                            {ticker: set(days)}))
+    monkeypatch.setattr(market_data, "close_on_or_before",
+                        lambda *a, **k: None)
+    calibration.rows(paths, today=date(2026, 2, 10))
+    assert asked["SPY"] == {"2026-01-05", "2026-02-04"}
+    assert asked["GBPUSD=X"] == {"2026-01-05", "2026-02-04"}
+    assert asked["AAA"] == {"2026-02-04"}
+
+
+def _p(day, ticker="AAA", paper=("fair_price",), excess=None, h=180):
+    hs = {f"h{n}": None for n in calibration.HORIZONS}
+    if excess is not None or h:
+        hs[f"h{h}"] = {"price": 1.0, "ret": 0.0, "ret_usd": None if excess is None else excess,
+                       "spy": 0.0, "excess": excess}
+    return {"date": day, "folder": day, "ticker": ticker, "paper": list(paper), **hs}
+
+
+@pytest.mark.unit
+def test_counted_applies_the_gap_per_ticker():
+    rs = [_p("2026-04-06"), _p("2026-03-02"), _p("2026-01-01"),
+          _p("2026-03-02", ticker="BBB"), _p("2026-02-01", paper=())]
+    kept = calibration.counted(rs, "fair_price")
+    assert [(r["ticker"], r["date"]) for r in kept] == [
+        ("AAA", "2026-01-01"), ("BBB", "2026-03-02"), ("AAA", "2026-04-06")]
+    base = calibration.counted(rs)   # the unflagged 2026-02-01 row counts and blocks 03-02
+    assert [(r["ticker"], r["date"]) for r in base] == [
+        ("AAA", "2026-01-01"), ("BBB", "2026-03-02"), ("AAA", "2026-04-06")]
+    assert calibration.counted(rs, "discount_15") == []
+    ninety = [_p("2026-01-01"), _p("2026-04-01")]   # exactly 90 days: counts again
+    assert len(calibration.counted(ninety, "fair_price")) == 2
+
+
+@pytest.mark.unit
+def test_paper_horizon_counts_and_summaries():
+    rs = [_p("2026-01-01", ticker="A", excess=0.10), _p("2026-01-01", ticker="B", excess=-0.02),
+          _p("2026-01-01", ticker="C", excess=None)]
+    s = calibration.paper_scores(rs)
+    h = s["rules"]["fair_price"]["horizons"][180]
+    assert h["n"] == 2 and h["no_dollar_result"] == 1
+    assert h["mean_excess"] == pytest.approx(0.04) and h["median_excess"] == pytest.approx(0.04)
+    assert h["ahead"] == {"k": 1, "n": 2, "share": 0.5}
+    assert s["rules"]["fair_price"]["horizons"][30] == {
+        "n": 0, "no_dollar_result": 0, "mean_ret_usd": None, "mean_excess": None,
+        "median_excess": None, "ahead": None}
+    assert s["rules"]["discount_15"]["counted"] == []
+    assert calibration.score(rs)["paper"] == s
+
+
+def _many(n, months, excess, extra=None):
+    dates = [f"2026-{1 + i % months:02d}-10" for i in range(n)]
+    rs = [_p(d, ticker=f"T{i}", excess=excess[i] if isinstance(excess, list) else excess)
+          for i, d in enumerate(dates)]
+    return rs + (extra or [])
+
+
+@pytest.mark.unit
+def test_verdict_not_enough():
+    v = calibration.paper_scores(_many(19, 4, 0.05))["verdict"]
+    assert v["supports"] is None and v["n"] == 19 and v["months"] == 4
+    assert v["sentence"] == ("fair_price: not enough paper Buys yet "
+                             "(19 of 20 past 180 days, from 4 of 3 months).")
+    v = calibration.paper_scores(_many(20, 2, 0.05))["verdict"]
+    assert v["supports"] is None
+    assert v["sentence"].endswith("(20 of 20 past 180 days, from 2 of 3 months).")
+
+
+def _base(excess, k=20):
+    """Unflagged rows on other tickers so the baseline's mean lands on ``excess`` (the rule's
+    rows are in the baseline too)."""
+    return [_p("2026-01-10", ticker=f"U{i}", paper=(), excess=excess) for i in range(k)]
+
+
+@pytest.mark.unit
+def test_verdict_supports():
+    rs = _many(20, 3, 0.03, extra=_base(-0.01))   # baseline: (20*0.03 - 20*0.01) / 40 = 0.01
+    v = calibration.paper_scores(rs)["verdict"]
+    assert v["baseline_mean_excess"] == pytest.approx(0.01)
+    assert v["supports"] is True and v["n"] == 20 and v["months"] == 3
+    assert v["sentence"].startswith("fair_price supports a live test of the rule:")
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("rs, failed", [
+    (_many(20, 3, 0.0299, extra=_base(-0.02)), "under 3%"),
+    (_many(20, 3, [0.2] * 10 + [-0.1] * 10, extra=_base(-0.2)), "fewer than 55%"),
+    (_many(20, 3, 0.03, extra=_base(-0.008)), "all-stocks baseline"),   # baseline mean 0.011
+])
+def test_verdict_each_condition_failing(rs, failed):
+    v = calibration.paper_scores(rs)["verdict"]
+    assert v["supports"] is False
+    assert v["sentence"].startswith("fair_price does not support a live test of the rule:")
+    assert failed in v["sentence"].split("Failed:")[1]

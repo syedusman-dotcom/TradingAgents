@@ -3,7 +3,9 @@
 ``rows`` reads each real review's ``results.json`` (dry runs and errored rows left out) and
 records, for every horizon already reached, the close then, the return and whether the price
 was at or above the agents' value, below the bear case or below the entry price. ``score``
-sums them up by rating and by lane. Nothing here trades; it only looks back.
+sums them up by rating and by lane. Each row also carries the paper Buy rules it met
+(``value_pipeline.paper``) and its dollar return and excess over SPY, which ``paper_scores`` sums
+up per rule. Nothing here trades; it only looks back.
 """
 
 from __future__ import annotations
@@ -13,7 +15,8 @@ import statistics
 from datetime import date, timedelta
 from functools import partial
 
-from value_pipeline import market_data
+from tradingagents.dataflows.vendors.yahoo.common import MINOR_UNITS
+from value_pipeline import market_data, paper
 from value_pipeline.config import Paths
 from value_pipeline.review import review_dirs
 
@@ -21,6 +24,15 @@ HORIZONS = (30, 90, 180, 365)
 BUYS = ("Buy", "Overweight")
 SELLS = ("Sell", "Underweight")
 MIN_CALIBRATION_ROWS = 10
+BENCHMARK = "SPY"
+PAPER_GAP_DAYS = 90          # the same ticker counts again only this long after its last count
+PAPER_HORIZON = 180
+MIN_PAPER = 20
+MIN_PAPER_MONTHS = 3
+PAPER_EXCESS = 0.03          # mean dollar return ahead of SPY, as a fraction
+PAPER_AHEAD = 0.55           # share of paper Buys ahead of SPY
+PAPER_OVER_BASELINE = 0.02   # and this far ahead of every reviewed stock
+EPS = 1e-9
 
 
 def _num(x) -> float | None:
@@ -48,6 +60,36 @@ def _horizon(price_then: float | None, later: float | None, value, bear, entry) 
             "reached_value": None if value is None else later >= value,
             "below_bear": _below(later, bear),
             "below_entry": _below(later, entry)}
+
+
+def pair(currency: str | None) -> str | None:
+    """The Yahoo symbol for US dollars per unit of ``currency``; None when it is dollars."""
+    if currency is None or currency == "USD":
+        return None
+    return f"{MINOR_UNITS.get(currency, currency)}USD=X"
+
+
+def _moved(price_fn, symbol: str | None, day: str, later_day: str) -> float | None:
+    """The close on ``later_day`` over the close on ``day``, or None if either is missing."""
+    if symbol is None:
+        return None
+    then, later = price_fn(symbol, day), price_fn(symbol, later_day)
+    return later / then if then and later is not None else None
+
+
+def _in_dollars(h: dict, price_fn, row: dict, pair_symbol: str | None, later_day: str) -> None:
+    """Add ``ret_usd``, ``spy`` and ``excess`` to a reached horizon."""
+    if h["ret"] is None:
+        ret_usd = None
+    elif pair_symbol is None:
+        ret_usd = h["ret"]
+    else:
+        rate = _moved(price_fn, pair_symbol, row["date"], later_day)
+        ret_usd = None if rate is None else (1 + h["ret"]) * rate - 1
+    spy = _moved(price_fn, BENCHMARK, row["date"], later_day)
+    spy = None if spy is None else spy - 1
+    h.update({"ret_usd": ret_usd, "spy": spy,
+              "excess": None if ret_usd is None or spy is None else ret_usd - spy})
 
 
 def price_fn_for(paths: Paths, fetch: bool = True):
@@ -98,11 +140,14 @@ def rows(paths: Paths, today: date | None = None, price_fn=None) -> list[dict]:
                "base": _leg(sc, "base", "value"), "bull": _leg(sc, "bull", "value"),
                "bear_probability": _leg(sc, "bear", "probability"),
                "bull_probability": _leg(sc, "bull", "probability"),
-               "entry_price": entry, "expected_return": _num(r.get("expected_return"))}
+               "entry_price": entry, "expected_return": _num(r.get("expected_return")),
+               "paper": paper.flags(r), "currency": r.get("currency")}
         for n in HORIZONS:
             at = reviewed + timedelta(days=n)
             later = price_fn(ticker, at.isoformat()) if at <= today else None
-            row[f"h{n}"] = _horizon(price, later, value, bear, entry)
+            h = row[f"h{n}"] = _horizon(price, later, value, bear, entry)
+            if h:
+                _in_dollars(h, price_fn, row, pair(row["currency"]), at.isoformat())
         out.append(row)
     return out
 
@@ -112,11 +157,16 @@ def _prefetch(paths: Paths, decisions: list, today: date) -> None:
     needed: dict[str, set[str]] = {}
     for _, day, r in decisions:
         reviewed = date.fromisoformat(day)
+        reached = {(reviewed + timedelta(days=n)).isoformat() for n in HORIZONS
+                   if reviewed + timedelta(days=n) <= today}
         days = needed.setdefault(r["ticker"], set())
         if _num(r.get("price")) is None and reviewed <= today:
             days.add(day)
-        days.update((reviewed + timedelta(days=n)).isoformat() for n in HORIZONS
-                    if reviewed + timedelta(days=n) <= today)
+        days.update(reached)
+        # SPY and the currency pair are read on the review day and on every reached horizon.
+        for symbol in (BENCHMARK, pair(r.get("currency"))):
+            if symbol is not None and reviewed <= today:
+                needed.setdefault(symbol, set()).update({day, *reached})
     for ticker, days in sorted(needed.items()):
         market_data.fill_close_cache(ticker, days, cache_dir=paths.cache / "prices", today=today)
 
@@ -205,11 +255,99 @@ def score(rs: list[dict]) -> dict:
     lanes: dict[str, list[dict]] = {}
     for r in rs:
         lanes.setdefault(r.get("lane") or "(none)", []).append(r)
-    return {"by_rating": _by(rs, "rating"),
+    return {"paper": paper_scores(rs),
+            "by_rating": _by(rs, "rating"),
             "by_lane": by_lane,
             "median_value_gap": _median(gaps),
             "calibrated_probabilities": _calibrated(rs),
             "verdicts": [_verdict(lane, lanes[lane], by_lane[lane]) for lane in by_lane]}
+
+
+def counted(rs: list[dict], rule: str | None = None, gap_days: int = PAPER_GAP_DAYS) -> list[dict]:
+    """The rows that count for ``rule`` (every row when None), oldest first. A ticker counts again
+    only ``gap_days`` or more after the last time it counted, so a stock re-reviewed often is not
+    counted many times over."""
+    wanted = [r for r in rs if rule is None or rule in (r.get("paper") or [])]
+    last: dict[str, date] = {}
+    out = []
+    for r in sorted(wanted, key=lambda r: (r["date"], r["ticker"], r.get("folder") or "")):
+        day = date.fromisoformat(r["date"])
+        if r["ticker"] in last and (day - last[r["ticker"]]).days < gap_days:
+            continue
+        last[r["ticker"]] = day
+        out.append(r)
+    return out
+
+
+def _paper_horizon(rows_: list[dict], n: int) -> dict:
+    reached = [r[f"h{n}"] for r in rows_ if r.get(f"h{n}")]
+    hs = [h for h in reached if h.get("excess") is not None]
+    excess = [h["excess"] for h in hs]
+    return {"n": len(hs), "no_dollar_result": len(reached) - len(hs),
+            "mean_ret_usd": statistics.fmean(h["ret_usd"] for h in hs) if hs else None,
+            "mean_excess": statistics.fmean(excess) if hs else None,
+            "median_excess": _median(excess),
+            "ahead": _share([x > 0 for x in excess])}
+
+
+def _paper_horizons(rows_: list[dict]) -> dict:
+    return {n: _paper_horizon(rows_, n) for n in HORIZONS}
+
+
+def _points(x: float) -> str:
+    return f"{x * 100:+.1f}%"
+
+
+def _paper_verdict(rule: str, rule_rows: list[dict], baseline_mean: float | None) -> dict:
+    done = [r for r in rule_rows
+            if (r.get(f"h{PAPER_HORIZON}") or {}).get("excess") is not None]
+    n = len(done)
+    months = len({r["date"][:7] for r in done})
+    excess = [r[f"h{PAPER_HORIZON}"]["excess"] for r in done]
+    mean = statistics.fmean(excess) if excess else None
+    ahead = sum(x > 0 for x in excess) / n if n else None
+    out = {"supports": None, "sentence": "", "n": n, "months": months, "mean_excess": mean,
+           "ahead": ahead, "baseline_mean_excess": baseline_mean}
+    if n < MIN_PAPER or months < MIN_PAPER_MONTHS:
+        out["sentence"] = (f"{rule}: not enough paper Buys yet ({n} of {MIN_PAPER} past "
+                           f"{PAPER_HORIZON} days, from {months} of {MIN_PAPER_MONTHS} months).")
+        return out
+    failed = []
+    if mean < PAPER_EXCESS - EPS:
+        failed.append(f"the average gain over SPY is under {PAPER_EXCESS:.0%}")
+    if ahead < PAPER_AHEAD - EPS:
+        failed.append(f"fewer than {PAPER_AHEAD:.0%} are ahead of SPY")
+    if baseline_mean is None:
+        failed.append("there is no all-stocks baseline to compare with")
+    elif mean - baseline_mean < PAPER_OVER_BASELINE - EPS:
+        failed.append(f"the average is not at least {PAPER_OVER_BASELINE * 100:.0f} points "
+                      "above the all-stocks baseline")
+    out["supports"] = not failed
+    facts = (f"{n} paper Buys past {PAPER_HORIZON} days gained {_points(mean)} on average over "
+             f"SPY, {round(ahead * n)}/{n} ahead of SPY, against {_points(baseline_mean)} for "
+             "every reviewed stock." if baseline_mean is not None else
+             f"{n} paper Buys past {PAPER_HORIZON} days gained {_points(mean)} on average over "
+             f"SPY, {round(ahead * n)}/{n} ahead of SPY.")
+    if failed:
+        out["sentence"] = f"{rule} does not support a live test of the rule: {facts} " \
+                          f"Failed: {'; '.join(failed)}."
+    else:
+        out["sentence"] = f"{rule} supports a live test of the rule: {facts}"
+    return out
+
+
+def paper_scores(rs: list[dict]) -> dict:
+    """Each paper rule's counted rows scored in dollars against SPY at every horizon, the same for
+    every reviewed stock as a baseline, and one verdict on the primary rule at 180 days."""
+    rules = {}
+    for name, description in paper.RULES.items():
+        c = counted(rs, name)
+        rules[name] = {"description": description, "counted": c, "horizons": _paper_horizons(c)}
+    base = counted(rs)
+    baseline = {"counted": base, "horizons": _paper_horizons(base)}
+    verdict = _paper_verdict(paper.PRIMARY, rules[paper.PRIMARY]["counted"],
+                             baseline["horizons"][PAPER_HORIZON]["mean_excess"])
+    return {"rules": rules, "baseline": baseline, "verdict": verdict}
 
 
 def has_horizons(rs: list[dict]) -> bool:
