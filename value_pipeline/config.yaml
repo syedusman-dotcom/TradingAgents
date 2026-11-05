@@ -115,6 +115,11 @@ daily:
   big_move: 0.15       # a move this far from the last review's price triggers a re-review
   exclude: [000270.KS] # ideas never re-reviewed on weekdays (Korea is untradeable for this account)
 
+parking:
+  ticker: SXR8.DE        # iShares Core S&P 500 UCITS ETF (Acc), Xetra, quoted in euros; "" turns parking off
+  share: 0.7             # of idle money: cash plus the fund, after this review's buys
+  min_trade_amount: 250  # dollars; smaller moves into the fund are not suggested
+
 superinvestors:
   # Concentrated value investors whose latest 13F holdings are shown beside the
   # screen and on stock pages, as a second opinion. Add or remove any SEC filer by

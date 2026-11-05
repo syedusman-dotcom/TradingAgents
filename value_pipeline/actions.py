@@ -157,8 +157,21 @@ def target_weight(n_positions: int, sizing: dict) -> float:
     return min(sizing["max_position_weight"], 1.0 / max(sizing["min_holdings"], n_positions, 1))
 
 
+def parking_move(liquid: float, buys: float, parked: float, parking: dict) -> dict | None:
+    """The one index-fund move: UNPARK what the buys need beyond the liquid money, else PARK idle
+    money up to ``share`` of it. The fund is never sold merely for being above its share."""
+    idle = liquid + parked - buys
+    if buys > liquid:
+        return {"action": "UNPARK", "amount": round(buys - liquid, 2)}
+    gap = parking["share"] * idle - parked
+    if gap >= parking["min_trade_amount"]:
+        return {"action": "PARK", "amount": round(min(gap, liquid - buys), 2)}
+    return None
+
+
 def plan(decisions: list[Decision], cash: float, sizing: dict,
-         others: list[tuple] = ()) -> tuple[list[Action], dict]:
+         others: list[tuple] = (), parked: float = 0.0,
+         parking: dict | None = None) -> tuple[list[Action], dict]:
     """Apply the rules, then size buys and adds against cash.
 
     Cash for buys includes the estimated proceeds of the sells and trims in the
@@ -166,6 +179,9 @@ def plan(decisions: list[Decision], cash: float, sizing: dict,
     the holdings not on this list, as (ticker, value, sector[, lane]): they count toward
     the total, the sector cap and the lane cap even though they were not reviewed.
     A lane buy is sized at ``lane_size_factor`` of a value buy and stops at ``lane_caps``.
+    ``parked`` is the index fund's dollar value: it counts as money (total and buying power) but
+    never as a position. ``parking`` (the config section, plus an optional ``price_usd``) adds one
+    PARK or UNPARK suggestion to the summary.
     """
     actions = [base_action(d) for d in decisions]
     buy_only = set(sizing.get("lane_buy_only", ()))
@@ -177,7 +193,7 @@ def plan(decisions: list[Decision], cash: float, sizing: dict,
             a.reason += BUY_ONLY_REASON
     held_value = sum(d.held_shares * (d.price_usd or 0.0) for d in decisions if d.held) + \
         sum(o[1] for o in others)
-    total_value = cash + held_value
+    total_value = cash + parked + held_value
     cap_value = sizing["max_position_weight"] * total_value
 
     for a in actions:
@@ -192,7 +208,8 @@ def plan(decisions: list[Decision], cash: float, sizing: dict,
             a.shares = round((d.held_shares * px - cap_value) / px, 4)
             a.amount = round(a.shares * px, 2)
             a.reason += f"; above the {sizing['max_position_weight']:.0%} max position: trim back to the cap"
-    available = cash + sum(a.amount or 0.0 for a in actions if a.action in ("SELL", "TRIM"))
+    proceeds = sum(a.amount or 0.0 for a in actions if a.action in ("SELL", "TRIM"))
+    available = cash + proceeds + parked
 
     # Money per sector after the sells and trims on this list, for the sector cap.
     sector_value: dict[str, float] = {}
@@ -284,11 +301,20 @@ def plan(decisions: list[Decision], cash: float, sizing: dict,
         elif d.rating == "Overweight":
             a.reason += " (half size)"
 
+    buys = sum(a.amount or 0.0 for a in actions if a.action in ("BUY", "ADD"))
+    move = parking_move(cash + proceeds, buys, parked, parking) if parking else None
+    cash_after = available - parked      # the cash left after the stock actions
+    if move:
+        price = parking.get("price_usd")
+        move["shares"] = round(move["amount"] / price, 4) if price else None
+        cash_after += move["amount"] if move["action"] == "UNPARK" else -move["amount"]
     summary = {
         "total_value": total_value,
         "cash": cash,
+        "parked": parked,
+        "parking": move,
         "target_weight": weight,
-        "cash_after": available,
+        "cash_after": cash_after,
         # Holdings not on this list that sit above the cap: nothing trims them here, so say so.
         "over_cap": [(t, round(v / total_value, 4)) for t, v, *_ in others
                      if total_value > 0 and v - cap_value >= sizing["min_trade_amount"]],

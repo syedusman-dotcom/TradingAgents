@@ -37,7 +37,8 @@ def actions_markdown(date: str, actions: list[Action], summary: dict, *, reports
                      names: dict[str, str] | None = None,
                      committee: tuple[committee_mod.Committee, list[str]] | None = None,
                      committee_unavailable: str | None = None, max_weight: float = 0.10,
-                     themes_report: str | None = None, foreign: bool = False) -> str:
+                     themes_report: str | None = None, foreign: bool = False,
+                     fund: dict | None = None) -> str:
     def who(ticker: str) -> str:
         return f"{names[ticker]} ({ticker})" if names and names.get(ticker) else ticker
 
@@ -58,6 +59,9 @@ def actions_markdown(date: str, actions: list[Action], summary: dict, *, reports
                      f"vs SPY {_pct(comparison['spy_return'])} (same cash flows; {_money(comparison['invested'])} invested)")
     lines.append(f"- Target weight per stock: {summary['target_weight']:.0%}; cash left after these actions: "
                  f"{_money(summary['cash_after'])}")
+    if fund and fund["value"] > 0:
+        share = fund["value"] / summary["total_value"] if summary["total_value"] else 0.0
+        lines.append(f"- Index fund ({fund['ticker']}): {_money(fund['value'])} ({share:.0%} of the portfolio)")
     if usage and usage.get("on_plan"):
         lines.append(f"- Cost of this review: ~{_money(usage['nominal_cost_usd'])} nominal "
                      f"({usage['tokens_in']:,} tokens in, {usage['tokens_out']:,} out; "
@@ -116,6 +120,21 @@ def actions_markdown(date: str, actions: list[Action], summary: dict, *, reports
     else:
         lines.append("No new buys this month.")
     lines.append("")
+
+    if fund:
+        lines += ["## Index fund", ""]
+        move = summary.get("parking")
+        if not fund["priced"]:
+            lines.append(f"No suggestion: no dollar price for {fund['ticker']} today.")
+        elif not move:
+            lines.append("No change.")
+        elif move["action"] == "PARK":
+            about = f" (about {move['shares']:.2f} shares)" if move.get("shares") is not None else ""
+            lines.append(f"Buy {_money(move['amount'])} of {fund['ticker']}{about}")
+        else:
+            lines.append(f"Sell {_money(move['amount'])} of {fund['ticker']} to fund the buys; place it first")
+        lines += ["", "Idle money sits in the index fund so it moves with the market and can fall; "
+                  "sell it only to fund a buy.", ""]
 
     if skipped:
         lines += ["## Candidates not bought", ""]

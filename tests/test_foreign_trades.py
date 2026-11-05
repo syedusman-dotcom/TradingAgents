@@ -208,8 +208,8 @@ def test_status_shows_the_quote_unit(monkeypatch, tmp_path):
     ops.record_buy(paths, "DNLM.L", 84, 900.0, fx=0.0135)
     monkeypatch.setattr(market_data, "latest_price", lambda t: 900.0)
     monkeypatch.setattr(benchmark, "compare", lambda *a, **k: None)
-    monkeypatch.setattr(ops, "portfolio_view", lambda paths: portfolio_view(
-        paths, price_fn=lambda t: 900.0, benchmark_fn=lambda *a: None, fx_fn=lambda t: ("GBp", 0.013)))
+    monkeypatch.setattr(ops, "portfolio_view", lambda paths, **kw: portfolio_view(
+        paths, price_fn=lambda t: 900.0, benchmark_fn=lambda *a: None, fx_fn=lambda t: ("GBp", 0.013), **kw))
     out = StringIO()
     monkeypatch.setattr(cli, "console", Console(file=out, width=200))
     cli.main(["--data-dir", str(tmp_path), "status"])

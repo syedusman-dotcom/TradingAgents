@@ -161,8 +161,9 @@ def realised_gains(trades: list[dict]) -> list[float | None]:
 
 
 def portfolio_view(paths: Paths, price_fn=market_data.latest_price, benchmark_fn=benchmark.compare,
-                   fx_fn=market_data.quote_fx) -> dict:
-    """The holdings valued at current prices, with weights, gains and the SPY comparison."""
+                   fx_fn=market_data.quote_fx, parking_ticker: str | None = None) -> dict:
+    """The holdings valued at current prices, with weights, gains and the SPY comparison.
+    The ``parking_ticker`` row (the index fund) is rated \"index fund\", with no value estimate."""
     pf = pfmod.load(paths)
     today = date.today()
     rows = []
@@ -173,12 +174,13 @@ def portfolio_view(paths: Paths, price_fn=market_data.latest_price, benchmark_fn
             rate = None            # the market's 1.0 is a placeholder, not a rate for this currency
         value = p.shares * price * rate if price is not None and rate is not None else p.cost_usd
         cost = p.cost_usd
-        iv = p.intrinsic_value_estimate
+        fund = p.ticker == parking_ticker
+        iv = None if fund else p.intrinsic_value_estimate
         rows.append({
             "ticker": p.ticker, "shares": p.shares, "avg_price": p.avg_price, "price": price,
             "currency": p.currency or currency, "fx": rate, "cost": cost,
             "value": value, "gain": value / cost - 1 if price and cost else None,
-            "last_rating": p.last_rating, "intrinsic_value": iv,
+            "last_rating": "index fund" if fund else p.last_rating, "intrinsic_value": iv,
             "margin_of_safety": (iv - price) / iv if iv and price else None,
             "days_held": (today - date.fromisoformat(p.first_bought)).days, "thesis": p.thesis,
         })

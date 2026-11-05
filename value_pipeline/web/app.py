@@ -29,7 +29,7 @@ from value_pipeline import (
     review as reviewmod,
     superinvestors,
 )
-from value_pipeline.config import CONFIG_PATH, Paths, load_config, validate_config
+from value_pipeline.config import CONFIG_PATH, Paths, load_config, parking_ticker, validate_config
 from value_pipeline.web import charts, views
 from value_pipeline.web.jobs import JobBusy, JobRunner
 
@@ -110,7 +110,8 @@ def create_app(paths: Paths, *, config_path: Path = CONFIG_PATH, price_fn=market
         if not paths.portfolio.exists():
             return render(request, "start.html")
         view = ops.portfolio_view(paths, price_fn=app.state.price_fn, benchmark_fn=app.state.benchmark_fn,
-                                fx_fn=lambda t: market_data.quote_fx(t))
+                                fx_fn=lambda t: market_data.quote_fx(t),
+                                parking_ticker=parking_ticker(load_config(app.state.config_path)))
         series = app.state.series_fn(paths)
         chart = charts.line_chart([s["date"] for s in series],
                                   {"Portfolio": [s["portfolio"] for s in series],

@@ -209,6 +209,30 @@ Each stock is reviewed on its own, so after the last one a committee looks at al
 
 ACTIONS now shows company names next to tickers, the expected return of each new buy, "buy below X" for candidates not bought, and each holding's kill criteria under Holdings, with the committee section on top. The stock page shows the latest entry price and kill criteria. The weekly watch adds an ENTRY PRICE alert when a stock reaches the price its review said to buy at, and lists the kill criteria of each holding so you can check them against the week's news; it does not evaluate them for you.
 
+## Index fund for idle cash
+
+Idle cash can sit in an index fund instead of doing nothing. The fund is an ordinary holding in
+`portfolio.json` (record it with `buy` / `sell`), recognised by its ticker. The review counts it as
+money: buys are sized against cash plus the fund, and the `## Index fund` section of ACTIONS.md
+suggests one move: **PARK** (buy some of the fund with idle cash), **UNPARK** (sell some of it to
+fund the buys; place that order first) or no change. The tool only suggests; it never trades.
+
+The fund is never reviewed or watched, never counts as a position, and is outside the 10% position
+cap, the sector cap and the lane caps. `status` and the dashboard show it with the rating `index fund`.
+`review --tickers` refuses its ticker.
+
+```yaml
+parking:
+  ticker: SXR8.DE        # iShares Core S&P 500 UCITS ETF (Acc), Xetra, quoted in euros; "" turns parking off
+  share: 0.7             # of idle money: cash plus the fund, after this review's buys
+  min_trade_amount: 250  # dollars; smaller moves into the fund are not suggested
+```
+
+To turn it off, set `ticker: ""`: everything then behaves as before. The fund is valued in dollars
+(price times the euro's rate); with no price or rate today it is valued at cost and the section says
+there is no suggestion. It is not sold merely for being above its share, only to fund a buy. It holds
+stocks, so it moves with the market and can fall.
+
 ## Lanes
 
 A decision names the lane its evidence supports; the Portfolio Manager picks value first, compounder when the record qualifies, inflection only with verified demand evidence. The numeric parts of each bar are checked in code.

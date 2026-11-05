@@ -23,7 +23,7 @@ from value_pipeline import (
     superinvestors,
     watch,
 )
-from value_pipeline.config import Paths, load_config
+from value_pipeline.config import Paths, load_config, parking_ticker
 
 console = Console()
 
@@ -83,7 +83,7 @@ def cmd_sell(args, paths: Paths, cfg) -> None:
 
 
 def cmd_status(args, paths: Paths, cfg) -> None:
-    view = ops.portfolio_view(paths)
+    view = ops.portfolio_view(paths, parking_ticker=parking_ticker(cfg))
     total = view["total"]
     table = Table(title=f"Portfolio {date.today().isoformat()} ({view['currency']})")
     for col in ("Ticker", "Shares", "Avg", "Price", "Value", "Gain", "Weight", "Rating", "Days"):

@@ -18,7 +18,7 @@ import pandas as pd
 
 from value_pipeline import market_data, metrics, portfolio as pfmod, screener
 from value_pipeline.actions import BUY_RATINGS
-from value_pipeline.config import Paths
+from value_pipeline.config import Paths, parking_ticker
 from value_pipeline.render import demand_first, numbered
 
 log = logging.getLogger(__name__)
@@ -164,9 +164,11 @@ def new_ideas(paths: Paths, owned: set[str], today: str) -> tuple[list[str], dic
 def run(paths: Paths, cfg: dict, notify: bool = True,
         today: str | None = None) -> tuple[list[Alert], Path]:
     pf = pfmod.load(paths)
-    owned = {p.ticker for p in pf.positions}
+    fund = parking_ticker(cfg)
+    positions = [p for p in pf.positions if p.ticker != fund]   # the index fund is not analysed
+    owned = {p.ticker for p in positions}
     holdings = [{"ticker": p.ticker, "intrinsic_value": p.intrinsic_value_estimate, "avg_price": p.avg_price}
-                for p in pf.positions]
+                for p in positions]
     ideas = [r for r in latest_results(paths) if r["ticker"] not in owned]
     tickers = sorted(owned | {i["ticker"] for i in ideas})
     prices = {t: market_data.latest_price(t) for t in tickers}
@@ -185,7 +187,7 @@ def run(paths: Paths, cfg: dict, notify: bool = True,
     lines += [f"- **{a.kind}**: {a.message}" for a in found] or ["Nothing needs attention this week."]
     idea_lines, hinted = new_ideas(paths, owned, today)
     lines += idea_lines
-    criteria = [(p.ticker, demand_first(p.kill_criteria, p.lane)) for p in pf.positions if p.kill_criteria]
+    criteria = [(p.ticker, demand_first(p.kill_criteria, p.lane)) for p in positions if p.kill_criteria]
     if criteria:
         lines += ["", "## Kill criteria to check", "",
                   "Shown for you to check against the news; nothing here is evaluated."]

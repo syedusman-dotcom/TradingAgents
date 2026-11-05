@@ -26,7 +26,7 @@ from value_pipeline import (
     themes as themes_mod,
 )
 from value_pipeline.actions import Decision, plan
-from value_pipeline.config import Paths
+from value_pipeline.config import Paths, parking_ticker
 
 log = logging.getLogger(__name__)
 
@@ -317,7 +317,10 @@ def preview(paths: Paths, cfg: dict, only: list[str] | None = None,
     priority); the cost cap drops from the end."""
     rcfg, lanes = cfg["review"], cfg.get("lanes", {})
     pf = pfmod.load(paths)
+    fund = parking_ticker(cfg)
     owned = {p.ticker for p in pf.positions}
+    if only and fund:       # the index fund is never reviewed (`_run` refuses a list naming it)
+        only = [t for t in only if t.strip().upper() != fund]
     candidates: list[str] = []
     if not only:
         n_themes = len({t for t in discovered or [] if t not in owned})
@@ -333,7 +336,8 @@ def preview(paths: Paths, cfg: dict, only: list[str] | None = None,
                                            inflections=inflections)
         candidates = [t for t in dict.fromkeys(named + [c["ticker"] for c in screened] + (discovered or []))
                       if t not in owned]
-    tickers, n_held, n_new = select_tickers([p.ticker for p in pf.positions], candidates, only)
+    tickers, n_held, n_new = select_tickers([p.ticker for p in pf.positions if p.ticker != fund],
+                                            candidates, only)
     dropped = 0
     if not only:
         tickers, n_new, dropped = fit_to_cap(tickers, n_held, rcfg["cost_per_run"], rcfg["max_cost_per_review"])
@@ -452,6 +456,10 @@ def _run(paths: Paths, cfg: dict, *, yes: bool, dry_run: bool, today: str | None
          discover: bool = False) -> Path:
     today = today or date.today().isoformat()
     rcfg = cfg["review"]
+    fund = parking_ticker(cfg)
+    if fund and fund in {t.strip().upper() for t in only or []}:
+        raise SystemExit(f"{fund} is the index fund for idle cash and is not reviewed. "
+                         "Leave it out of --tickers (or set parking.ticker to \"\" to treat it as a stock).")
     pf = pfmod.load(paths)
     owned = {p.ticker for p in pf.positions}
     ta = tally = None
@@ -501,8 +509,9 @@ def _run(paths: Paths, cfg: dict, *, yes: bool, dry_run: bool, today: str | None
             out_dir, n = paths.review_dir(f"{today}-{n}"), n + 1
     out_dir.mkdir(parents=True, exist_ok=True)
     screen = _screen_rows(paths)
-    prices = {t: market_data.latest_price(t) for t in sorted(set(tickers) | owned)}
-    fx = {t: _quote_fx(t) for t in sorted(set(tickers) | owned)}
+    priced_names = set(tickers) | owned | ({fund} if fund else set())
+    prices = {t: market_data.latest_price(t) for t in sorted(priced_names)}
+    fx = {t: _quote_fx(t) for t in sorted(priced_names)}
     screen_row = {t: discovered.get(t) or screen_row_for(t, paths, cfg, screen) for t in tickers}
 
     results: list[RunResult] = []
@@ -565,8 +574,11 @@ def _run(paths: Paths, cfg: dict, *, yes: bool, dry_run: bool, today: str | None
     reviewed = {d.ticker for d in decisions}
     others = [(p.ticker, _holding_value(p, prices.get(p.ticker), fx[p.ticker]),
                _sector(paths, p.ticker, screen.get(p.ticker)), p.lane)
-              for p in pf.positions if p.ticker not in reviewed]
-    actions, summary = plan(decisions, pf.cash, cfg["sizing"], others)
+              for p in pf.positions if p.ticker not in reviewed and p.ticker != fund]
+    parked, parking, fund_info = 0.0, None, None
+    if fund:
+        parked, parking, fund_info = _parking(pf.position(fund), fund, prices.get(fund), fx[fund], cfg["parking"])
+    actions, summary = plan(decisions, pf.cash, cfg["sizing"], others, parked, parking)
     failures = [f"{r.ticker}: {r.error}" for r in results if r.error]
     cost = 0.0 if dry_run else sum(1 for r in results if not r.error) * rcfg["cost_per_run"]
     comparison = benchmark.compare(summary["total_value"], pf.deposits, pfmod.read_trades(paths))
@@ -602,7 +614,8 @@ def _run(paths: Paths, cfg: dict, *, yes: bool, dry_run: bool, today: str | None
     elif rcfg["committee"] and sum(1 for r in results if not r.error) < 2:
         unavailable = committee_mod.SKIPPED_FEW
     elif rcfg["committee"]:
-        committee, unavailable = _committee(ta, tally, decisions, rows, pf, summary, cfg["sizing"], actions)
+        committee, unavailable = _committee(ta, tally, decisions, rows, pf, summary, cfg["sizing"], actions,
+                                            fund)
         used = tally.snapshot()
         for key in ("tokens_in", "tokens_out", "nominal_cost_usd"):
             usage[key] += used.get(key, 0)
@@ -615,7 +628,8 @@ def _run(paths: Paths, cfg: dict, *, yes: bool, dry_run: bool, today: str | None
                                  themes_report=themes_report.name
                                  if themes_report and (set(discovered) & set(tickers) or scares)
                                  else None,
-                                 foreign=any(r.get("currency") not in (None, "USD") for r in rows))
+                                 foreign=any(r.get("currency") not in (None, "USD") for r in rows),
+                                 fund=fund_info)
     (out_dir / "ACTIONS.md").write_text(md, encoding="utf-8")
     (out_dir / "ACTIONS.html").write_text(render.actions_html(md, f"Value review {today}"), encoding="utf-8")
     # Written whole: the website reads these files while a review may be finishing.
@@ -653,18 +667,35 @@ def _holding_value(p, price: float | None, fx: tuple[str | None, float | None]) 
     return p.shares * price * rate if price is not None and rate is not None else p.cost_usd
 
 
+def _parking(p, fund: str, price: float | None, fx: tuple[str | None, float | None],
+             parking: dict) -> tuple[float, dict, dict]:
+    """The fund's dollar value (cost basis without a price or rate), the ``plan`` parking settings
+    (with ``price_usd`` only when the price and rate are known) and the ACTIONS section's facts."""
+    rate = fx[1]
+    if fx[0] is None and p is not None and p.currency not in (None, "USD"):
+        rate = None             # the 1.0 for an unreadable currency is a placeholder, not a rate
+    price_usd = price * rate if price is not None and rate is not None else None
+    held_value = 0.0
+    if p is not None:
+        held_value = p.shares * price_usd if price_usd is not None else p.cost_usd
+    settings = dict(parking)
+    if price_usd is not None:
+        settings["price_usd"] = price_usd
+    return held_value, settings, {"ticker": fund, "value": held_value, "priced": price_usd is not None}
+
+
 def _write_whole(path: Path, data) -> None:
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
     tmp.replace(path)
 
 
-def _committee(ta, tally, decisions, rows, pf, summary, sizing, actions):
+def _committee(ta, tally, decisions, rows, pf, summary, sizing, actions, fund=None):
     """The committee's reconciled answer and notes, or the reason it is not available.
     Its tokens are left in ``tally`` for the review's cost line."""
     tally.reset()
     try:
-        payload = committee_mod.build_payload(decisions, rows, pf, summary, sizing)
+        payload = committee_mod.build_payload(decisions, rows, pf, summary, sizing, skip=fund)
         result = committee_mod.run_committee(ta.deep_thinking_llm, payload)
     except Exception as exc:  # noqa: BLE001 - the committee is advice on top; the review stands without it
         log.warning("investment committee failed: %s: %s", type(exc).__name__, exc)

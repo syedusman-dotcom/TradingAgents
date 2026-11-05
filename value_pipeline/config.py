@@ -64,11 +64,18 @@ DEFAULTS: dict = {
         "lane_size_factor": {"compounder": 0.5, "inflection": 0.5},
         "lane_buy_only": [],
     },
+    "parking": {"ticker": "SXR8.DE", "share": 0.7, "min_trade_amount": 250},
     "lanes": {"themes": [], "tickers": [], "inflection_candidates": 3, "compounder_candidates": 2,
               "dislocation_candidates": 3},
     "backtest": {"first_year": 2015, "last_year": 2024, "cohort_day": "06-30", "holds": [1, 3],
                  "value_top_n": 30, "benchmark": "SPY"},
 }
+
+
+def parking_ticker(cfg: dict) -> str | None:
+    """The index fund that holds idle money, upper-cased; None when parking is off (blank ticker)."""
+    ticker = str((cfg.get("parking") or {}).get("ticker") or "").strip().upper()
+    return ticker or None
 
 
 def _merge(base: dict, override: dict) -> dict:

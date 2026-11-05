@@ -14,7 +14,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from value_pipeline import lock, market_data, metrics, portfolio as pfmod, review, watch
-from value_pipeline.config import Paths
+from value_pipeline.config import Paths, parking_ticker
 from value_pipeline.render import demand_first, numbered
 
 log = logging.getLogger(__name__)
@@ -117,7 +117,10 @@ def _inputs(paths: Paths, cfg: dict, today: date):
     pf = pfmod.load(paths)
     latest = {r["ticker"]: r for r in watch.latest_results(paths)}
     holdings, criteria, last_review = [], {}, {}
+    fund = parking_ticker(cfg)
     for p in pf.positions:
+        if p.ticker == fund:
+            continue        # the index fund is not analysed
         row = latest.get(p.ticker, {})
         holdings.append({"ticker": p.ticker, "intrinsic_value": p.intrinsic_value_estimate,
                          "entry_price": p.entry_price, "next_earnings_date": p.next_earnings_date,

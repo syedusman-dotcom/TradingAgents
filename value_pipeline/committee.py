@@ -75,7 +75,8 @@ def _clean(x):
     return x
 
 
-def build_payload(decisions: list[Decision], results: list[dict], portfolio, summary: dict, sizing: dict) -> dict:
+def build_payload(decisions: list[Decision], results: list[dict], portfolio, summary: dict, sizing: dict,
+                  skip: str | None = None) -> dict:
     """What the committee sees: every reviewed stock's verdict and evidence, the cash and the rules."""
     rows = {r["ticker"]: r for r in results}
     total = summary.get("total_value") or 0.0
@@ -101,7 +102,7 @@ def build_payload(decisions: list[Decision], results: list[dict], portfolio, sum
             "consensus_growth": row.get("consensus_growth"), "consensus_target": row.get("consensus_target"),
         })
     others = [{"ticker": p.ticker, "shares": p.shares, "avg_price": p.avg_price}
-              for p in portfolio.positions if p.ticker not in reviewed]
+              for p in portfolio.positions if p.ticker not in reviewed and p.ticker != skip]
     return _clean({"stocks": stocks, "not_reviewed": not_reviewed, "other_holdings": others,
                    "cash": portfolio.cash,
                    "total_value": total, "sizing": dict(sizing)})
