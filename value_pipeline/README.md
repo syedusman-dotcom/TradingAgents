@@ -225,15 +225,29 @@ cap, the sector cap and the lane caps. `status` and the dashboard show it with t
 
 ```yaml
 parking:
-  ticker: SXR8.DE        # iShares Core S&P 500 UCITS ETF (Acc), Xetra, quoted in euros; "" turns parking off
-  share: 0.7             # of idle money: cash plus the fund, after this review's buys
+  # Nordnet USA Index (SEK share class): no commission and no currency fee at Nordnet, 0.20% a year,
+  # cash the next bank day; it tracks MSCI USA Climate Change, not the S&P 500. A Xetra ETF such as
+  # SXR8.DE costs about 1% per round trip. "" turns parking off.
+  ticker: 0P0001K6NL.ST
+  share: 0.7             # of idle money: cash plus the fund, after this review's buys (0 to 1)
   min_trade_amount: 250  # dollars; smaller moves into the fund are not suggested
 ```
 
 To turn it off, set `ticker: ""`: everything then behaves as before. The fund is valued in dollars
-(price times the euro's rate); with no price or rate today it is valued at cost and the section says
-there is no suggestion. It is not sold merely for being above its share, only to fund a buy. It holds
+(its NAV in kronor times the krona's dollar rate); with no price or rate today, or a currency Yahoo
+cannot read, it is valued at cost and the section says there is no suggestion. Yahoo serves the NAV
+up to two days late. It is not sold merely for being above its share, only to fund a buy. It holds
 stocks, so it moves with the market and can fall.
+
+The suggestion gives the dollar amount, the amount in kronor and the units, e.g. `Buy $6,694.85 of
+0P0001K6NL.ST (about 63,760 SEK, about 227.7 units)`. At Nordnet a fund is ordered as a kronor amount
+and fills at the next NAV. A sale pays out the next bank day, so place it first and wait for the cash
+before the buys. Record the fill once the NAV is known, in units and NAV: `buy 0P0001K6NL.ST <units>
+<NAV>` (the rate comes from the market, or pass `--fx`).
+
+Why this fund: at Nordnet a trade outside the Nordics costs about 0.25% commission plus a 0.25%
+currency fee per side, about 1.0% per round trip (1.5% in the UK with stamp duty); the Nordnet fund
+costs neither, only its 0.20% a year.
 
 ## Lanes
 
@@ -390,7 +404,8 @@ with 20 and 10) and `momentum_12_1` (on the first trading day of each month hold
 their 200-day average). A breakout's size risks `trend.risk_per_trade` of equity to the stop,
 capped at `max_position_weight` of equity and by cash; new entries wait while SPY closes below
 its 200-day average (`market_filter`). Every buy and sale costs `cost_per_side` (0.35%, the
-commission plus the currency fee). Each system runs on two universes: `all` (an S&P 500 name
+commission plus the currency fee; Nordnet's Mini class costs about 0.5% a side outside the Nordics,
+so the 0.6% sensitivity row is the realistic one). Each system runs on two universes: `all` (an S&P 500 name
 from its join date) and `quality` (names whose 30 June cohort row of the lane backtest above
 passed the screen's filters, from that date to the next cohort; the 2015 cohort opens it). The
 report gives CAGR, drawdown, volatility, exposure, trade statistics after costs, costs per year
@@ -415,7 +430,7 @@ close before it (the report counts them); a longer gap blocks that name's signal
 
 How to run: `uv run python -m value_pipeline trend-backtest`. It first runs the lane backtest's
 cohorts (for the quality universe; the same caches) and then reads the price caches, fetching
-only a missing one; `--no-fetch` reads the caches only and `--from 2018-01-02` moves the start.
+a missing one or a stale one (ending before SPY's); `--no-fetch` reads the caches only and `--from 2018-01-02` moves the start.
 The website's Backtest page links the newest trend report.
 
 ## Files

@@ -601,7 +601,9 @@ def render_report(result: dict) -> str:
     settings_line = ", ".join(f"{k} {_value(k, v)}" for k, v in asdict(s).items() if k != "start")
     lines = [f"# Trend-sleeve backtest, {result['generated']}", "",
              f"Daily closes from {result['start']} to {result['end']}; the systems {', '.join(SYSTEMS)} on the "
-             f"`all` and `quality` universes. Settings: {settings_line}. Nothing trades; this is a record of "
+             f"`all` and `quality` universes. Settings: {settings_line} (Nordnet's Mini class costs about "
+             "0.5% a side outside the Nordics, so the 0.6% cost row below is the realistic one). Nothing "
+             "trades; this is a record of "
              "what the rules would have done.", "", "## Limits", "", *_limits(result), "", "## Verdict", "",
              "The rule was fixed before the run: (a) CAGR at least SPY's plus 1 point, or at least SPY's "
              "minus 2 points with a maximum drawdown no more than two thirds of SPY's; (b) the same test at "

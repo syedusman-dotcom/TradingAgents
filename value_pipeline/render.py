@@ -129,12 +129,12 @@ def actions_markdown(date: str, actions: list[Action], summary: dict, *, reports
         elif not move:
             lines.append("No change.")
         elif move["action"] == "PARK":
-            about = f" (about {move['shares']:.2f} shares)" if move.get("shares") is not None else ""
-            lines.append(f"Buy {_money(move['amount'])} of {fund['ticker']}{about}")
+            lines.append(f"Buy {_money(move['amount'])} of {fund['ticker']}{_fund_about(move, fund)}")
         else:
-            lines.append(f"Sell {_money(move['amount'])} of {fund['ticker']} to fund the buys; place it first")
+            lines.append(f"Sell {_money(move['amount'])} of {fund['ticker']}{_fund_about(move, fund)} to fund "
+                         "the buys; place it first and wait for the cash (the next bank day) before the buys")
             if not fund["priced"]:
-                lines.append(f"No dollar price for {fund['ticker']} today: work out the shares at your broker.")
+                lines.append(f"No dollar price for {fund['ticker']} today: work out the units at your broker.")
         lines += ["", "Idle money sits in the index fund so it moves with the market and can fall; "
                   "sell it only to fund a buy.", ""]
 
@@ -148,6 +148,18 @@ def actions_markdown(date: str, actions: list[Action], summary: dict, *, reports
     if failures:
         lines += ["## Failed runs", ""] + [f"- {f}" for f in failures] + [""]
     return "\n".join(lines)
+
+
+def _fund_about(move: dict, fund: dict) -> str:
+    """`` (about 63,760 SEK, about 227.7 units)``: the move in the fund's own currency (a fund is
+    ordered as an amount of it) and in units; empty without a dollar price."""
+    if move.get("shares") is None:
+        return ""
+    about = []
+    if fund.get("currency") not in (None, "USD") and fund.get("fx"):
+        about.append(f"about {move['amount'] / fund['fx']:,.0f} {fund['currency']}")
+    about.append(f"about {move['shares']:,.1f} units")
+    return f" ({', '.join(about)})"
 
 
 def _er(x: float | None, missing: str = "") -> str:

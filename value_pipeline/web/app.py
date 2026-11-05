@@ -37,7 +37,7 @@ from value_pipeline.web.jobs import JobBusy, JobRunner
 TEMPLATES = Path(__file__).parent / "templates"
 
 
-TICKER = re.compile(r"[A-Z0-9][A-Z0-9.\-]{0,9}")
+TICKER = re.compile(r"[A-Z0-9][A-Z0-9.\-]{0,14}")     # 0P0001K6NL.ST, a Nordnet fund, is 13
 
 
 class FormError(ValueError):

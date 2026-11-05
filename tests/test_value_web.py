@@ -282,10 +282,21 @@ def test_run_preview_and_start_refuse_the_index_fund(tmp_path):
     calls = []
     client, app, paths = _client(tmp_path, job_funcs={"review": lambda paths, cfg, **kw: calls.append(kw)})
     ops.init_portfolio(paths, 1000.0)
-    r = client.post("/run/preview", data={"kind": "review", "tickers": "sxr8.de", "token": app.state.token})
+    r = client.post("/run/preview", data={"kind": "review", "tickers": "0p0001k6nl.st", "token": app.state.token})
     assert r.status_code == 400 and "index fund" in r.text and 'name="confirm"' not in r.text
-    r = _post(client, app, "/run/start", kind="review", tickers="SXR8.DE", confirm="yes")
+    r = _post(client, app, "/run/start", kind="review", tickers="0P0001K6NL.ST", confirm="yes")
     assert r.status_code == 303 and "index+fund" in r.headers["location"] and calls == []
+
+
+@pytest.mark.unit
+def test_trade_form_records_the_kronor_fund(tmp_path, monkeypatch):
+    client, app, paths = _client(tmp_path)
+    ops.init_portfolio(paths, 10_000.0)
+    monkeypatch.setattr(market_data, "quote_fx", lambda t: ("SEK", 0.105))
+    r = client.post("/trade/buy", data={"ticker": "0P0001K6NL.ST", "shares": "227.7", "price": "280",
+                                        "fx": "", "token": app.state.token})
+    assert "BUY 227.7 0P0001K6NL.ST @ 280.00 SEK (fx 0.105) = $6,694.38" in r.text
+    assert pfmod.load(paths).position("0P0001K6NL.ST").currency == "SEK"
 
 
 @pytest.mark.unit

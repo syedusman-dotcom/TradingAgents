@@ -686,7 +686,8 @@ def _holding_value(p, price: float | None, fx: tuple[str | None, float | None]) 
 def _parking(p, fund: str, price: float | None, fx: tuple[str | None, float | None],
              parking: dict) -> tuple[float, dict, dict]:
     """The fund's dollar value (cost basis without a price or rate), the ``plan`` parking settings
-    (with ``price_usd`` only when the price and rate are known) and the ACTIONS section's facts."""
+    (with ``price_usd`` only when the price and rate are known) and the ACTIONS section's facts
+    (its quote currency and, when priced, the dollars per unit of it)."""
     # An unreadable currency leaves the fund unpriced: its 1.0 is a placeholder, and a fund not
     # held yet has no currency of its own to say whether it is one.
     rate = pfmod.position_rate(p, fx) if p is not None else (None if fx[0] is None else fx[1])
@@ -697,7 +698,9 @@ def _parking(p, fund: str, price: float | None, fx: tuple[str | None, float | No
     settings = dict(parking)
     if price_usd is not None:
         settings["price_usd"] = price_usd
-    return held_value, settings, {"ticker": fund, "value": held_value, "priced": price_usd is not None}
+    currency = fx[0] or (p.currency if p is not None else None)
+    return held_value, settings, {"ticker": fund, "value": held_value, "priced": price_usd is not None,
+                                  "currency": currency, "fx": rate if price_usd is not None else None}
 
 
 def _write_whole(path: Path, data) -> None:

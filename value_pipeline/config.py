@@ -65,7 +65,10 @@ DEFAULTS: dict = {
         "lane_size_factor": {"compounder": 0.5, "inflection": 0.5},
         "lane_buy_only": [],
     },
-    "parking": {"ticker": "SXR8.DE", "share": 0.7, "min_trade_amount": 250},
+    # Nordnet USA Index (SEK share class): no commission and no currency fee at Nordnet, 0.20% a year,
+    # cash the next bank day; it tracks MSCI USA Climate Change, not the S&P 500. A Xetra ETF such as
+    # SXR8.DE costs about 1% per round trip. "" turns parking off.
+    "parking": {"ticker": "0P0001K6NL.ST", "share": 0.7, "min_trade_amount": 250},
     "lanes": {"themes": [], "tickers": [], "inflection_candidates": 3, "compounder_candidates": 2,
               "dislocation_candidates": 3},
     "backtest": {"first_year": 2015, "last_year": 2024, "cohort_day": "06-30", "holds": [1, 3],
@@ -121,6 +124,9 @@ def validate_config(cfg: dict) -> None:
                     raise ValueError(f"{section}.{key} must be a finite number of zero or more, not {value!r}")
                 if key in _POSITIVE and value <= 0:
                     raise ValueError(f"{section}.{key} must be more than zero, not {value!r}")
+    share = cfg["parking"]["share"]
+    if not 0 <= share <= 1:
+        raise ValueError(f"parking.share must be between 0 and 1 (a share of the idle money), not {share!r}")
 
 
 def load_config(path: Path | None = None) -> dict:

@@ -110,7 +110,7 @@ trend:
   n_days: 20                 # N = mean absolute daily close change over this many days
   max_positions: 10
   max_position_weight: 0.20  # of equity
-  cost_per_side: 0.0035      # commission plus the broker's currency fee, each buy and each sell
+  cost_per_side: 0.0035      # commission plus the broker's currency fee, each buy and each sell (Nordnet Mini: ~0.005 outside the Nordics)
   market_filter: true        # new entries only while SPY closes above its 200-day average
 
 watch:
@@ -130,8 +130,11 @@ daily:
   exclude: [000270.KS] # ideas never re-reviewed on weekdays (Korea is untradeable for this account)
 
 parking:
-  ticker: SXR8.DE        # iShares Core S&P 500 UCITS ETF (Acc), Xetra, quoted in euros; "" turns parking off
-  share: 0.7             # of idle money: cash plus the fund, after this review's buys
+  # Nordnet USA Index (SEK share class): no commission and no currency fee at Nordnet, 0.20% a year,
+  # cash the next bank day; it tracks MSCI USA Climate Change, not the S&P 500. A Xetra ETF such as
+  # SXR8.DE costs about 1% per round trip. "" turns parking off.
+  ticker: 0P0001K6NL.ST
+  share: 0.7             # of idle money: cash plus the fund, after this review's buys (0 to 1)
   min_trade_amount: 250  # dollars; smaller moves into the fund are not suggested
 
 superinvestors:
