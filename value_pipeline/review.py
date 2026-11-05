@@ -364,7 +364,7 @@ def offscreen_row(ticker: str, paths: Paths, cfg: dict, screen: dict[str, dict])
     fetched."""
     scfg = cfg["screen"]
     try:
-        data = market_data.fundamentals(ticker, paths, scfg["cache_days"])
+        data = market_data.fundamentals(ticker, paths, scfg["cache_days"], price_days=scfg.get("price_days"))
         data = market_data.in_usd(data)
         row = screener.evaluate(data, scfg["normalize_years"], scfg["roic_cap"],
                                 metrics.current_discount_rate()["rate"])

@@ -227,14 +227,49 @@ def closes(ticker: str, days: int = 420) -> list[float]:
     return [float(x) for x in hist["Close"].dropna()] if not hist.empty else []
 
 
-def fundamentals(ticker: str, paths: Paths, cache_days: int = 7) -> dict:
-    """Annual and quarterly statements, market data and ~400 days of closes for one ticker, cached."""
+def _price_is_stale(data: dict, price_days: int) -> bool:
+    price_at = data.get("price_at")
+    if not price_at:
+        return True
+    return (date.today() - date.fromisoformat(price_at)).days >= price_days
+
+
+def _refresh_price(ticker: str, data: dict) -> dict:
+    """``data`` with today's price, market cap, closes and ``price_at`` from two cheap Yahoo
+    calls (``fast_info`` and the closes), enterprise value moved by the market-cap change;
+    statements and ``info`` are not touched. Raises when Yahoo has no price or no closes."""
+    fi = yf.Ticker(ticker).fast_info
+    price, mcap = fi["last_price"], fi["market_cap"]
+    series = closes(ticker)
+    if not series or not isinstance(price, (int, float)):
+        raise DataUnavailable("no price or closes")
+    out = {**data, "price": price, "market_cap": mcap, "closes": series,
+           "price_at": date.today().isoformat()}
+    old = data.get("market_cap")
+    if all(isinstance(x, (int, float)) for x in (old, mcap, data.get("enterprise_value"))):
+        out["enterprise_value"] = data["enterprise_value"] + mcap - old
+    return out
+
+
+def fundamentals(ticker: str, paths: Paths, cache_days: int = 7, price_days: int | None = None) -> dict:
+    """Annual and quarterly statements, market data and ~400 days of closes for one ticker, cached.
+
+    With ``price_days`` set, a cached record whose price is that many days old gets today's price
+    (see ``_refresh_price``) and is returned with ``price_refreshed``; a failed refresh serves it as is."""
     cache = paths.cache / f"{ticker}.json"
     if cache.exists():
         data = json.loads(cache.read_text(encoding="utf-8"))
         fresh = datetime.fromisoformat(data["fetched_at"]) > datetime.now() - timedelta(days=cache_days)
         # A record cached after a failed quarterly fetch has no "quarters": fetched again.
         if fresh and data.get("schema") == CACHE_SCHEMA and "quarters" in data:
+            if price_days is not None and _price_is_stale(data, price_days):
+                try:
+                    data = _refresh_price(ticker, data)
+                except Exception as exc:  # noqa: BLE001 - Yahoo raises many types
+                    log.warning("price refresh failed for %s: %s", ticker, exc)
+                    return {**data, "from_cache": True}
+                cache.write_text(json.dumps(data), encoding="utf-8")
+                return {**data, "from_cache": True, "price_refreshed": True}
             return {**data, "from_cache": True}
     t = yf.Ticker(ticker)
     try:
@@ -261,6 +296,7 @@ def fundamentals(ticker: str, paths: Paths, cache_days: int = 7) -> dict:
         "years": years,
         "quarters": quarters,
         "closes": series,
+        "price_at": date.today().isoformat(),
     }
     paths.cache.mkdir(parents=True, exist_ok=True)
     stored = data if complete else {k: v for k, v in data.items() if k != "quarters"}

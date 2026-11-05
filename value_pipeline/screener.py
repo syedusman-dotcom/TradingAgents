@@ -378,8 +378,9 @@ def run(paths: Paths, cfg: dict, owned: set[str], today: str | None = None) -> d
         if i % 50 == 0 or i == total:
             log.info("screened %d/%d", i, total)
         try:
-            data = market_data.fundamentals(rec.ticker, paths, cfg["screen"]["cache_days"])
-            if not data.get("from_cache"):
+            data = market_data.fundamentals(rec.ticker, paths, cfg["screen"]["cache_days"],
+                                            price_days=cfg["screen"].get("price_days"))
+            if not data.get("from_cache") or data.get("price_refreshed"):
                 market_data.throttle(cfg["screen"]["throttle_seconds"])
             sector = rec.sector if isinstance(rec.sector, str) else market_data.gics_sector(data.get("sector"))
             if sector in skip_sectors:

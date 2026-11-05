@@ -30,7 +30,7 @@ DEFAULTS: dict = {
         "min_roic_worst_year": 0.08,
         "max_dilution_per_year": 0.03,
     },
-    "screen": {"top_n": 10, "cache_days": 7, "throttle_seconds": 0.3, "normalize_years": 5, "roic_cap": 1.0},
+    "screen": {"top_n": 10, "cache_days": 7, "price_days": 1, "throttle_seconds": 0.3, "normalize_years": 5, "roic_cap": 1.0},
     "review": {
         "candidates": 5,
         "analysts": ["market", "news", "fundamentals"],

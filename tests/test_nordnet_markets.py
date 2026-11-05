@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import logging
+from datetime import date
 
 import pandas as pd
 import pytest
@@ -342,7 +344,7 @@ def _screen_setup(tmp_path, monkeypatch, universe_rows, records, rates=None):
     uni = pd.DataFrame(universe_rows, columns=market_data.UNIVERSE_COLUMNS)
     fetched = []
 
-    def fundamentals(t, p, days=7):
+    def fundamentals(t, p, days=7, price_days=None):
         fetched.append(t)
         return dict(records[t])
 
@@ -408,7 +410,7 @@ def test_offscreen_row_gives_quote_units_for_a_london_ticker(tmp_path, monkeypat
     from value_pipeline import metrics, review
 
     paths = Paths(tmp_path)
-    monkeypatch.setattr(market_data, "fundamentals", lambda t, p, days=7: record())
+    monkeypatch.setattr(market_data, "fundamentals", lambda t, p, days=7, price_days=None: record())
     monkeypatch.setattr(market_data, "cached_sector", lambda t, p: None)
     monkeypatch.setattr(market_data, "usd_rate", lambda c: {"GBp": 1.30, "GBP": 1.30}.get(c))
     monkeypatch.setattr(metrics, "current_discount_rate", lambda: {"rate": 0.10, "treasury_10y": None})
@@ -416,3 +418,141 @@ def test_offscreen_row_gives_quote_units_for_a_london_ticker(tmp_path, monkeypat
     assert row["price"] == pytest.approx(800.0) and row["market_cap"] == pytest.approx(2.6e9)
     assert row["country"] == "UK" and row["market"] == "ftse100" and row["quote_currency"] == "GBp"
     assert row["sector"] == "Consumer Discretionary"
+
+
+# --- daily prices without refetching statements ---------------------------------------------
+
+def _cached_record(paths, ticker="ABC", **over):
+    from datetime import date, datetime, timedelta
+
+    record = {"schema": market_data.CACHE_SCHEMA, "fetched_at": datetime.now().isoformat(timespec="seconds"),
+              "ticker": ticker, "market_cap": 1e9, "enterprise_value": 1.2e9, "price": 10.0,
+              "currency": "USD", "years": [{"fiscal_year_end": "2025-12-31"}], "quarters": [],
+              "closes": [9.0, 10.0], "price_at": (date.today() - timedelta(days=3)).isoformat()}
+    record.update(over)
+    paths.cache.mkdir(parents=True, exist_ok=True)
+    (paths.cache / f"{ticker}.json").write_text(json.dumps(record), encoding="utf-8")
+    return record
+
+
+def _fake_yahoo(monkeypatch, fast_info=None, closes=None):
+    class FakeTicker:
+        def __init__(self, t):
+            self.fast_info = fast_info if fast_info is not None else {"last_price": 12.0, "market_cap": 1.2e9}
+
+        @property
+        def info(self):
+            raise AssertionError("info must not be read")
+
+    monkeypatch.setattr(market_data.yf, "Ticker", FakeTicker)
+    monkeypatch.setattr(market_data, "closes", lambda t: closes if closes is not None else [11.0, 12.0])
+
+
+@pytest.mark.unit
+def test_stale_price_is_refreshed_without_info(tmp_path, monkeypatch):
+    paths = Paths(tmp_path)
+    _cached_record(paths)
+    _fake_yahoo(monkeypatch)
+    data = market_data.fundamentals("ABC", paths, cache_days=7, price_days=1)
+    assert data["price"] == 12.0 and data["market_cap"] == 1.2e9
+    assert data["enterprise_value"] == pytest.approx(1.4e9)
+    assert data["closes"] == [11.0, 12.0] and data["price_at"] == date.today().isoformat()
+    assert data["from_cache"] is True and data["price_refreshed"] is True
+    assert data["years"] == [{"fiscal_year_end": "2025-12-31"}] and data["quarters"] == []
+    stored = json.loads((paths.cache / "ABC.json").read_text())
+    assert stored["price"] == 12.0 and "price_refreshed" not in stored and "from_cache" not in stored
+
+
+@pytest.mark.unit
+def test_fresh_price_makes_no_call(tmp_path, monkeypatch):
+    paths = Paths(tmp_path)
+    _cached_record(paths, price_at=date.today().isoformat())
+    monkeypatch.setattr(market_data.yf, "Ticker", lambda t: (_ for _ in ()).throw(AssertionError("no call")))
+    data = market_data.fundamentals("ABC", paths, cache_days=7, price_days=1)
+    assert data["price"] == 10.0 and data["from_cache"] is True and "price_refreshed" not in data
+
+
+@pytest.mark.unit
+def test_record_without_price_at_is_refreshed(tmp_path, monkeypatch):
+    paths = Paths(tmp_path)
+    record = _cached_record(paths)
+    del record["price_at"]
+    (paths.cache / "ABC.json").write_text(json.dumps(record), encoding="utf-8")
+    _fake_yahoo(monkeypatch)
+    data = market_data.fundamentals("ABC", paths, cache_days=7, price_days=1)
+    assert data["price"] == 12.0 and data["price_refreshed"] is True
+
+
+@pytest.mark.unit
+def test_old_schema_record_is_fetched_in_full_not_price_refreshed(tmp_path, monkeypatch):
+    paths = Paths(tmp_path)
+    _cached_record(paths, schema=market_data.CACHE_SCHEMA - 1)
+    reads = []
+
+    class FullTicker:
+        @property
+        def info(self):
+            reads.append("info")
+            return {"marketCap": 5e9, "currentPrice": 20.0, "currency": "USD", "financialCurrency": "EUR"}
+
+    monkeypatch.setattr(market_data.yf, "Ticker", lambda t: FullTicker())
+    monkeypatch.setattr(market_data, "statement_years", lambda *a: [{"fiscal_year_end": "2025-12-31"}])
+    monkeypatch.setattr(market_data, "fetch_quarters", lambda t: ([], True))
+    monkeypatch.setattr(market_data, "closes", lambda t: [20.0])
+    monkeypatch.setattr(FullTicker, "income_stmt", None, raising=False)
+    monkeypatch.setattr(FullTicker, "balance_sheet", None, raising=False)
+    monkeypatch.setattr(FullTicker, "cashflow", None, raising=False)
+    data = market_data.fundamentals("ABC", paths, cache_days=7, price_days=1)
+    assert reads == ["info"] and data["price"] == 20.0 and not data.get("from_cache")
+    assert "price_refreshed" not in data
+    assert data["price_at"] == date.today().isoformat() and data["financial_currency"] == "EUR"
+
+
+@pytest.mark.unit
+def test_failed_refresh_serves_the_cached_record(tmp_path, monkeypatch, caplog):
+    paths = Paths(tmp_path)
+    _cached_record(paths)
+
+    class Down:
+        def __init__(self, t):
+            raise RuntimeError("Yahoo down")
+
+    monkeypatch.setattr(market_data.yf, "Ticker", Down)
+    with caplog.at_level(logging.WARNING):
+        data = market_data.fundamentals("ABC", paths, cache_days=7, price_days=1)
+    assert data["price"] == 10.0 and data["from_cache"] is True and "price_refreshed" not in data
+    assert "price refresh failed for ABC" in caplog.text
+
+
+@pytest.mark.unit
+def test_empty_closes_count_as_a_failed_refresh(tmp_path, monkeypatch, caplog):
+    paths = Paths(tmp_path)
+    _cached_record(paths)
+    _fake_yahoo(monkeypatch, closes=[])
+    with caplog.at_level(logging.WARNING):
+        data = market_data.fundamentals("ABC", paths, cache_days=7, price_days=1)
+    assert data["price"] == 10.0 and data["closes"] == [9.0, 10.0] and "price_refreshed" not in data
+    assert "price refresh failed for ABC" in caplog.text
+
+
+@pytest.mark.unit
+def test_ev_is_left_alone_when_a_market_cap_is_missing(tmp_path, monkeypatch):
+    paths = Paths(tmp_path)
+    _cached_record(paths, market_cap=None)
+    _fake_yahoo(monkeypatch)
+    data = market_data.fundamentals("ABC", paths, cache_days=7, price_days=1)
+    assert data["price"] == 12.0 and data["enterprise_value"] == 1.2e9
+
+
+@pytest.mark.unit
+def test_price_days_none_never_refreshes(tmp_path, monkeypatch):
+    paths = Paths(tmp_path)
+    _cached_record(paths)
+    monkeypatch.setattr(market_data.yf, "Ticker", lambda t: (_ for _ in ()).throw(AssertionError("no call")))
+    data = market_data.fundamentals("ABC", paths, cache_days=7)
+    assert data["price"] == 10.0 and "price_refreshed" not in data
+
+
+@pytest.mark.unit
+def test_screen_config_defaults():
+    assert config.DEFAULTS["screen"]["price_days"] == 1 and config.DEFAULTS["screen"]["cache_days"] == 7

@@ -1147,7 +1147,7 @@ def test_a_ticker_outside_the_screen_gets_its_row_built_for_the_review(tmp_path,
     monkeypatch.setattr(review, "_screen_rows", lambda paths: peers)
     record = {"ticker": "ZZZ", "years": _offscreen_years(), "market_cap": 2000.0, "price": 20.0,
               "shares": 100, "closes": [], "sector": "Industrials"}
-    monkeypatch.setattr(market_data, "fundamentals", lambda t, p, days=7: dict(record))
+    monkeypatch.setattr(market_data, "fundamentals", lambda t, p, days=7, price_days=None: dict(record))
     monkeypatch.setattr(market_data, "cached_sector", lambda t, p: "Industrials")
     monkeypatch.setattr(market_data, "latest_price", lambda t: 20.0)
     monkeypatch.setattr(market_data, "quote_fx", lambda t: ("USD", 1.0))
@@ -1173,7 +1173,7 @@ def test_a_screen_row_from_before_the_expected_return_column_is_rebuilt(tmp_path
     old = {"ticker": "HRB", "sector": "Consumer Discretionary", "value_base": 80.33, "trend": "UPTREND"}
     record = {"ticker": "HRB", "years": _offscreen_years(), "market_cap": 2000.0, "price": 20.0,
               "shares": 100, "closes": [], "sector": "Consumer Discretionary"}
-    monkeypatch.setattr(market_data, "fundamentals", lambda t, p, days=7: dict(record))
+    monkeypatch.setattr(market_data, "fundamentals", lambda t, p, days=7, price_days=None: dict(record))
     monkeypatch.setattr(market_data, "cached_sector", lambda t, p: None)
     row = review.screen_row_for("HRB", Paths(tmp_path), DEFAULTS, {"HRB": old})
     assert row["expected_return"] is not None and row["trend"] == "UPTREND"
@@ -1710,7 +1710,7 @@ def test_an_offscreen_row_carries_its_filters_and_lane_hints(tmp_path, monkeypat
            "interest_coverage": 30.0, "earnings_yield_avg": 0.08, "roic_ranked": 1.0, "roic_min": 0.5,
            "fundamentals_intact": True, "drawdown_from_high": -0.25, "move_1m": -0.02, "move_3m": 0.2,
            "market_cap_usd": 1e11, "shares": 4e8}
-    monkeypatch.setattr(market_data, "fundamentals", lambda t, paths, days: {"years": [], "price": 270.0})
+    monkeypatch.setattr(market_data, "fundamentals", lambda t, paths, days, price_days=None: {"years": [], "price": 270.0})
     monkeypatch.setattr(review.screener, "evaluate", lambda data, *a: dict(row))
     monkeypatch.setattr(review.screener, "with_target", lambda *a: None)
     monkeypatch.setattr(market_data, "cached_sector", lambda t, paths: "Technology")
