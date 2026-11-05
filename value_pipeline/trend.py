@@ -546,7 +546,7 @@ def _limits(result: dict) -> list[str]:
         f"- **Survivorship.** The universe is today's S&P 500 and S&P 400 members only ({sizes['all']} with "
         "prices). Names that left either index, were bought out or failed are not in the sample, so "
         f"survivorship bias favours the result. {joins}.",
-        f"- **Quality universe** ({sizes['quality']} names): those whose 30 June cohort row of the lane "
+        f"- **Quality universe** ({sizes['quality']} names): those whose cohort row of the lane "
         "backtest passed the screen's filters, from that cohort date to the next one (the last to the end "
         f"of the data); the first cohort is {result.get('quality_from') or 'none'}. A name without a cohort "
         "row (no EDGAR statements, an excluded sector) is outside it.",

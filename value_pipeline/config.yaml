@@ -95,7 +95,8 @@ lanes:
 # backtest:
 #   first_year: 2015       # first cohort year
 #   last_year: 2024        # last cohort year (a cohort runs only once its one-year hold has ended)
-#   cohort_day: "06-30"    # month-day of each cohort date; most December 10-Ks are filed by then
+#   cohort_days: ["03-31", "06-30", "09-30", "12-31"]   # month-days of the cohort dates, four a year
+#                          # for more cohorts; one-year holds that overlap are not independent samples
 #   holds: [1, 3]          # holding terms in years, each reported separately
 #   value_top_n: 30        # the value and Magic Formula rules take this many of the cohort's ranking
 #   benchmark: SPY         # the index fund every basket is compared with (total return)

@@ -71,8 +71,8 @@ DEFAULTS: dict = {
     "parking": {"ticker": "0P0001K6NL.ST", "share": 0.7, "min_trade_amount": 250},
     "lanes": {"themes": [], "tickers": [], "inflection_candidates": 3, "compounder_candidates": 2,
               "dislocation_candidates": 3},
-    "backtest": {"first_year": 2015, "last_year": 2024, "cohort_day": "06-30", "holds": [1, 3],
-                 "value_top_n": 30, "benchmark": "SPY"},
+    "backtest": {"first_year": 2015, "last_year": 2024, "cohort_days": ["03-31", "06-30", "09-30", "12-31"],
+                 "holds": [1, 3], "value_top_n": 30, "benchmark": "SPY"},
     "trend": {"start": "2015-07-01", "equity": 10000, "risk_per_trade": 0.01, "stop_n": 2.0, "n_days": 20,
               "max_positions": 10, "max_position_weight": 0.20, "cost_per_side": 0.0035, "market_filter": True},
 }

@@ -387,11 +387,19 @@ def _years_after(day: str, years: int) -> str:
         return d.replace(year=d.year + years, day=28).isoformat()
 
 
-def cohort_dates(cfg: dict, today: date) -> list[str]:
-    """One cohort date per year from ``first_year`` to ``last_year`` on ``cohort_day``, keeping
-    only those whose one-year hold has ended by ``today``."""
+def cohort_days(cfg: dict) -> list[str]:
+    """The month-days of the cohort dates: ``backtest.cohort_days``, else the older single
+    ``backtest.cohort_day`` as a one-item list."""
     bt = cfg["backtest"]
-    days = (f"{year}-{bt['cohort_day']}" for year in range(bt["first_year"], bt["last_year"] + 1))
+    return list(bt["cohort_days"]) if "cohort_days" in bt else [bt["cohort_day"]]
+
+
+def cohort_dates(cfg: dict, today: date) -> list[str]:
+    """Every cohort day of every year from ``first_year`` to ``last_year``, in date order,
+    keeping only those whose one-year hold has ended by ``today``."""
+    bt = cfg["backtest"]
+    days = sorted(f"{year}-{day}" for year in range(bt["first_year"], bt["last_year"] + 1)
+                  for day in cohort_days(cfg))
     return [d for d in days if date.fromisoformat(_years_after(d, 1)) <= today]
 
 
@@ -483,6 +491,9 @@ def _diff(a, b) -> float | None:
     return None if a is None or b is None else a - b
 
 
+MIN_BASKET = 5     # a cohort basket smaller than this is too thin to count toward the verdict
+
+
 def _cohort_line(cohort: str, picks: list[dict], bench: dict) -> dict:
     rets = [p["ret"] for p in picks]
     basket, spy, universe = _mean(rets), bench["spy"], bench["universe"]
@@ -521,12 +532,17 @@ def _summary(rule: str, hold: int, picks: list[dict], bench: dict) -> dict:
     beat = sum(line["basket"] > line["spy"] for line in lines)
     median_excess = _median(excess)
     worst = min(lines, key=lambda line: line["excess_spy"]) if lines else None
+    full = [line for line in lines if line["n"] >= MIN_BASKET and line["universe"] is not None]
     return {
         "cohorts": lines, "beat_spy": beat, "cohorts_with_picks": len(lines),
         "mean_excess_spy": _mean(excess), "median_excess_spy": median_excess,
         "mean_excess_universe": _mean(line["excess_universe"] for line in lines
                                       if line["excess_universe"] is not None),
         "all_picks_median": _median(p["ret"] for p in usable),
+        "cohorts_min5": len(full),
+        "beat_universe_min5": sum(line["basket"] > line["universe"] for line in full),
+        "mean_excess_universe_min5": _mean(line["excess_universe"] for line in full),
+        "mean_excess_spy_min5": _mean(line["excess_spy"] for line in full),
         "worst_cohort": worst and worst["cohort"], "picks": len(usable),
         "sentence": _sentence(rule, hold, lines, beat, median_excess, len(usable),
                               _measured_dates(bench, hold)),

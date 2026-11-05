@@ -317,8 +317,9 @@ value"). A few decisions say little: read the counts before the shares.
 
 ## Backtest
 
-Would the lane rules have picked winners? `backtest` replays the screen on one cohort date a
-year (`backtest.first_year` to `last_year`, on `cohort_day`, default 30 June 2015 to 2024),
+Would the lane rules have picked winners? `backtest` replays the screen on quarterly cohort dates
+(`backtest.first_year` to `last_year`, on `cohort_days`, default 31 March, 30 June, 30 September and
+31 December, 2015 to 2024; a config with the older `cohort_day` still means one date a year),
 using only what was known then: the EDGAR statements filed on or before the date (an
 amendment counts from its filing date) and the closes dated on or before it. It runs the
 screen's hard filters, Magic Formula rank, formula value, the compounder, inflection and
@@ -328,7 +329,9 @@ rule's picks: `value` (top 30 by the Magic Formula with a margin of safety of at
 Overweight price bars), `compounder_record` (hint and record bars, no price bar),
 `compounder_hint`, `inflection` and `dislocation`. Each pick is held 1 and 3 years, equal
 weight, dividends reinvested, and compared with SPY and with the equal-weight universe of that
-cohort. No agent is called, nothing trades and no bar is changed. The backtest covers the S&P 500 and 400 only: non-US companies have no point-in-time filings (EDGAR), so the UK and European markets are screened live but not replayed.
+cohort. Quarterly cohorts with one-year holds overlap, so the cohorts are not independent samples:
+count them as a finer look at the same years, not as separate trials. No agent is called, nothing
+trades and no bar is changed. The backtest covers the S&P 500 and 400 only: non-US companies have no point-in-time filings (EDGAR), so the UK and European markets are screened live but not replayed.
 
 What it cannot test or correct:
 
@@ -406,8 +409,9 @@ capped at `max_position_weight` of equity and by cash; new entries wait while SP
 its 200-day average (`market_filter`). Every buy and sale costs `cost_per_side` (0.35%, the
 commission plus the currency fee; Nordnet's Mini class costs about 0.5% a side outside the Nordics,
 so the 0.6% sensitivity row is the realistic one). Each system runs on two universes: `all` (an S&P 500 name
-from its join date) and `quality` (names whose 30 June cohort row of the lane backtest above
-passed the screen's filters, from that date to the next cohort; the 2015 cohort opens it). The
+from its join date) and `quality` (names whose cohort row of the lane backtest above
+passed the screen's filters, from that date to the next cohort, so the list refreshes each
+quarter; the first 2015 cohort opens it). The
 report gives CAGR, drawdown, volatility, exposure, trade statistics after costs, costs per year
 and the share of profit from the five best trades for each, the primary's calendar years against
 SPY, and a sensitivity table (one setting at a time: `max_positions` 5/10/20, `cost_per_side`

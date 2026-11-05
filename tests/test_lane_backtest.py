@@ -413,12 +413,34 @@ def _bt_cfg(**over) -> dict:
 
 
 def test_cohort_dates_stop_at_completed_holds():
-    cfg = _bt_cfg()
+    cfg = _bt_cfg(cohort_days=["06-30"])
     assert backtest.cohort_dates(cfg, date(2025, 6, 30)) == [f"{y}-06-30" for y in range(2015, 2025)]
     assert backtest.cohort_dates(cfg, date(2025, 6, 29)) == [f"{y}-06-30" for y in range(2015, 2024)]
-    assert backtest.cohort_dates(_bt_cfg(first_year=2018, last_year=2030, cohort_day="03-31"),
+    assert backtest.cohort_dates(_bt_cfg(first_year=2018, last_year=2030, cohort_days=["03-31"]),
                                  date(2021, 3, 30)) == ["2018-03-31", "2019-03-31"]
     assert backtest.cohort_dates(cfg, date(2016, 6, 1)) == []
+
+
+def test_cohort_dates_are_quarterly_and_in_order():
+    cfg = _bt_cfg(first_year=2023, last_year=2024, cohort_days=["03-31", "06-30", "09-30", "12-31"])
+    assert backtest.cohort_dates(cfg, date(2025, 7, 1)) == [
+        "2023-03-31", "2023-06-30", "2023-09-30", "2023-12-31", "2024-03-31", "2024-06-30"]
+
+
+def test_the_default_cohorts_are_quarterly():
+    assert backtest.cohort_days(DEFAULTS) == ["03-31", "06-30", "09-30", "12-31"]
+
+
+def test_an_old_config_with_cohort_day_still_means_one_date_a_year():
+    cfg = {"backtest": {"first_year": 2022, "last_year": 2023, "cohort_day": "06-30", "holds": [1, 3]}}
+    assert backtest.cohort_days(cfg) == ["06-30"]
+    assert backtest.cohort_dates(cfg, date(2030, 1, 1)) == ["2022-06-30", "2023-06-30"]
+
+
+def test_cohort_days_wins_over_cohort_day():
+    cfg = {"backtest": {"first_year": 2022, "last_year": 2022, "cohort_day": "06-30",
+                        "cohort_days": ["03-31"], "holds": [1]}}
+    assert backtest.cohort_dates(cfg, date(2030, 1, 1)) == ["2022-03-31"]
 
 
 def test_finish_cohort_applies_sector_targets_and_ranks(monkeypatch):
@@ -577,6 +599,30 @@ def _pick(rule, cohort, ret, ticker="T", ended_early=False) -> dict:
             "ended_early": ended_early}
 
 
+def _picks_at(cohort, n, ret):
+    return [{"cohort": cohort, "ticker": f"T{i}", "rule": "r", "hold": 1, "ret": ret}
+            for i in range(n)]
+
+
+def test_summary_counts_only_cohorts_with_five_picks_for_the_verdict_fields():
+    bench = {("A", 1): {"spy": 0.12, "universe": 0.10}, ("B", 1): {"spy": 0.09, "universe": 0.08},
+             ("C", 1): {"spy": 0.0, "universe": 0.0}, ("D", 1): {"spy": 0.0, "universe": None}}
+    picks = (_picks_at("A", 5, 0.20) + _picks_at("B", 6, 0.05) + _picks_at("C", 2, 0.50)
+             + _picks_at("D", 5, 0.30))
+    s = backtest._summary("r", 1, picks, bench)
+    assert s["cohorts_with_picks"] == 4          # D has five picks but no universe return
+    assert s["cohorts_min5"] == 2 and s["beat_universe_min5"] == 1
+    assert s["mean_excess_universe_min5"] == pytest.approx((0.10 - 0.03) / 2)
+    assert s["mean_excess_spy_min5"] == pytest.approx((0.08 - 0.04) / 2)
+
+
+def test_summary_min5_fields_are_empty_without_such_a_cohort():
+    bench = {("A", 1): {"spy": 0.1, "universe": 0.1}}
+    s = backtest._summary("r", 1, _picks_at("A", 2, 0.3), bench)
+    assert s["cohorts_min5"] == 0 and s["beat_universe_min5"] == 0
+    assert s["mean_excess_universe_min5"] is None and s["mean_excess_spy_min5"] is None
+
+
 def test_summarize_by_hand():
     picks = [_pick("a", C1, 0.10), _pick("a", C1, 0.30, ended_early=True),
              _pick("a", C2, -0.10), _pick("a", C2, None), _pick("a", C3, 0.50),
@@ -732,7 +778,8 @@ def test_survivorship_counts_members_added_after_each_cohort(tmp_path):
 # --- config --------------------------------------------------------------------------------
 
 def test_backtest_defaults_in_config():
-    assert DEFAULTS["backtest"] == {"first_year": 2015, "last_year": 2024, "cohort_day": "06-30",
+    assert DEFAULTS["backtest"] == {"first_year": 2015, "last_year": 2024,
+                                    "cohort_days": ["03-31", "06-30", "09-30", "12-31"],
                                     "holds": [1, 3], "value_top_n": 30, "benchmark": "SPY"}
     cfg = load_config()      # the user's config.yaml may override values; the keys stay
     assert set(cfg["backtest"]) >= set(DEFAULTS["backtest"])
@@ -792,7 +839,7 @@ def _e2e_setup(tmp_path):
     _write_caches(paths, "SPY", hist=_e2e_hist(slope=0.02))
     added = paths.cache / "backtest" / "added_dates.json"
     added.write_text(json.dumps(_e2e_added()), encoding="utf-8")   # the cached join dates
-    cfg = _bt_cfg(first_year=2022, last_year=2023)
+    cfg = _bt_cfg(first_year=2022, last_year=2023, cohort_days=["06-30"])
     return paths, cfg
 
 
