@@ -41,7 +41,7 @@ All require `passes_filters` and a trend other than FREEFALL. "Top n by x" sorts
 | Rule | Picks | Bars (default; sensitivity) |
 |---|---|---|
 | `er_hurdle` | `expected_return ≥ min_er`, then the top `top_n` by `expected_return` | `min_er` 0.12 (0.10, 0.12, 0.15); `top_n` 20 (10, 20, 30) |
-| `er_momentum` | `er_hurdle`'s picks whose `momentum_12_1` is at or above the median `momentum_12_1` of the cohort's passing rows | same bars |
+| `er_momentum` | `er_hurdle`'s picks whose `momentum_12_1` is at or above the median `momentum_12_1` of the cohort's passing, non-FREEFALL rows | same bars |
 | `trending_value` | the Magic Formula's best `pool`, then the top `top_n` of those by `momentum_12_1` | `pool` 60 (40, 60, 100); `top_n` 20 |
 | `value_graded` | `_ranked(row, top_n)` and `mos_formula ≥ mos` | `top_n` 30; `mos` 0.20 (0.10, 0.20, 0.30) |
 | `value_no_downtrend` | the existing `value` rule's picks whose trend is not DOWNTREND | `top_n` 30; `mos` 0.30 |
@@ -49,19 +49,25 @@ All require `passes_filters` and a trend other than FREEFALL. "Top n by x" sorts
 
 `SENSITIVITY_GRID` gains `min_er`, `pool`, `min_fcf_yield`, and `mos` gains 0.10.
 
-### 3. The pass rule (fixed before any run)
+### 3. The pass rule (fixed before any run; amended 2026-11-05 after the whole-branch review, still before any run)
 
 For a rule, over the one-year hold, a cohort counts when the rule picked at least 5 names in it. The rule **supports a live bar change** when all hold:
 
-1. it has at least 20 such cohorts;
+1. it has at least 20 such cohorts, falling in at least 7 different calendar years;
 2. its basket beat the equal-weight universe in at least 60% of them;
 3. the mean of its cohort excess returns over the universe is at least +2 points, and the mean excess over SPY is at least 0;
 4. over the three-year hold the mean cohort excess over the universe is at least 0;
-5. its mean one-year excess over the universe is higher than `magic_formula`'s (the plain screen, measured the same way).
+5. its mean one-year excess over the universe is higher than `magic_formula`'s **over the same cohorts** (the plain screen measured on exactly the cohorts the candidate counted in).
 
-Otherwise it **does not support** one. `backtest.bar_verdict(summary_1y, summary_3y, baseline_1y) -> dict` returns `{"supports", "sentence", "cohorts", "beat_share", "mean_excess_universe", "mean_excess_spy", "mean_excess_universe_3y", "baseline"}`; the report prints one sentence per new rule under `## Buy-bar candidates`, with the numbers. The existing rules keep their sentences.
+Otherwise it **does not support** one. `backtest.bar_verdict(one_year, three_year, baseline_matched, rule="") -> dict` returns `{"supports", "sentence", "failed", "cohorts", "years", "beat", "beat_share", "mean_excess_universe", "mean_excess_spy", "mean_excess_universe_3y", "baseline", "year_mean", "year_se"}`; the report prints one sentence per new rule under `## Buy-bar candidates`. The sentence gives counts ("26 of 40"), means to two decimals, and ends with the verdict and, when it fails, `Failed: (1) ..., (5) ...`. The existing rules keep their sentences.
 
-`_summary` gains `cohorts_min5` (count of cohorts with at least five picks), `beat_universe_min5`, `mean_excess_universe_min5`, `mean_excess_spy_min5` so the verdict reads from the summary.
+`_summary` gains `cohorts_min5`, `years_min5` (distinct calendar years among those cohorts), `beat_universe_min5`, `mean_excess_universe_min5`, `mean_excess_spy_min5`, `cohort_excess_universe_min5` (`{cohort: excess}`), and, as information only, `year_mean_excess_universe` and `year_se_excess_universe`: the mean and standard error of the calendar-year averages of the cohort excesses.
+
+**The survivorship check, also fixed before the run.** The S&P 400 publishes no join dates, so every current member is in every cohort, including names that entered after rising; a 20-name basket ranked on momentum can hold several while the universe holds each at about 1/600. The run is therefore made twice: on the S&P 500 and 400 together (the verdict above) and on the S&P 500 alone (`backtest --indexes sp500`, report `backtest_<date>_sp500.md`), where membership is point-in-time by join date. A candidate is **recommended** to the user for a live change only when it supports on the full universe and, on the S&P 500 alone, its mean one-year excess over the universe is above zero and above the matched plain screen's. The report says the bias is shared but not equal.
+
+**What the report must say wherever it counts cohorts** (in "What was tested"): one-year holds on quarterly dates overlap, so the cohorts are not independent and amount to about eleven separate years; three-year holds overlap far more and amount to fewer than four separate periods; six candidates were tried against one threshold, so one passing by luck is plausible; returns are before trading costs; a pass is evidence to look closer, not proof.
+
+**Other points settled before the run.** `er_momentum`'s median is taken over the cohort's rows that pass the filters, are not FREEFALL and have a momentum value (the same population every rule draws from). `backtest.last_year` becomes 2025 (cohorts whose one-year hold has not ended are dropped anyway). The `backtest` command screens the US lists only (`sp500`, `sp400`) unless `--indexes` says otherwise, since EDGAR covers US filers.
 
 ### 4. Report and command
 
