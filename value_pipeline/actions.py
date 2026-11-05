@@ -303,9 +303,11 @@ def plan(decisions: list[Decision], cash: float, sizing: dict,
 
     buys = sum(a.amount or 0.0 for a in actions if a.action in ("BUY", "ADD"))
     move = parking_move(cash + proceeds, buys, parked, parking) if parking else None
+    price = parking.get("price_usd") if parking else None
+    if move and not price and move["action"] == "PARK":
+        move = None      # no dollar price for the fund: no PARK; an UNPARK that funds sized buys stays
     cash_after = available - parked      # the cash left after the stock actions
     if move:
-        price = parking.get("price_usd")
         move["shares"] = round(move["amount"] / price, 4) if price else None
         cash_after += move["amount"] if move["action"] == "UNPARK" else -move["amount"]
     summary = {

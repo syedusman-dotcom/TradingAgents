@@ -278,6 +278,17 @@ def test_review_over_the_cost_cap_cannot_be_started(tmp_path):
 
 
 @pytest.mark.unit
+def test_run_preview_and_start_refuse_the_index_fund(tmp_path):
+    calls = []
+    client, app, paths = _client(tmp_path, job_funcs={"review": lambda paths, cfg, **kw: calls.append(kw)})
+    ops.init_portfolio(paths, 1000.0)
+    r = client.post("/run/preview", data={"kind": "review", "tickers": "sxr8.de", "token": app.state.token})
+    assert r.status_code == 400 and "index fund" in r.text and 'name="confirm"' not in r.text
+    r = _post(client, app, "/run/start", kind="review", tickers="SXR8.DE", confirm="yes")
+    assert r.status_code == 303 and "index+fund" in r.headers["location"] and calls == []
+
+
+@pytest.mark.unit
 def test_settings_validate_and_back_up(tmp_path):
     client, app, paths = _client(tmp_path)
     cfg = tmp_path / "config.yaml"

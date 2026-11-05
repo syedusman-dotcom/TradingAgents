@@ -124,7 +124,7 @@ def actions_markdown(date: str, actions: list[Action], summary: dict, *, reports
     if fund:
         lines += ["## Index fund", ""]
         move = summary.get("parking")
-        if not fund["priced"]:
+        if not move and not fund["priced"]:
             lines.append(f"No suggestion: no dollar price for {fund['ticker']} today.")
         elif not move:
             lines.append("No change.")
@@ -133,6 +133,8 @@ def actions_markdown(date: str, actions: list[Action], summary: dict, *, reports
             lines.append(f"Buy {_money(move['amount'])} of {fund['ticker']}{about}")
         else:
             lines.append(f"Sell {_money(move['amount'])} of {fund['ticker']} to fund the buys; place it first")
+            if not fund["priced"]:
+                lines.append(f"No dollar price for {fund['ticker']} today: work out the shares at your broker.")
         lines += ["", "Idle money sits in the index fund so it moves with the market and can fall; "
                   "sell it only to fund a buy.", ""]
 

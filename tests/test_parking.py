@@ -62,9 +62,17 @@ def test_plan_sizes_buys_against_the_fund_and_unparks_the_shortfall():
     assert s["cash_after"] == pytest.approx(0.0)
 
 
-def test_plan_without_a_fund_price_gives_no_share_count():
+def test_plan_without_a_fund_price_suggests_no_park():
     _, s = plan([], 5_000.0, DEFAULTS["sizing"], parked=0.0, parking=PARK)
-    assert s["parking"]["action"] == "PARK" and s["parking"]["shares"] is None
+    assert s["parking"] is None and s["cash_after"] == pytest.approx(5_000.0)
+
+
+def test_plan_without_a_fund_price_still_unparks_for_the_buys():
+    buy = Decision("AAA", "Buy", 100.0, margin_of_safety=0.4)
+    actions, s = plan([buy], 500.0, DEFAULTS["sizing"], parked=5_000.0, parking=PARK)
+    assert actions[0].amount == pytest.approx(550.0)
+    assert s["parking"] == {"action": "UNPARK", "amount": pytest.approx(50.0), "shares": None}
+    assert s["cash_after"] == pytest.approx(0.0)
 
 
 def test_parking_ticker_helper():
@@ -95,8 +103,14 @@ def test_actions_shows_the_index_fund_section():
 
     _, none = plan([], 100.0, DEFAULTS["sizing"], parked=0.0, parking=PARK)
     assert "No change." in _md(none, {"ticker": FUND, "value": 0.0, "priced": True})
-    assert "No suggestion: no dollar price for SXR8.DE today." in _md(park, {"ticker": FUND, "value": 3.0, "priced": False})
+    assert "No suggestion: no dollar price for SXR8.DE today." in _md(none, {"ticker": FUND, "value": 3.0, "priced": False})
     assert "## Index fund" not in _md(park, None)
+
+    _, unpriced = plan([buy], 500.0, DEFAULTS["sizing"], parked=5_000.0, parking=PARK)
+    md = _md(unpriced, {"ticker": FUND, "value": 5_000.0, "priced": False})
+    assert "Sell $50.00 of SXR8.DE to fund the buys; place it first" in md
+    assert "No dollar price for SXR8.DE today: work out the shares at your broker." in md
+    assert "No suggestion" not in md
 
 
 def _portfolio(tmp_path, fund=True):
@@ -158,6 +172,17 @@ def test_review_refuses_the_fund_by_name(tmp_path, monkeypatch):
         review.run(paths, copy.deepcopy(DEFAULTS), yes=True, dry_run=True, only=["hrb", "sxr8.de"])
     with pytest.raises(SystemExit, match="index fund"):
         cli.main(["--data-dir", str(tmp_path), "review", "--dry-run", "--yes", "--tickers", FUND])
+
+
+def test_preview_refuses_a_list_naming_the_fund(tmp_path, monkeypatch):
+    paths = _portfolio(tmp_path)
+    with pytest.raises(SystemExit, match="index fund"):
+        review.preview(paths, copy.deepcopy(DEFAULTS), only=["sxr8.de"])
+    plan_ = review.preview(paths, copy.deepcopy(DEFAULTS), only=["HRB"])
+    assert plan_["tickers"] == ["HRB"]
+    cfg = copy.deepcopy(DEFAULTS)
+    cfg["parking"]["ticker"] = ""
+    assert review.preview(paths, cfg, only=[FUND])["tickers"] == [FUND]
 
 
 def test_daily_and_watch_skip_the_fund(tmp_path, monkeypatch):

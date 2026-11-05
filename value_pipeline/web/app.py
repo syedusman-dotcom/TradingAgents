@@ -285,7 +285,11 @@ def create_app(paths: Paths, *, config_path: Path = CONFIG_PATH, price_fn=market
         except FormError as exc:
             return render(request, "run.html", status=400, current=app.state.runner.current(),
                           jobs=app.state.runner.history(), error=str(exc))
-        plan = reviewmod.preview(paths, load_config(app.state.config_path), only)
+        try:
+            plan = reviewmod.preview(paths, load_config(app.state.config_path), only)
+        except reviewmod.IndexFundNamed as exc:
+            return render(request, "run.html", status=400, current=app.state.runner.current(),
+                          jobs=app.state.runner.history(), error=str(exc))
         return render(request, "run_preview.html", plan=plan, tickers=",".join(only or []),
                       dry_run=form.get("dry_run") == "yes")
 
@@ -308,7 +312,10 @@ def create_app(paths: Paths, *, config_path: Path = CONFIG_PATH, price_fn=market
             if lock.held(paths, "review"):
                 return RedirectResponse("/run?msg=" + quote_plus(
                     "Not started: another review is running in another process (the scheduled one?)"), status_code=303)
-            plan = reviewmod.preview(paths, cfg, only)
+            try:
+                plan = reviewmod.preview(paths, cfg, only)
+            except reviewmod.IndexFundNamed as exc:
+                return RedirectResponse(f"/run?msg={quote_plus(str(exc))}", status_code=303)
             if plan["blocked"] and not dry:
                 msg = (f"Estimated cost ${plan['estimate']:,.2f} exceeds max_cost_per_review "
                        f"${plan['limit']:,.2f}; nothing was started")

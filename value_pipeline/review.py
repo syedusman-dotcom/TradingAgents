@@ -306,6 +306,17 @@ def recently_reviewed(paths: Paths, days: int, today: date | None = None) -> set
     return out
 
 
+class IndexFundNamed(SystemExit):
+    """A ticker list names the index fund, which is never reviewed."""
+
+
+def refuse_fund(only: list[str] | None, cfg: dict) -> None:
+    fund = parking_ticker(cfg)
+    if fund and fund in {t.strip().upper() for t in only or []}:
+        raise IndexFundNamed(f"{fund} is the index fund for idle cash and is not reviewed. "
+                             "Leave it out of the ticker list (or set parking.ticker to \"\" to treat it as a stock).")
+
+
 def preview(paths: Paths, cfg: dict, only: list[str] | None = None,
             discovered: list[str] | None = None, today: date | None = None) -> dict:
     """What a review would run and cost, without running anything.
@@ -319,8 +330,7 @@ def preview(paths: Paths, cfg: dict, only: list[str] | None = None,
     pf = pfmod.load(paths)
     fund = parking_ticker(cfg)
     owned = {p.ticker for p in pf.positions}
-    if only and fund:       # the index fund is never reviewed (`_run` refuses a list naming it)
-        only = [t for t in only if t.strip().upper() != fund]
+    refuse_fund(only, cfg)
     candidates: list[str] = []
     if not only:
         n_themes = len({t for t in discovered or [] if t not in owned})
@@ -456,10 +466,8 @@ def _run(paths: Paths, cfg: dict, *, yes: bool, dry_run: bool, today: str | None
          discover: bool = False) -> Path:
     today = today or date.today().isoformat()
     rcfg = cfg["review"]
+    refuse_fund(only, cfg)
     fund = parking_ticker(cfg)
-    if fund and fund in {t.strip().upper() for t in only or []}:
-        raise SystemExit(f"{fund} is the index fund for idle cash and is not reviewed. "
-                         "Leave it out of --tickers (or set parking.ticker to \"\" to treat it as a stock).")
     pf = pfmod.load(paths)
     owned = {p.ticker for p in pf.positions}
     ta = tally = None
