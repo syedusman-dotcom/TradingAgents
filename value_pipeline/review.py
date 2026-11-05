@@ -365,19 +365,23 @@ def offscreen_row(ticker: str, paths: Paths, cfg: dict, screen: dict[str, dict])
     scfg = cfg["screen"]
     try:
         data = market_data.fundamentals(ticker, paths, scfg["cache_days"])
+        data = market_data.in_usd(data)
         row = screener.evaluate(data, scfg["normalize_years"], scfg["roic_cap"],
                                 metrics.current_discount_rate()["rate"])
     except Exception as exc:  # noqa: BLE001 - the review stands without the formula's figures
         log.warning("no screen figures for %s: %s", ticker, exc)
         return None
-    row["sector"] = market_data.cached_sector(ticker, paths) or data.get("sector")
+    row["sector"] = market_data.gics_sector(market_data.cached_sector(ticker, paths) or data.get("sector"))
+    suffix = ticker[ticker.rfind("."):] if "." in ticker else ""
+    market = next((m for m in market_data.MARKETS.values() if m.suffix == suffix), None)
+    row["market"], row["country"] = (market.key, market.country) if market else (None, None)
     target = screener.sector_target(list(screen.values()), row["sector"])
     screener.with_target(row, data["years"], data.get("price"), row["market_cap"], row["shares"], target)
     reasons = screener.failed_filters(row, cfg["filters"])
     row["passes_filters"], row["fail_reasons"] = not reasons, "; ".join(reasons)
     hints = screener.lane_hints(row)
     row["hints"], row["lane_hint"] = ";".join(hints), hints[0] if hints else ""
-    return row
+    return screener.to_quote(row, data)
 
 
 def screen_row_for(ticker: str, paths: Paths, cfg: dict, screen: dict[str, dict]) -> dict | None:

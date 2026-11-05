@@ -1316,7 +1316,7 @@ def test_fundamentals_cache_quarterly_statements(tmp_path, monkeypatch):
     monkeypatch.setattr(market_data, "closes", lambda t: [20.0])
     paths = Paths(tmp_path)
     data = market_data.fundamentals("ABC", paths)
-    assert market_data.CACHE_SCHEMA == 6 and data["schema"] == 6
+    assert market_data.CACHE_SCHEMA == 7 and data["schema"] == 7
     assert data["industry"] == "Specialty Industrial Machinery"
     assert [q["fiscal_year_end"] for q in data["quarters"]] == ["2026-06-30", "2026-03-31"]
     assert market_data.fundamentals("ABC", paths)["from_cache"] is True

@@ -19,6 +19,7 @@ import pandas as pd
 import requests
 import yfinance as yf
 
+from tradingagents.dataflows.value_metrics import YEAR_FIELDS
 from tradingagents.dataflows.vendors.yahoo.common import MINOR_UNITS, usd_rate
 from tradingagents.dataflows.vendors.yahoo.value_metrics import (
     fetch_quarters,
@@ -33,7 +34,7 @@ HEADERS = {"User-Agent": "value-pipeline/0.1 (personal research tool)"}
 
 
 # Bump when the cached fields change, so older cache files are fetched again.
-CACHE_SCHEMA = 6
+CACHE_SCHEMA = 7
 
 
 class DataUnavailable(Exception):
@@ -254,6 +255,7 @@ def fundamentals(ticker: str, paths: Paths, cache_days: int = 7) -> dict:
         "price": info.get("currentPrice") or info.get("regularMarketPrice") or (series[-1] if series else None),
         "shares": info.get("sharesOutstanding"),
         "currency": info.get("currency"),
+        "financial_currency": info.get("financialCurrency"),
         "sector": info.get("sector"),
         "industry": info.get("industry"),
         "years": years,
@@ -264,6 +266,59 @@ def fundamentals(ticker: str, paths: Paths, cache_days: int = 7) -> dict:
     stored = data if complete else {k: v for k, v in data.items() if k != "quarters"}
     cache.write_text(json.dumps(stored), encoding="utf-8")
     return data
+
+
+# Yahoo's sector names in the GICS vocabulary the S&P lists use; the rest are already the same.
+GICS_NAMES = {
+    "Financial Services": "Financials",
+    "Technology": "Information Technology",
+    "Consumer Cyclical": "Consumer Discretionary",
+    "Consumer Defensive": "Consumer Staples",
+    "Basic Materials": "Materials",
+    "Healthcare": "Health Care",
+}
+
+
+def gics_sector(sector: str | None) -> str | None:
+    """``sector`` (Yahoo's or GICS) in the GICS vocabulary; an unmapped name passes through."""
+    return GICS_NAMES.get(sector, sector)
+
+
+MONEY_FIELDS = tuple(f for f in YEAR_FIELDS if f != "shares")
+
+
+def _major_rate(currency: str) -> float:
+    """US dollars per major unit of ``currency`` (a pence code answers with the pound's rate)."""
+    rate = 1.0 if currency == "USD" else usd_rate(currency)
+    if rate is None:
+        raise DataUnavailable(f"no USD rate for {currency}")
+    return rate
+
+
+def _money_in_usd(statement: dict, fx: float) -> dict:
+    return {k: v * fx if k in MONEY_FIELDS and isinstance(v, (int, float)) else v
+            for k, v in statement.items()}
+
+
+def in_usd(data: dict) -> dict:
+    """A copy of fundamentals ``data`` in US dollars: price at the quote currency's rate (a
+    pence price at the pound's / 100), market cap and enterprise value at its major unit's
+    rate, statement money at the financial currency's rate (the quote currency's when Yahoo
+    names none); share counts are untouched. Adds ``fx_quote``, ``fx_financial`` and
+    ``quote_currency``. A missing currency is taken as dollars."""
+    currency, financial = data.get("currency"), data.get("financial_currency")
+    major = _major_rate(currency) if currency else 1.0
+    fx_quote = major / 100 if currency in MINOR_UNITS else major
+    fx_financial = _major_rate(financial) if financial else major
+    out = dict(data)
+    for key, fx in (("price", fx_quote), ("market_cap", major), ("enterprise_value", major)):
+        if isinstance(data.get(key), (int, float)):
+            out[key] = data[key] * fx
+    out["years"] = [_money_in_usd(y, fx_financial) for y in data.get("years") or []]
+    if "quarters" in data:
+        out["quarters"] = [_money_in_usd(q, fx_financial) for q in data["quarters"]]
+    out.update(fx_quote=fx_quote, fx_financial=fx_financial, quote_currency=currency)
+    return out
 
 
 def cached_sector(ticker: str, paths: Paths) -> str | None:

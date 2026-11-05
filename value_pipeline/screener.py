@@ -344,24 +344,48 @@ def latest_scares(paths: Paths) -> dict[str, list[dict]]:
     return out
 
 
+def to_quote(row: dict, data: dict) -> dict:
+    """Put ``row``'s per-share columns back in the quote unit (``data`` is the converted record):
+    the screen ranks in dollars, but Nordnet and the worksheet quote pence, kroner or yen."""
+    fx = data["fx_quote"]
+    for key in ("price", "value_base", "value_low", "value_high"):
+        if row.get(key) is not None:
+            row[key] = row[key] / fx
+    row["quote_currency"], row["fx_quote"] = data["quote_currency"], fx
+    return row
+
+
 def run(paths: Paths, cfg: dict, owned: set[str], today: str | None = None) -> dict:
     today = today or date.today().isoformat()
     uni = market_data.universe(paths, cfg["universe"]["indexes"])
-    excluded_mask = uni["sector"].isin(cfg["universe"]["exclude_sectors"])
-    excluded, candidates = uni[excluded_mask], uni[~excluded_mask]
+    skip_sectors = set(cfg["universe"]["exclude_sectors"])
+    excluded, candidates = [], []
+    for rec in uni.itertuples(index=False):
+        # The S&P lists carry a GICS sector; every other market's comes from Yahoo.
+        sector = rec.sector if isinstance(rec.sector, str) else market_data.gics_sector(
+            market_data.cached_sector(rec.ticker, paths))
+        if sector in skip_sectors:
+            excluded.append({"ticker": rec.ticker, "name": rec.name, "sector": sector})
+        else:
+            candidates.append(rec)
 
     rate = metrics.current_discount_rate()
     log.info("valuing at a %.1f%% discount rate (10-year Treasury %s)", rate["rate"] * 100,
              "unavailable" if rate["treasury_10y"] is None else f"{rate['treasury_10y']:.2%}")
-    rows, skipped, inputs = [], [], {}
+    rows, skipped, inputs, quoted = [], [], {}, {}
     total = len(candidates)
-    for i, rec in enumerate(candidates.itertuples(index=False), 1):
+    for i, rec in enumerate(candidates, 1):
         if i % 50 == 0 or i == total:
             log.info("screened %d/%d", i, total)
         try:
             data = market_data.fundamentals(rec.ticker, paths, cfg["screen"]["cache_days"])
             if not data.get("from_cache"):
                 market_data.throttle(cfg["screen"]["throttle_seconds"])
+            sector = rec.sector if isinstance(rec.sector, str) else market_data.gics_sector(data.get("sector"))
+            if sector in skip_sectors:
+                excluded.append({"ticker": rec.ticker, "name": rec.name, "sector": sector})
+                continue
+            data = market_data.in_usd(data)
             row = evaluate(data, cfg["screen"]["normalize_years"], cfg["screen"]["roic_cap"], rate["rate"])
         except market_data.DataUnavailable as exc:
             log.info("skip %s: %s", rec.ticker, exc)
@@ -372,7 +396,8 @@ def run(paths: Paths, cfg: dict, owned: set[str], today: str | None = None) -> d
             skipped.append({"ticker": rec.ticker, "reason": f"{type(exc).__name__}: {exc}"})
             continue
         inputs[rec.ticker] = (data["years"], data.get("price"), row["market_cap"], row["shares"])
-        row.update(name=rec.name, sector=rec.sector, index=rec.index)
+        quoted[rec.ticker] = data
+        row.update(name=rec.name, sector=sector, index=rec.index, market=rec.market, country=rec.country)
         row["fail_reasons"] = failed_filters(row, cfg["filters"])
         rows.append(row)
 
@@ -393,6 +418,11 @@ def run(paths: Paths, cfg: dict, owned: set[str], today: str | None = None) -> d
         hints = lane_hints(r)
         r["hints"] = ";".join(hints)
         r["lane_hint"] = hints[0] if hints else ""
+        to_quote(r, quoted[r["ticker"]])
+    by_market: dict[str, int] = {}
+    for r in rows:
+        by_market[r["market"]] = by_market.get(r["market"], 0) + 1
+    log.info("screened by market: %s", ", ".join(f"{m} {n}" for m, n in by_market.items()))
     scares = tag_sector_scares(rows)
     for industry, tickers in scares.items():
         log.info("sector scare in %s: %s", industry, ", ".join(tickers))
@@ -406,7 +436,7 @@ def run(paths: Paths, cfg: dict, owned: set[str], today: str | None = None) -> d
     out.with_suffix(".csv.tmp").replace(out)          # whole or absent: the website reads it any time
     _write_rows(paths.screens / f"screen_{today}_skipped.csv", skipped, ["ticker", "reason"])
     _write_rows(paths.screens / f"screen_{today}_excluded.csv",
-                excluded[["ticker", "name", "sector"]].to_dict("records"), ["ticker", "name", "sector"])
+                excluded, ["ticker", "name", "sector"])
     return {**result, "path": out, "screened": len(rows), "skipped": skipped, "excluded": excluded,
             "scares": scares}
 
