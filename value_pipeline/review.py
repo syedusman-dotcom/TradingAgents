@@ -648,9 +648,9 @@ def _hint(row: dict | None) -> str:
 
 def _holding_value(p, price: float | None, fx: tuple[str | None, float | None]) -> float:
     """An unreviewed holding's value in US dollars: today's price at the quote's rate, else its
-    cost basis as recorded (as before)."""
+    cost basis in dollars."""
     rate = fx[1]
-    return p.shares * price * rate if price is not None and rate is not None else p.shares * p.avg_price
+    return p.shares * price * rate if price is not None and rate is not None else p.cost_usd
 
 
 def _write_whole(path: Path, data) -> None:

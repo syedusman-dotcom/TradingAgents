@@ -6,7 +6,7 @@ import logging
 from collections.abc import Callable
 from datetime import date
 
-from value_pipeline import market_data
+from value_pipeline import market_data, portfolio
 
 log = logging.getLogger(__name__)
 
@@ -15,7 +15,7 @@ def cash_flows(deposits: list[dict], trades: list[dict]) -> list[tuple[str, str,
     """(date, kind, amount) events: deposits, money spent on buys, money received from sells."""
     events = [(d["date"], "deposit", float(d["amount"])) for d in deposits]
     for t in trades:
-        gross = float(t["shares"]) * float(t["price"])
+        gross = float(t["shares"]) * float(t["price"]) * portfolio.row_fx(t)
         fees = float(t.get("fees") or 0)
         if t["action"] == "BUY":
             events.append((t["date"], "buy", gross + fees))

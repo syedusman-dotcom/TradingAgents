@@ -16,7 +16,7 @@ from pathlib import Path
 
 from value_pipeline.config import Paths
 
-TRADE_FIELDS = ["date", "ticker", "action", "shares", "price", "fees", "note"]
+TRADE_FIELDS = ["date", "ticker", "action", "shares", "price", "fees", "note", "currency", "fx"]
 # Fractional shares below this are rounding dust, not a position.
 _DUST = 1e-9
 
@@ -36,6 +36,13 @@ class Position:
     entry_price: float | None = None                          # the agents' buy-below price at the last review
     next_earnings_date: str | None = None                      # ISO date, looked up at the last review
     lane: str = "value"                                        # value / compounder / inflection
+    currency: str | None = None                                # quote currency (None: dollars)
+    avg_fx: float = 1.0                                        # dollars paid per quoted unit, averaged
+
+    @property
+    def cost_usd(self) -> float:
+        """Dollars paid for the position, fees included."""
+        return self.shares * self.avg_price * self.avg_fx
 
 
 @dataclass
@@ -90,27 +97,32 @@ def _finite(**values: float) -> None:
 def apply_buy(pf: Portfolio, ticker: str, shares: float, price: float, fees: float = 0.0,
               on: str | None = None, thesis: str = "", intrinsic_value: float | None = None,
               kill_criteria: list[str] | None = None, entry_price: float | None = None,
-              lane: str = "value") -> Position:
+              lane: str = "value", currency: str | None = None, fx: float = 1.0) -> Position:
+    """Buy in the quote unit: price is per quoted unit, fx is dollars per unit, fees are dollars."""
     ticker = ticker.upper()
-    _finite(shares=shares, price=price, fees=fees)
-    if shares <= 0 or price <= 0 or fees < 0:
-        raise TradeError("shares and price must be positive, fees not negative")
-    cost = shares * price + fees
+    _finite(shares=shares, price=price, fees=fees, fx=fx)
+    if shares <= 0 or price <= 0 or fees < 0 or fx <= 0:
+        raise TradeError("shares, price and fx must be positive, fees not negative")
+    cost = shares * price * fx + fees            # dollars
     if cost > pf.cash + 1e-6:
         raise TradeError(
             f"buying costs {cost:,.2f} but cash is {pf.cash:,.2f}; record a deposit first"
         )
     pf.cash -= cost
+    quote_cost = shares * price + fees / fx      # quote units
     held = pf.position(ticker)
     if held is None:
-        held = Position(ticker=ticker, shares=shares, avg_price=cost / shares,
+        held = Position(ticker=ticker, shares=shares, avg_price=quote_cost / shares,
                         first_bought=on or date.today().isoformat(), thesis=thesis,
                         intrinsic_value_estimate=intrinsic_value,
                         kill_criteria=list(kill_criteria or []), entry_price=entry_price,
-                        lane=lane or "value")
+                        lane=lane or "value", currency=currency, avg_fx=cost / quote_cost)
         pf.positions.append(held)
     else:
-        held.avg_price = (held.shares * held.avg_price + cost) / (held.shares + shares)
+        total_quote = held.shares * held.avg_price + quote_cost
+        held.avg_fx = (held.cost_usd + cost) / total_quote
+        held.avg_price = total_quote / (held.shares + shares)
+        held.currency = held.currency or currency
         held.shares += shares
         if thesis and not held.thesis:
             held.thesis = thesis
@@ -119,23 +131,24 @@ def apply_buy(pf: Portfolio, ticker: str, shares: float, price: float, fees: flo
     return held
 
 
-def apply_sell(pf: Portfolio, ticker: str, shares: float, price: float, fees: float = 0.0) -> float:
-    """Sell shares; returns the realised gain. Average price is unchanged by a sale."""
+def apply_sell(pf: Portfolio, ticker: str, shares: float, price: float, fees: float = 0.0,
+               fx: float = 1.0) -> float:
+    """Sell shares; returns the realised gain in dollars. Average price is unchanged by a sale."""
     ticker = ticker.upper()
     held = pf.position(ticker)
     if held is None:
         raise TradeError(f"no position in {ticker}")
-    _finite(shares=shares, price=price, fees=fees)
-    if shares <= 0 or price <= 0 or fees < 0:
-        raise TradeError("shares and price must be positive, fees not negative")
+    _finite(shares=shares, price=price, fees=fees, fx=fx)
+    if shares <= 0 or price <= 0 or fees < 0 or fx <= 0:
+        raise TradeError("shares, price and fx must be positive, fees not negative")
     if shares > held.shares + _DUST:
         raise TradeError(f"selling {shares:g} {ticker} but only {held.shares:g} held")
-    proceeds = shares * price - fees
+    proceeds = shares * price * fx - fees
     pf.cash += proceeds
     held.shares -= shares
     if held.shares <= _DUST:
         pf.positions.remove(held)
-    return proceeds - shares * held.avg_price
+    return proceeds - shares * held.avg_price * held.avg_fx
 
 
 def apply_deposit(pf: Portfolio, amount: float, on: str | None = None) -> None:
@@ -180,9 +193,35 @@ def save(paths: Paths, pf: Portfolio) -> Path | None:
     return made
 
 
+def row_fx(row: dict) -> float:
+    """A trade row's dollars-per-unit rate; rows from before the column (or blank) are dollars."""
+    try:
+        return float(row.get("fx") or 1.0)
+    except ValueError:
+        return 1.0
+
+
+def _upgrade_trades(paths: Paths) -> None:
+    """Rewrite a trades.csv with an older header to the current one, whole, then swap it in."""
+    with paths.trades.open(newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        if reader.fieldnames == TRADE_FIELDS:
+            return
+        rows = list(reader)
+    tmp = paths.trades.with_name(paths.trades.name + ".tmp")
+    with tmp.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=TRADE_FIELDS)
+        writer.writeheader()
+        for r in rows:
+            writer.writerow({k: r.get(k, "") for k in TRADE_FIELDS})
+    tmp.replace(paths.trades)
+
+
 def append_trade(paths: Paths, row: dict) -> None:
     new = not paths.trades.exists()
     paths.root.mkdir(parents=True, exist_ok=True)
+    if not new:
+        _upgrade_trades(paths)
     with paths.trades.open("a", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=TRADE_FIELDS)
         if new:

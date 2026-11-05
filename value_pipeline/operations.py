@@ -54,32 +54,54 @@ def init_portfolio(paths: Paths, cash: float, currency: str = "USD", on: str | N
     return pf
 
 
+def trade_fx(ticker: str, fx: float | None, position: pfmod.Position | None = None,
+             fx_fn=market_data.quote_fx) -> tuple[str | None, float]:
+    """The quote currency and dollars per quoted unit for a fill: a given rate wins over the market's."""
+    market_currency, market_rate = fx_fn(ticker)
+    currency = market_currency or (position.currency if position else None)
+    if fx is not None:
+        return currency, fx
+    if currency in (None, "USD"):
+        return currency, 1.0
+    if market_rate is None:
+        raise pfmod.TradeError(f"no dollar rate for {currency}: pass --fx (dollars per {currency})")
+    return currency, market_rate
+
+
 def record_buy(paths: Paths, ticker: str, shares: float, price: float, fees: float = 0.0,
-               on: str | None = None, note: str = "") -> tuple[pfmod.Position, pfmod.Portfolio]:
+               on: str | None = None, note: str = "",
+               fx: float | None = None) -> tuple[pfmod.Position, pfmod.Portfolio]:
     pf = pfmod.load(paths)
     ticker, on = ticker.strip().upper(), on or date.today().isoformat()
+    currency, rate = trade_fx(ticker, fx, pf.position(ticker),
+                              fx_fn=lambda t: market_data.quote_fx(t))   # late-bound, patchable
     found = review.latest_result(paths, ticker) if pf.position(ticker) is None else None
     held = pfmod.apply_buy(pf, ticker, shares, price, fees, on=on,
                            thesis=(found or {}).get("thesis", ""),
                            intrinsic_value=(found or {}).get("intrinsic_value"),
                            kill_criteria=(found or {}).get("kill_criteria"),
                            entry_price=(found or {}).get("entry_price"),
-                           lane=(found or {}).get("lane") or "value")
+                           lane=(found or {}).get("lane") or "value", currency=currency, fx=rate)
     before = pfmod.save(paths, pf)
     pfmod.append_trade(paths, {"date": on, "ticker": ticker, "action": "BUY", "shares": shares,
-                               "price": price, "fees": fees, "note": note})
+                               "price": price, "fees": fees, "note": note,
+                               "currency": currency or "", "fx": rate})
     _remember(paths, before, f"BUY {shares:g} {ticker} @ {price:,.2f} on {on}")
     return held, pf
 
 
 def record_sell(paths: Paths, ticker: str, shares: float, price: float, fees: float = 0.0,
-                on: str | None = None, note: str = "") -> tuple[float, pfmod.Portfolio]:
+                on: str | None = None, note: str = "",
+                fx: float | None = None) -> tuple[float, pfmod.Portfolio]:
     pf = pfmod.load(paths)
     ticker, on = ticker.strip().upper(), on or date.today().isoformat()
-    gain = pfmod.apply_sell(pf, ticker, shares, price, fees)
+    currency, rate = trade_fx(ticker, fx, pf.position(ticker),
+                              fx_fn=lambda t: market_data.quote_fx(t))   # late-bound, patchable
+    gain = pfmod.apply_sell(pf, ticker, shares, price, fees, fx=rate)
     before = pfmod.save(paths, pf)
     pfmod.append_trade(paths, {"date": on, "ticker": ticker, "action": "SELL", "shares": shares,
-                               "price": price, "fees": fees, "note": note})
+                               "price": price, "fees": fees, "note": note,
+                               "currency": currency or "", "fx": rate})
     _remember(paths, before, f"SELL {shares:g} {ticker} @ {price:,.2f} on {on}")
     return gain, pf
 
@@ -121,11 +143,12 @@ def undo_last(paths: Paths) -> str:
 
 
 def realised_gains(trades: list[dict]) -> list[float | None]:
-    """Each sale's gain against the average cost (fees included) at the time; None for buys."""
+    """Each sale's dollar gain against the average cost (fees included) at the time; None for buys."""
     held: dict[str, tuple[float, float]] = {}   # ticker -> (shares, cost)
     gains: list[float | None] = []
     for t in trades:
-        shares, price, fees = float(t["shares"]), float(t["price"]), float(t.get("fees") or 0)
+        shares, fees = float(t["shares"]), float(t.get("fees") or 0)
+        price = float(t["price"]) * pfmod.row_fx(t)          # dollars per share
         n, cost = held.get(t["ticker"], (0.0, 0.0))
         if t["action"] == "BUY":
             held[t["ticker"]] = (n + shares, cost + shares * price + fees)
@@ -137,18 +160,22 @@ def realised_gains(trades: list[dict]) -> list[float | None]:
     return gains
 
 
-def portfolio_view(paths: Paths, price_fn=market_data.latest_price, benchmark_fn=benchmark.compare) -> dict:
+def portfolio_view(paths: Paths, price_fn=market_data.latest_price, benchmark_fn=benchmark.compare,
+                   fx_fn=market_data.quote_fx) -> dict:
     """The holdings valued at current prices, with weights, gains and the SPY comparison."""
     pf = pfmod.load(paths)
     today = date.today()
     rows = []
     for p in pf.positions:
         price = price_fn(p.ticker)
-        value = p.shares * (price if price is not None else p.avg_price)
+        currency, rate = fx_fn(p.ticker)
+        value = p.shares * price * rate if price is not None and rate is not None else p.cost_usd
+        cost = p.cost_usd
         iv = p.intrinsic_value_estimate
         rows.append({
             "ticker": p.ticker, "shares": p.shares, "avg_price": p.avg_price, "price": price,
-            "value": value, "gain": price / p.avg_price - 1 if price else None,
+            "currency": p.currency or currency, "fx": rate, "cost": cost,
+            "value": value, "gain": value / cost - 1 if price and cost else None,
             "last_rating": p.last_rating, "intrinsic_value": iv,
             "margin_of_safety": (iv - price) / iv if iv and price else None,
             "days_held": (today - date.fromisoformat(p.first_bought)).days, "thesis": p.thesis,
