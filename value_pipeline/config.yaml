@@ -100,6 +100,19 @@ lanes:
 #   value_top_n: 30        # the value and Magic Formula rules take this many of the cohort's ranking
 #   benchmark: SPY         # the index fund every basket is compared with (total return)
 
+# The trend-sleeve backtest (python -m value_pipeline trend-backtest): Turtle-style breakouts and
+# 12-1 momentum replayed on daily closes, long only, fills at the next close. Nothing trades.
+trend:
+  start: "2015-07-01"
+  equity: 10000
+  risk_per_trade: 0.01       # of equity, lost if the stop is hit
+  stop_n: 2.0                # stop this many N below the entry
+  n_days: 20                 # N = mean absolute daily close change over this many days
+  max_positions: 10
+  max_position_weight: 0.20  # of equity
+  cost_per_side: 0.0035      # commission plus the broker's currency fee, each buy and each sell
+  market_filter: true        # new entries only while SPY closes above its 200-day average
+
 watch:
   # The weekly check flags a stock the agents rated Buy/Overweight once its price
   # is at least this far below their intrinsic value.
