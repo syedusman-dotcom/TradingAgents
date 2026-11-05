@@ -102,7 +102,19 @@ Nothing else reads the flags: not sizing, not the committee, not `watch`, not `d
 - Compounder-hinted and inflection-hinted candidates, `lanes.tickers`, theme discoveries, holdings and `--tickers` ignore the list: the strict compounder rule is the one rule ahead of SPY in both US tests, and holdings are always reviewed.
 - `screener.top_candidates(..., countries=None)` and `screener.run_rate_skips(..., countries=None)` filter on it; a screen without a `country` column is not filtered.
 - A review (and `review.preview`'s result, key `candidate_countries`) says which countries the value candidates come from, and names any listed country with no row in the latest screen (a typo guard).
-- `load_config` rejects a `candidate_countries` that is not a list of strings.
+- `validate_config` rejects a `candidate_countries` that is not a list of non-empty strings. Country names match without regard to case.
+
+## Settled after the builder check (Claude's calls)
+
+1. The hold-out run slices the close frame and SPY at `holdout_end` before calling `trend.simulate`; positions open at the end are marked at their last close with no sale cost, as the engine already does. `trend.py` is not changed. The join date limits the universe; a member with no cached closes is left out and counted in the report, and the run stops only without join dates or without SPY.
+2. Condition 5 pools the top-10 runs' calendar years from both periods. 2015 appears twice, as two half years, each on its part-year return. A year counts when SPY's return for it is known; "ahead" is strictly greater.
+3. The country filter drops rows and keeps the screen's existing Magic Formula order; nothing is re-ranked. `run_rate_skips` reads the same filtered rows.
+4. A name outside the list that is hinted both compounder and dislocation cannot take a dislocation place and can still take a compounder place.
+5. A paper row's two days are the review day and the review day plus the horizon, each read as the close on or before it, for the stock, SPY and the currency pair alike. A missing rate leaves the dollar return empty (no cross rates); the Paper Buys section says how many counted rows have no dollar result.
+6. The baseline is every row `calibration.rows` returns (errored rows are already left out), any rating, once per ticker per 90 days: everything the agents looked at.
+7. A margin of safety of exactly 0 flags `fair_price`; exactly 0.15 flags `discount_15`. A row without a checklist flags nothing. A row without `still_investing` can flag `fair_price` and `discount_15` only.
+8. `/backtest` links the newest `momentum_*.html` the way it links the newest trend report.
+9. The country list is checked by `validate_config` (where the other settings are checked), not `load_config`. A dry run lists no paper Buys.
 
 ## Testing
 
