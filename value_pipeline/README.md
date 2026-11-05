@@ -229,7 +229,7 @@ parking:
   # cash the next bank day; it tracks MSCI USA Climate Change, not the S&P 500. A Xetra ETF such as
   # SXR8.DE costs about 1% per round trip. "" turns parking off.
   ticker: 0P0001K6NL.ST
-  share: 0.7             # of idle money: cash plus the fund, after this review's buys (0 to 1)
+  share: 0.9             # of idle money: cash plus the fund, after this review's buys (0 to 1)
   min_trade_amount: 250  # dollars; smaller moves into the fund are not suggested
 ```
 
