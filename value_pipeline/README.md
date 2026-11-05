@@ -53,6 +53,7 @@ uv run python -m value_pipeline status
 | `web [--port 8765] [--no-browser]` | Open the local website (this Mac only): dashboard, trades, history with undo, reviews and reports, stock pages, the screen, running jobs and settings. Stop with Ctrl+C. |
 | `calibration [--horizon {30,90,180,365}]` | Every past decision against the closes that followed it, then the scores and one verdict per lane (see Calibration below). Fetches and caches the closes it has not seen. Default horizon 180 days. |
 | `backtest [--from YEAR] [--to YEAR] [--holds 1,3] [--tickers A,B] [--refresh] [--no-fetch]` | The lane rules replayed on past cohort dates against SPY (see Backtest below). No agents. Writes `reports/backtest/backtest_<date>.md` and `_picks.csv` and prints the verdict. |
+| `trend-backtest [--from YYYY-MM-DD] [--no-fetch]` | Turtle-style breakouts and 12-1 momentum replayed on daily closes of today's S&P 500 and 400 members, after costs, with the fixed verdict (see Trend backtest below). No agents, nothing trades. Writes `reports/backtest/trend_<date>.md`, `.html` and `_trades.csv` and prints the report. |
 | `screen [--top N]` | Rank the universe (every market in `universe.indexes`); writes `data/screens/screen_YYYY-MM-DD.csv`. |
 | `review [--yes] [--dry-run] [--candidates N]` | Run the agents and write the action list. |
 | `run-all [--yes] [--dry-run]` | `screen`, then the theme scan (when `lanes.themes` names any), then `review` with the scan's inflection candidates. |
@@ -376,6 +377,46 @@ fiscal year lacks revenue, EBIT or free cash flow (a filer whose tags the map do
 The website's Backtest page shows the newest report. `scripts/pit_probe.py` checks the
 point-in-time statements offline on the EDGAR company facts already cached under
 `~/.tradingagents/cache/sec_edgar/`: fiscal years known on four dates and the fields missing.
+
+### Trend backtest
+
+Would a rules-based trend sleeve have earned its place beside the value portfolio?
+`trend-backtest` replays three long-only systems on the adjusted daily closes (splits and
+dividends in) of today's S&P 500 and S&P 400 members from `trend.start` (2015-07-01):
+`breakout_55_20` (the primary: buy a close above the prior 55-day high, sell a close below the
+prior 20-day low or at the stop, `trend.stop_n` × N below the entry), `breakout_20_10` (the same
+with 20 and 10) and `momentum_12_1` (on the first trading day of each month hold the
+`max_positions` names with the best return from 12 months to 1 month ago among those above
+their 200-day average). A breakout's size risks `trend.risk_per_trade` of equity to the stop,
+capped at `max_position_weight` of equity and by cash; new entries wait while SPY closes below
+its 200-day average (`market_filter`). Every buy and sale costs `cost_per_side` (0.35%, the
+commission plus the currency fee). Each system runs on two universes: `all` (an S&P 500 name
+from its join date) and `quality` (names whose 30 June cohort row of the lane backtest above
+passed the screen's filters, from that date to the next cohort; the 2015 cohort opens it). The
+report gives CAGR, drawdown, volatility, exposure, trade statistics after costs, costs per year
+and the share of profit from the five best trades for each, the primary's calendar years against
+SPY, and a sensitivity table (one setting at a time: `max_positions` 5/10/20, `cost_per_side`
+0/0.35%/0.6%, `market_filter` on/off, `risk_per_trade` 0.5%/1%/2%).
+
+The verdict rule was fixed before the first run and is not to be tuned: the primary on the
+quality universe *supports a live sleeve* when (a) its CAGR is at least SPY's plus 1 point, or at
+least SPY's minus 2 points with a maximum drawdown no more than two thirds of SPY's, (b) the same
+test passes at 0.6% a side, and (c) it gained in at least 60% of the calendar years (part-years
+count). The same test is applied to `momentum_12_1` as the alternative. A supporting verdict
+starts a design for live signals; it turns nothing on.
+
+Limits, stated in the report too: the universe is today's members only, so names that left
+either index are missing and survivorship bias favours the result (the S&P 400 has no join
+dates); N is close-only (mean absolute daily close change over `n_days`, no highs and lows) and
+the stop is read on closes; fills are at the next close after the signal (an entry not filled
+within five trading days is cancelled); shares are fractional; nothing is shorted or leveraged;
+cash earns nothing. A gap of at most five missing closes inside a ticker's history takes the
+close before it (the report counts them); a longer gap blocks that name's signals.
+
+How to run: `uv run python -m value_pipeline trend-backtest`. It first runs the lane backtest's
+cohorts (for the quality universe; the same caches) and then reads the price caches, fetching
+only a missing one; `--no-fetch` reads the caches only and `--from 2018-01-02` moves the start.
+The website's Backtest page links the newest trend report.
 
 ## Files
 

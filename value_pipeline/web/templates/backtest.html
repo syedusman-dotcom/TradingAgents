@@ -1,5 +1,8 @@
 {% extends "base.html" %}
 {% block content %}
+{% if trend %}
+<p class="muted">Trend-sleeve backtest: <a href="/reports/{{ trend[1] }}">the report of {{ trend[0] }}</a> (<code>python -m value_pipeline trend-backtest</code> runs a new one).</p>
+{% endif %}
 {% if report %}
 <p class="muted">Report of {{ report[0] }}. Run <code>python -m value_pipeline backtest</code> for a new one; the picks are in the CSV beside the report.</p>
 {{ report[1] | markdown | safe }}

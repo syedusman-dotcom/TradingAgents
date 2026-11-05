@@ -28,6 +28,7 @@ from value_pipeline import (
     portfolio as pfmod,
     review as reviewmod,
     superinvestors,
+    trend,
 )
 from value_pipeline.config import CONFIG_PATH, Paths, load_config, parking_ticker, validate_config
 from value_pipeline.web import charts, views
@@ -240,7 +241,10 @@ def create_app(paths: Paths, *, config_path: Path = CONFIG_PATH, price_fn=market
     @app.get("/backtest", response_class=HTMLResponse)
     def backtest_page(request: Request):
         # The newest report only: `backtest` on the command line runs it; the page never fetches.
-        return render(request, "backtest.html", report=backtest.latest_report(paths))
+        trend_html = trend.latest_report(paths)
+        trend_link = None if trend_html is None else (
+            trend_html.stem.removeprefix("trend_"), trend_html.relative_to(paths.reports).as_posix())
+        return render(request, "backtest.html", report=backtest.latest_report(paths), trend=trend_link)
 
     @app.get("/screen", response_class=HTMLResponse)
     def screen(request: Request):

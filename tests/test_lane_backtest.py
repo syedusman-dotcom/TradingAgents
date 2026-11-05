@@ -852,6 +852,18 @@ def test_run_end_to_end_with_patched_caches(tmp_path, monkeypatch):
     assert len(picks) == len(result["picks"])
 
 
+def test_backtest_run_keep_rows(tmp_path, monkeypatch):
+    _, plain, _ = _e2e_run(tmp_path / "plain", monkeypatch)
+    assert "rows" not in plain and "added" not in plain
+    _, kept, _ = _e2e_run(tmp_path / "kept", monkeypatch, keep_rows=True)
+    assert set(kept["rows"]) == set(E2E_COHORTS)
+    assert {r["ticker"] for r in kept["rows"]["2023-06-30"]} == {"AAA", "BBB"}
+    assert [r["ticker"] for r in kept["rows"]["2022-06-30"]] == ["AAA"]      # BBB joined later
+    assert all("passes_filters" in r for rows in kept["rows"].values() for r in rows)
+    assert kept["added"] == _e2e_added()
+    assert {k: v for k, v in kept.items() if k not in ("rows", "added")} == plain
+
+
 def test_run_counts_rows_whose_newest_year_lacks_a_field(tmp_path, monkeypatch):
     paths, cfg = _e2e_setup(tmp_path)
     store = _e2e_store()

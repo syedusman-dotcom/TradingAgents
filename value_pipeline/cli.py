@@ -21,6 +21,7 @@ from value_pipeline import (
     review,
     screener,
     superinvestors,
+    trend,
     watch,
 )
 from value_pipeline.config import Paths, load_config, parking_ticker
@@ -199,6 +200,31 @@ def cmd_backtest(args, paths: Paths, cfg) -> None:
     console.print(f"\nSaved {md} and {csv}")
 
 
+def _iso_day(text: str) -> str:
+    try:
+        return date.fromisoformat(text).isoformat()
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"not a date (YYYY-MM-DD): {text}") from exc
+
+
+def cmd_trend_backtest(args, paths: Paths, cfg) -> None:
+    cfg = copy.deepcopy(cfg)
+    if args.start:
+        cfg.setdefault("trend", {})["start"] = args.start
+    console.print("Replaying the trend rules on daily closes of today's S&P 500 and S&P 400 members: first "
+                  "the lane backtest's cohorts (for the quality universe), then the closes. Cached data "
+                  "makes this a few minutes; nothing trades.")
+
+    def progress(i: int, n: int, ticker: str) -> None:
+        if i % 100 == 0 or i == n:
+            console.print(f"{i}/{n} tickers ({ticker})")
+
+    result = trend.run(paths, cfg, fetch=not args.no_fetch, progress=progress)
+    md = trend.write(paths, result)
+    console.print(Markdown(trend.render_report(result)))
+    console.print(f"\nSaved {md} (and the .html and _trades.csv beside it)", soft_wrap=True)
+
+
 def cmd_web(args, paths: Paths, cfg) -> None:
     import threading
     import webbrowser
@@ -304,6 +330,12 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--refresh", action="store_true", help="refetch the cached statements and prices")
     s.add_argument("--no-fetch", action="store_true", help="read the statement and price caches only")
     s.set_defaults(func=cmd_backtest)
+
+    s = sub.add_parser("trend-backtest",
+                       help="Turtle-style breakouts and 12-1 momentum replayed on daily closes (no agents)")
+    s.add_argument("--from", dest="start", type=_iso_day, help="first day, YYYY-MM-DD (default trend.start)")
+    s.add_argument("--no-fetch", action="store_true", help="read the statement and price caches only")
+    s.set_defaults(func=cmd_trend_backtest)
 
     s = sub.add_parser("web", help="open the local website (this Mac only)")
     s.add_argument("--port", type=int, default=8765)

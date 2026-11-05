@@ -7,8 +7,23 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from value_pipeline import trend
 from value_pipeline.config import DEFAULTS
-from value_pipeline.trend import SYSTEMS, Settings, cagr, max_drawdown, metrics, settings, simulate
+from value_pipeline.trend import (
+    SYSTEMS,
+    Settings,
+    cagr,
+    latest_report,
+    load_closes,
+    max_drawdown,
+    metrics,
+    quality_windows,
+    render_report,
+    settings,
+    simulate,
+    verdict,
+    write,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -124,6 +139,18 @@ def test_sizing_risks_one_percent_and_respects_the_weight_cap():
                    _s(idx, cost_per_side=0.01, max_position_weight=5.0))
     (t,) = out["trades"]
     assert t["shares"] * t["entry_price"] * 1.01 == pytest.approx(10_000)
+
+
+def test_an_entry_the_cash_cannot_fund_to_a_cent_is_dropped():
+    # AAA takes all the cash; float rounding leaves about 1.8e-12 dollars, which must not open BBB
+    path = [30.0 + 0.1 * (i % 2) for i in range(80)] + [33.0, 34.0] + [34.0 + i for i in range(10)]
+    idx = _index(len(path))
+    closes = _frame({"AAA": path, "BBB": [p - 1.0 for p in path]}, idx)
+    s = _s(idx, equity=9999, cost_per_side=0.0035, max_position_weight=5.0)
+    value = 9999 / 1.0035
+    assert 9999 - (value + 0.0035 * value) > 0                     # the residue this test is about
+    out = simulate("breakout_55_20", closes, _spy(idx), s)
+    assert [t["ticker"] for t in out["trades"]] == ["AAA"]
 
 
 def test_costs_are_charged_on_both_sides():
@@ -363,3 +390,255 @@ def test_metrics_without_trades():
     m = metrics({"equity": equity, "exposure": pd.Series(0.0, index=idx), "trades": [], "costs": 0.0}, _spy(idx))
     assert m["trades"] == 0 and m["win_rate"] is None and m["payoff"] is None and m["top5_share"] is None
     assert m["cagr"] == 0 and m["max_drawdown"] == 0 and m["spy_at_exposure_cagr"] == pytest.approx(0)
+
+
+# --- review carry-overs: the trade statistics and SPY's base ---------------------------------
+
+def test_trade_statistics_use_the_return_after_costs():
+    idx = _index(300)
+    equity = pd.Series(10_000.0, index=idx)
+    # up 0.2% before costs, but the costs make it a loss of 0.5% of the entry value
+    small = {**_trade(0.002, -5.0, 10)}
+    trades = [_trade(0.10, 100.0, 10), small]
+    m = metrics({"equity": equity, "exposure": pd.Series(0.0, index=idx), "trades": trades, "costs": 0.0},
+                _spy(idx))
+    assert m["win_rate"] == pytest.approx(0.5)
+    assert m["avg_win"] == pytest.approx(100.0 / 1000.0)
+    assert m["avg_loss"] == pytest.approx(-5.0 / 1000.0)          # negative, not +0.2%
+    assert m["payoff"] == pytest.approx(0.10 / 0.005)
+
+
+def test_metrics_takes_spy_on_or_before_the_first_equity_day():
+    idx = _index(300)
+    equity = pd.Series(10_000.0, index=idx)
+    # SPY has no close on the first equity day: the day before (100) is the base, not the day after (200)
+    spy = pd.Series([100.0, 200.0, 200.0], index=[idx[0] - pd.Timedelta(days=3), idx[1], idx[-1]])
+    m = metrics({"equity": equity, "exposure": pd.Series(0.0, index=idx), "trades": [], "costs": 0.0}, spy)
+    assert m["spy_cagr"] == pytest.approx(cagr(pd.Series([100.0, 200.0], index=[idx[0], idx[-1]])))
+    assert m["spy_max_drawdown"] == 0
+    assert m["years"][2020]["spy"] == pytest.approx(1.0)                       # 100 -> 200 in 2020
+
+
+# --- data loading ----------------------------------------------------------------------------
+
+def _write_prices(paths, ticker: str, dates, closes) -> None:
+    folder = paths.cache / "backtest" / "prices"
+    folder.mkdir(parents=True, exist_ok=True)
+    frame = pd.DataFrame({"date": pd.DatetimeIndex(dates).strftime("%Y-%m-%d"), "close": closes,
+                          "adj_close": [c / 2 for c in closes], "split": 0.0})
+    frame.dropna(subset=["close"]).to_csv(folder / f"{ticker}.csv", index=False)
+
+
+def test_load_closes_aligns_to_spy_and_fills_short_inside_gaps(tmp_path):
+    from value_pipeline.config import Paths
+
+    paths = Paths(tmp_path / "data")
+    days = pd.bdate_range("2019-01-01", periods=420)
+    _write_prices(paths, "SPY", days, [100.0 + i for i in range(420)])
+    aaa = [10.0 + i for i in range(420)]
+    for i in list(range(330, 333)) + list(range(350, 357)):     # a 3-row gap and a 7-row gap
+        aaa[i] = float("nan")
+    _write_prices(paths, "AAA", days, aaa)
+    late = [float("nan")] * 340 + [50.0 + i for i in range(60)] + [float("nan")] * 20   # starts late, ends early
+    _write_prices(paths, "BBB", days, late)
+    start = str(days[400].date())
+    closes, spy = load_closes(paths, ["AAA", "BBB", "NOPE"], start, fetch=False)
+
+    assert closes.index[0] == days[100] and closes.index[-1] == days[-1]     # 300 rows before the start
+    assert list(closes.columns) == ["AAA", "BBB"]
+    assert spy.index.equals(closes.index) and spy.iloc[0] == pytest.approx((100.0 + 100) / 2)   # adj_close
+    a = closes["AAA"]
+    assert a.loc[days[330:333]].tolist() == [a.loc[days[329]]] * 3            # 3-row gap carried forward
+    assert a.loc[days[350:357]].isna().all()                                   # 7-row gap left alone
+    b = closes["BBB"]
+    assert b.loc[:days[339]].isna().all() and b.loc[days[400]:].isna().all()   # never before the first or after the last
+    assert closes.attrs["filled"] == {"AAA": 3}
+    assert closes.attrs["missing"] == ["NOPE"]
+
+
+# --- universes, verdict ----------------------------------------------------------------------
+
+def test_quality_windows_run_from_cohort_to_cohort_and_the_last_to_the_end():
+    rows = {"2015-06-30": [{"ticker": "AAA", "passes_filters": True}, {"ticker": "BBB", "passes_filters": False}],
+            "2016-06-30": [{"ticker": "BBB", "passes_filters": True}]}
+    w = quality_windows(rows, "2017-03-01")
+    assert w["AAA"] == [(date(2015, 6, 30), date(2016, 6, 30))]
+    assert w["BBB"] == [(date(2016, 6, 30), date(2017, 3, 1))]
+    assert set(w) == {"AAA", "BBB"}
+
+
+def test_quality_windows_join_consecutive_cohorts_and_keep_gaps():
+    rows = {"2015-06-30": [{"ticker": "AAA", "passes_filters": True}],
+            "2016-06-30": [{"ticker": "AAA", "passes_filters": True}],
+            "2017-06-30": [{"ticker": "AAA", "passes_filters": False}],
+            "2018-06-30": [{"ticker": "AAA", "passes_filters": True}]}
+    assert quality_windows(rows, "2019-01-01")["AAA"] == [(date(2015, 6, 30), date(2017, 6, 30)),
+                                                          (date(2018, 6, 30), date(2019, 1, 1))]
+
+
+def test_verdict_supports_on_return_or_on_drawdown():
+    base = {"spy_cagr": 0.12, "spy_max_drawdown": 0.33, "years_gained": 0.7}
+    ok_return = {**base, "cagr": 0.135, "max_drawdown": 0.40}
+    ok_risk = {**base, "cagr": 0.105, "max_drawdown": 0.20}
+    assert verdict(ok_return, ok_return)["supports"] is True
+    assert verdict(ok_risk, ok_risk)["supports"] is True
+    assert verdict({**base, "cagr": 0.11, "max_drawdown": 0.30}, ok_return)["supports"] is False   # neither leg
+    assert verdict(ok_return, {**base, "cagr": 0.09, "max_drawdown": 0.40})["supports"] is False   # fails at the high cost
+    assert verdict({**ok_return, "years_gained": 0.5}, ok_return)["supports"] is False             # too few good years
+    assert "supports a live sleeve" in verdict(ok_return, ok_return)["sentence"]
+    assert "does not support a live sleeve" in verdict({**ok_return, "years_gained": 0.5}, ok_return)["sentence"]
+
+
+def test_verdict_returns_the_numbers_and_takes_the_bounds_inclusive():
+    edge = {"spy_cagr": 0.12, "spy_max_drawdown": 0.30, "years_gained": 0.6, "cagr": 0.10, "max_drawdown": 0.20}
+    v = verdict(edge, {**edge, "cagr": 0.13, "max_drawdown": 0.5})
+    assert v["supports"] is True
+    assert {k: v[k] for k in ("cagr", "spy_cagr", "max_drawdown", "spy_max_drawdown", "years_gained")} == {
+        "cagr": 0.10, "spy_cagr": 0.12, "max_drawdown": 0.20, "spy_max_drawdown": 0.30, "years_gained": 0.6}
+    assert "10.0%" in v["sentence"] and "12.0%" in v["sentence"] and "60%" in v["sentence"]
+    assert verdict({**edge, "years_gained": 0.59}, edge)["supports"] is False
+    assert verdict({**edge, "max_drawdown": 0.2001}, edge)["supports"] is False
+
+
+# --- the run, the report, the files, the command ---------------------------------------------
+
+RUN_TICKERS = ["AAA", "BBB", "CCC"]
+
+
+def _run_closes(rows: int = 700) -> tuple[pd.DataFrame, pd.Series]:
+    idx = pd.bdate_range("2014-01-01", periods=rows)
+    rng = np.random.default_rng(7)
+    cols = {}
+    for k, t in enumerate(RUN_TICKERS):
+        steps = rng.normal(0.0008 * (k + 1), 0.015, rows)
+        cols[t] = 50.0 * np.cumprod(1 + steps)
+    closes = pd.DataFrame(cols, index=idx)
+    closes.attrs = {"filled": {"BBB": 2}, "missing": ["ZZZ"]}
+    spy = pd.Series(200.0 * np.cumprod(1 + rng.normal(0.0004, 0.01, rows)), index=idx)
+    return closes, spy
+
+
+def _patched_run(tmp_path, monkeypatch, start_row: int = 320):
+    from value_pipeline import backtest, market_data
+    from value_pipeline.config import Paths
+
+    closes, spy = _run_closes()
+    start = str(closes.index[start_row].date())
+    seen = {}
+
+    def fake_lane(paths, cfg, **kw):
+        seen["lane"] = (cfg["universe"]["indexes"], kw)
+        return {"rows": {"2015-06-30": [{"ticker": "AAA", "passes_filters": True},
+                                        {"ticker": "BBB", "passes_filters": True},
+                                        {"ticker": "CCC", "passes_filters": False}]},
+                "added": {"CCC": "2015-03-01"}}
+
+    def fake_load(paths, tickers, start_, fetch=True, progress=None):
+        seen["load"] = (sorted(tickers), start_, fetch)
+        return closes, spy
+
+    def fake_universe(paths, indexes):
+        seen["universe"] = indexes
+        return pd.DataFrame({"ticker": RUN_TICKERS, "sector": ["Industrials"] * 3})
+
+    monkeypatch.setattr(backtest, "run", fake_lane)
+    monkeypatch.setattr(trend, "load_closes", fake_load)
+    monkeypatch.setattr(market_data, "universe", fake_universe)
+    cfg = {"trend": {**DEFAULTS["trend"], "start": start}, "universe": {"indexes": ["sp500", "ftse100"]}}
+    result = trend.run(Paths(tmp_path / "data"), cfg, today=date(2026, 11, 5), fetch=False)
+    return result, seen, cfg
+
+
+def test_run_reports_every_system_and_universe(tmp_path, monkeypatch):
+    result, seen, cfg = _patched_run(tmp_path, monkeypatch)
+    assert seen["universe"] == ["sp500", "sp400"]
+    assert seen["lane"][0] == ["sp500", "sp400"] and seen["lane"][1]["keep_rows"] is True
+    assert seen["lane"][1]["fetch"] is False
+    assert cfg["universe"]["indexes"] == ["sp500", "ftse100"]                  # the caller's config untouched
+    assert seen["load"] == (RUN_TICKERS, cfg["trend"]["start"], False)
+    assert result["generated"] == "2026-11-05" and result["start"] == cfg["trend"]["start"]
+    assert result["end"] == "2016-09-06"
+    assert result["settings"] == settings(cfg)
+    assert result["universe_sizes"] == {"all": 3, "quality": 2}
+    assert set(result["results"]) == {(s, u) for s in SYSTEMS for u in ("all", "quality")}
+    assert set(result["trades"]) == set(result["results"])
+    for m in result["results"].values():
+        assert {"cagr", "max_drawdown", "spy_cagr", "years_gained"} <= set(m)
+    assert result["filled"] == {"cells": 2, "tickers": 1} and result["missing"] == ["ZZZ"]
+    # quality trades only in AAA and BBB; CCC trades in `all` only from its join date
+    assert {t["ticker"] for t in result["trades"][("breakout_20_10", "quality")]} <= {"AAA", "BBB"}
+    assert all(t["signal_date"] >= date(2015, 3, 1)
+               for t in result["trades"][("breakout_20_10", "all")] if t["ticker"] == "CCC")
+    assert any(t["ticker"] == "CCC" for k, ts in result["trades"].items() if k[1] == "all" for t in ts)
+    # the sensitivity grid on the primary
+    grid = [(r["setting"], r["value"]) for r in result["sensitivity"]]
+    assert grid == [("max_positions", 5), ("max_positions", 10), ("max_positions", 20),
+                    ("cost_per_side", 0.0), ("cost_per_side", 0.0035), ("cost_per_side", 0.006),
+                    ("market_filter", True), ("market_filter", False),
+                    ("risk_per_trade", 0.005), ("risk_per_trade", 0.01), ("risk_per_trade", 0.02)]
+    default = next(r for r in result["sensitivity"] if r["setting"] == "max_positions" and r["value"] == 10)
+    assert default["cagr"] == pytest.approx(result["results"][("breakout_55_20", "quality")]["cagr"])
+    assert set(result["verdicts"]) == {"breakout_55_20", "momentum_12_1"}
+    high = next(r for r in result["sensitivity"] if r["setting"] == "cost_per_side" and r["value"] == 0.006)
+    primary = result["results"][("breakout_55_20", "quality")]
+    assert result["verdicts"]["breakout_55_20"] == verdict(primary, high)
+
+
+def test_report_states_the_verdict_and_the_limits(tmp_path, monkeypatch):
+    result, _, _ = _patched_run(tmp_path, monkeypatch)
+    text = render_report(result)
+    for v in result["verdicts"].values():
+        assert v["sentence"] in text
+    for want in ("survivorship", "next close", "fractional", "close-only", "shorted",
+                 "2 missing closes in 1 ticker", "ZZZ"):
+        assert want in text.lower() or want in text, want
+    assert "| Year | System | SPY |" in text
+    years = text.split("| Year | System | SPY |")[1].split("\n## ")[0]
+    assert "| 2015 |" in years and "| 2016 |" in years
+    summary = text.split("## Summary")[1].split("\n## ")[0]
+    for system in SYSTEMS:
+        for universe in ("all", "quality"):
+            assert summary.count(f"| {system} | {universe} |") == 1, (system, universe)
+    sens = text.split("## Sensitivity")[1].split("\n## ")[0]
+    assert "| max_positions | 20 |" in sens and "| market_filter | off |" in sens
+    assert result["start"] in text and result["end"] in text
+
+
+def test_write_saves_markdown_html_and_trades(tmp_path, monkeypatch):
+    from value_pipeline.config import Paths
+
+    result, _, _ = _patched_run(tmp_path, monkeypatch)
+    paths = Paths(tmp_path / "data")
+    assert latest_report(paths) is None
+    md = write(paths, result)
+    folder = paths.reports / "backtest"
+    assert md == folder / "trend_2026-11-05.md"
+    assert md.read_text(encoding="utf-8") == render_report(result)
+    html = (folder / "trend_2026-11-05.html").read_text(encoding="utf-8")
+    assert html.startswith("<!doctype html>") and "<table>" in html
+    trades = pd.read_csv(folder / "trend_2026-11-05_trades.csv")
+    assert list(trades.columns[:3]) == ["system", "universe", "ticker"]
+    assert len(trades) == sum(len(t) for t in result["trades"].values())
+    assert sorted(p.name for p in folder.iterdir()) == ["trend_2026-11-05.html", "trend_2026-11-05.md",
+                                                        "trend_2026-11-05_trades.csv"]
+    (folder / "trend_2026-01-02.html").write_text("old")
+    assert latest_report(paths) == folder / "trend_2026-11-05.html"
+
+
+def test_cli_trend_backtest_writes_the_report(tmp_path, monkeypatch, capsys):
+    from value_pipeline import cli
+
+    result, _, _ = _patched_run(tmp_path, monkeypatch)
+    calls = {}
+
+    def fake_run(paths, cfg, today=None, fetch=True, progress=None):
+        calls.update(start=cfg["trend"]["start"], fetch=fetch)
+        return result
+
+    monkeypatch.setattr(trend, "run", fake_run)
+    data = tmp_path / "data"
+    cli.main(["--data-dir", str(data), "trend-backtest", "--from", "2016-01-04", "--no-fetch"])
+    out = " ".join(capsys.readouterr().out.split())        # rich wraps the long lines
+    assert calls == {"start": "2016-01-04", "fetch": False}
+    assert "live sleeve" in out and "trend_2026-11-05.md" in out
+    assert (data / "reports" / "backtest" / "trend_2026-11-05.html").exists()

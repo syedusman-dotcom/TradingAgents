@@ -592,6 +592,22 @@ def test_backtest_page_empty_and_populated(tmp_path):
 
 
 @pytest.mark.unit
+def test_backtest_page_links_the_trend_report(tmp_path):
+    client, app, paths = _client(tmp_path)
+    assert "/reports/backtest/trend_" not in client.get("/backtest").text
+    folder = paths.reports / "backtest"
+    folder.mkdir(parents=True)
+    (folder / "trend_2026-10-01.html").write_text("<html>old</html>")
+    (folder / "trend_2026-11-05.html").write_text("<html>trend</html>")
+    (folder / "trend_2026-11-05.md").write_text("# Trend")
+    r = client.get("/backtest")
+    assert r.status_code == 200
+    assert 'href="/reports/backtest/trend_2026-11-05.html"' in r.text
+    assert "trend_2026-10-01" not in r.text
+    assert client.get("/reports/backtest/trend_2026-11-05.html").text == "<html>trend</html>"
+
+
+@pytest.mark.unit
 def test_screen_page_shows_market_column_and_filter(tmp_path):
     import pandas as pd
 

@@ -720,13 +720,15 @@ def _missing_fields(inputs: dict[str, tuple]) -> dict[str, int]:
 
 def run(paths: Paths, cfg: dict, today: date | None = None, tickers: list[str] | None = None,
         refresh: bool = False, fetch: bool = True, progress=None,
-        universe_fn=market_data.universe, added_fn=None) -> dict:
+        universe_fn=market_data.universe, added_fn=None, keep_rows: bool = False) -> dict:
     """The backtest: every cohort's rows from the statements and closes known on its date, the
     rules' picks and their returns against SPY and the universe, the summary, sensitivity, the
     bar that bound and the survivorship counts. ``fetch=False`` reads the statement and price
     caches only (the join dates too, from their own cache). A ticker whose data is missing or
     whose snapshot raises is recorded in ``skipped`` (with the cohort, when one cohort raised;
-    its other cohorts stay) and the run goes on. Nothing trades; no agent is called."""
+    its other cohorts stay) and the run goes on. ``keep_rows`` adds ``rows`` (each cohort's
+    point-in-time screen rows) and ``added`` (the S&P 500 join dates) to the result, for the trend
+    backtest's quality universe. Nothing trades; no agent is called."""
     today = today or date.today()
     holds = list(cfg["backtest"]["holds"])
     cohorts = cohort_dates(cfg, today)
@@ -774,7 +776,7 @@ def run(paths: Paths, cfg: dict, today: date | None = None, tickers: list[str] |
     bench = benchmarks(spy, rows, holds)
     rule_set = rules(cfg)
     picks = [p for rule in rule_set.values() for p in picks_for(rule, rows, holds, bench)]
-    return {
+    result = {
         "generated": today.isoformat(), "cohorts": cohorts, "holds": holds,
         "universe_size": len(members), "with_data": with_data,
         "rows_per_cohort": {c: len(rows[c]) for c in cohorts}, "picks": picks,
@@ -789,6 +791,9 @@ def run(paths: Paths, cfg: dict, today: date | None = None, tickers: list[str] |
                      else spy["date"].iloc[-1].date().isoformat()),
         "stale_cohorts": _stale_cohorts(cohorts, holds, bench, today),
     }
+    if keep_rows:
+        result.update(rows=rows, added=added)
+    return result
 
 
 # --- report --------------------------------------------------------------------------------
