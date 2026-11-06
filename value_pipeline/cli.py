@@ -7,6 +7,7 @@ import copy
 import logging
 import sys
 from datetime import date
+from pathlib import Path
 
 from rich.console import Console
 from rich.markdown import Markdown
@@ -20,6 +21,7 @@ from value_pipeline import (
     momentum,
     operations as ops,
     portfolio as pfmod,
+    pullback,
     review,
     screener,
     superinvestors,
@@ -246,6 +248,12 @@ def cmd_momentum_backtest(args, paths: Paths, cfg) -> None:
     console.print(f"\nSaved {md} (and the .html and _trades.csv beside it)", soft_wrap=True)
 
 
+def cmd_pullback_backtest(args, paths: Paths, cfg) -> None:
+    out, result = pullback.run(paths, args.picks)
+    console.print(pullback.verdict(result)["sentence"])
+    console.print(f"\nSaved {out}", soft_wrap=True)
+
+
 def cmd_web(args, paths: Paths, cfg) -> None:
     import threading
     import webbrowser
@@ -365,6 +373,11 @@ def build_parser() -> argparse.ArgumentParser:
                        help="12-1 momentum on today's S&P 500 members, two periods, fixed verdict (no agents)")
     s.add_argument("--no-fetch", action="store_true", help="read the statement and price caches only")
     s.set_defaults(func=cmd_momentum_backtest)
+
+    s = sub.add_parser("pullback-backtest",
+                       help="what waiting for a dip would have done to the backtest's picks, fixed verdict (no agents)")
+    s.add_argument("--picks", type=Path, help="a backtest picks CSV (default the newest default-universe one)")
+    s.set_defaults(func=cmd_pullback_backtest)
 
     s = sub.add_parser("web", help="open the local website (this Mac only)")
     s.add_argument("--port", type=int, default=8765)

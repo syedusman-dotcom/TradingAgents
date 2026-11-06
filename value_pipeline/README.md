@@ -55,6 +55,7 @@ uv run python -m value_pipeline status
 | `backtest [--from YEAR] [--to YEAR] [--holds 1,3] [--indexes sp500,sp400] [--tickers A,B] [--refresh] [--no-fetch]` | The lane rules replayed on past cohort dates against SPY (see Backtest below). No agents. Writes `reports/backtest/backtest_<date>.md` and `_picks.csv` (`backtest_<date>_sp500.md` for `--indexes sp500`) and prints the verdict and the buy-bar candidates. |
 | `trend-backtest [--from YYYY-MM-DD] [--no-fetch]` | Turtle-style breakouts and 12-1 momentum replayed on daily closes of today's S&P 500 and 400 members, after costs, with the fixed verdict (see Trend backtest below). No agents, nothing trades. Writes `reports/backtest/trend_<date>.md`, `.html` and `_trades.csv` and prints the report. |
 | `momentum-backtest [--no-fetch]` | 12-1 momentum on today's S&P 500 members, each from the day it joined, over a recent period and an earlier hold-out, after costs, with a fixed pass rule and the record of real momentum funds (see Momentum sleeve backtest below). No agents, nothing trades. Writes `reports/backtest/momentum_<date>.md`, `.html` and `_trades.csv` and prints the report. |
+| `pullback-backtest [--picks PATH]` | What waiting for a dip would have done to the lane backtest's past picks, with a fixed verdict (see Pullback study below). Reads the newest `backtest_<date>_picks.csv` (not an `_sp500` or `_sp600` one) and the cached prices only. No agents, nothing trades. Writes `reports/backtest/pullback_<date>.md` and prints the verdict. |
 | `screen [--top N]` | Rank the universe (every market in `universe.indexes`); writes `data/screens/screen_YYYY-MM-DD.csv`. |
 | `review [--yes] [--dry-run] [--candidates N]` | Run the agents and write the action list. |
 | `run-all [--yes] [--dry-run]` | `screen`, then the theme scan (when `lanes.themes` names any), then `review` with the scan's inflection candidates. |
@@ -461,6 +462,18 @@ fiscal year lacks revenue, EBIT or free cash flow (a filer whose tags the map do
 The website's Backtest page shows the newest report on the default lists (not an `_sp500` run). `scripts/pit_probe.py` checks the
 point-in-time statements offline on the EDGAR company facts already cached under
 `~/.tradingagents/cache/sec_edgar/`: fiscal years known on four dates and the fields missing.
+
+Pullback study. The live process buys only below an entry price under today's price; `pullback-backtest`
+measures the mechanical stand-in on the picks CSV above. For each rule and each dip (10% and 15%) it
+compares buying every one-year-hold pick at its start price with buying only if a close falls at least
+that far below the start price within 120 days, at that first close, held one year from the fill (fills
+on `close`, returns on `adj_close`, excess over SPY from the same dates). The report shows the fill rate,
+the buy-now excess, the filled picks' excess, the same names bought at once and the never-filled picks'
+excess. The verdict is fixed before the first run and not tuned: at a 10% dip the gate "costs money" when,
+for at least 3 of the 4 rules (`magic_formula`, `compounder_record`, `value_graded`, `compounder`), the
+unfilled picks beat the filled by 3 points or more and under half fill; it "earns its keep" when, for at
+least 3 rules, the fills beat a buy at the start by 2 points or more on the same names; otherwise, or if
+both hold, it is "inconclusive". Limits: overlapping cohorts, survivorship, close-based fills and no costs.
 
 ### Trend backtest
 
