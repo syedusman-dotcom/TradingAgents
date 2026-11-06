@@ -190,16 +190,17 @@ def test_next_earnings_date_reads_the_calendar(monkeypatch):
         fundamentals._earnings_dates.clear()
         monkeypatch.setattr(fundamentals.yf, "Ticker", lambda s: Cal(calendar))
 
-    use({"Earnings Date": [dt.date(2026, 11, 5), dt.date(2026, 11, 9)]})
-    assert fundamentals.next_earnings_date("AAPL") == "2026-11-05"
+    soon = dt.date.today() + dt.timedelta(days=5)   # a future date, so the cache keeps it
+    use({"Earnings Date": [soon, soon + dt.timedelta(days=4)]})
+    assert fundamentals.next_earnings_date("AAPL") == soon.isoformat()
     use({"Earnings Date": []})
     assert fundamentals.next_earnings_date("AAPL") is None
     use({})
     assert fundamentals.next_earnings_date("AAPL") is None
-    use({"Earnings Date": [dt.date(2026, 11, 5)]})
-    assert fundamentals.next_earnings_date("AAPL") == "2026-11-05"
+    use({"Earnings Date": [soon]})
+    assert fundamentals.next_earnings_date("AAPL") == soon.isoformat()
     monkeypatch.setattr(fundamentals.yf, "Ticker", lambda s: pytest.fail("asked twice"))
-    assert fundamentals.next_earnings_date("AAPL") == "2026-11-05"   # kept for the process
+    assert fundamentals.next_earnings_date("AAPL") == soon.isoformat()   # kept for the process
     fundamentals._earnings_dates.clear()
 
     def boom(s):
