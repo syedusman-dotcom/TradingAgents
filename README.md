@@ -311,6 +311,8 @@ SEC_EDGAR_USER_AGENT="Your Name your@email.com"
 
 It covers companies that file with the SEC, including foreign companies listed in the US. Anything else, such as Hong Kong or A-share listings, falls through to the next vendor in the chain. EDGAR's machine-readable filings begin in 2009, and a fourth quarter is reported as unavailable rather than derived, because filers publish it only inside the annual figure.
 
+Company news comes from Yahoo Finance and falls back to Google News RSS, which needs no key. Its items are a sample matched by company name.
+
 ### Current holdings
 
 By default the agents do not know what you hold, so their guidance is written for a reader who applies it to their own position. Pass a portfolio to have the trader, the risk analysts and the portfolio manager work against your actual book.
