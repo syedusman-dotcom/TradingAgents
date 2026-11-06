@@ -439,7 +439,7 @@ in time by join date, saved as `backtest_<date>_sp500.md` and `_sp500_picks.csv`
 publishes no join dates, so names that entered it after rising are in every cohort; a 20-name
 basket ranked on momentum can hold several while the universe holds each at a small weight, so
 the bias is shared but not equal. `--leavers` adds the S&P 500
-names that left the index since 2013 (Wikipedia's changes table, cached at
+names that left the index since 2013 (Wikipedia's changes table, read from a pinned December 2025 revision because the live page no longer carries it, cached at
 `data/cache/backtest/removed_dates.json`) as members until their leave date, with no sector; the
 report counts those without EDGAR facts or prices, and the file gets `_leavers` in its name.
 Names acquired or delisted usually have neither, so they still cannot be included. A candidate is recommended for a live change only when it

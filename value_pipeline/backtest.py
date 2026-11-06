@@ -805,15 +805,20 @@ def added_dates(fetch: Callable[[str], str] | None = None) -> dict[str, str]:
         return {}
 
 
+# The constituents page dropped its "Selected changes" table in 2026; this revision
+# (2025-12-23) still carries it, with every change through 2025-12-22.
+CHANGES_URL = "https://en.wikipedia.org/w/index.php?title=List_of_S%26P_500_companies&oldid=1329075976"
+
+
 def removed_dates(fetch: Callable[[str], str] | None = None) -> dict[str, dict]:
     """Ticker (Yahoo's spelling) -> ``{"left": ISO date, "reason": text}`` for every ticker in
-    the ``Removed`` column of the page's changes table, the latest date when a name was removed
-    more than once; rows without a readable date or a removed ticker are left out, and ``{}``
-    (logged) when the page or table cannot be read."""
+    the ``Removed`` column of the changes table at ``CHANGES_URL`` (a pinned page revision), the
+    latest date when a name was removed more than once; rows without a readable date or a
+    removed ticker are left out, and ``{}`` (logged) when the page or table cannot be read."""
     try:
-        table = pd.read_html(StringIO((fetch or _wiki_html)(market_data.MARKETS["sp500"].pages[0])))[1]
+        table = pd.read_html(StringIO((fetch or _wiki_html)(CHANGES_URL)))[1]
         top = table.columns.get_level_values(0)
-        day = table.loc[:, top == "Date"].iloc[:, 0]
+        day = table.loc[:, top.isin(("Date", "Effective Date"))].iloc[:, 0]
         ticker = table["Removed"]["Ticker"]
         reason = table.loc[:, top == "Reason"].iloc[:, 0]
         left = pd.to_datetime(day.astype(str), errors="coerce")

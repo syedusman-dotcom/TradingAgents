@@ -20,9 +20,9 @@ from value_pipeline import backtest
 from value_pipeline.config import Paths
 
 
-def _changes_html(rows) -> str:
+def _changes_html(rows, date_header: str = "Effective Date") -> str:
     """The constituents page with the changes table: ``(date, added, removed, reason)``."""
-    head = ("<tr><th rowspan=2>Date</th><th colspan=2>Added</th><th colspan=2>Removed</th>"
+    head = (f"<tr><th rowspan=2>{date_header}</th><th colspan=2>Added</th><th colspan=2>Removed</th>"
             "<th rowspan=2>Reason</th></tr>"
             "<tr><th>Ticker</th><th>Security</th><th>Ticker</th><th>Security</th></tr>")
     body = "".join(f"<tr><td>{d}</td><td>{a}</td><td>{a} Inc</td><td>{r}</td><td>{r} Inc</td>"
@@ -51,7 +51,18 @@ def test_removed_dates_reads_the_changes_table():
     assert backtest.removed_dates(fetch) == {
         "OLD": {"left": "2026-10-01", "reason": "Market capitalization change."},
         "BRK-B": {"left": "2024-09-23", "reason": "Acquired by Someone Else."}}
-    assert urls == [backtest.market_data.MARKETS["sp500"].pages[0]]
+    assert urls == [backtest.CHANGES_URL]
+
+
+def test_removed_dates_reads_the_pinned_revision_and_either_date_header():
+    seen = []
+
+    def fetch(url):
+        seen.append(url)
+        return _changes_html([("May 5, 2020", "A", "GONE", "Acquired.")], date_header="Date")
+
+    assert backtest.removed_dates(fetch) == {"GONE": {"left": "2020-05-05", "reason": "Acquired."}}
+    assert seen == [backtest.CHANGES_URL]
 
 
 def test_removed_dates_is_empty_when_the_page_cannot_be_read():
