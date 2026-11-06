@@ -470,7 +470,7 @@ def run(paths: Paths, cfg: dict, today: date | None = None, fetch: bool = True, 
     Nothing trades; no agent is called."""
     today = today or date.today()
     s = settings(cfg)
-    members = market_data.universe(paths, list(INDEXES))
+    members = market_data.universe(paths, list(INDEXES), write=False)
     tickers = sorted({str(t) for t in members["ticker"]})
     cfg_us = copy.deepcopy(cfg)
     cfg_us.setdefault("universe", {})["indexes"] = list(INDEXES)

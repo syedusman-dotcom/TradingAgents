@@ -567,7 +567,7 @@ def _patched_run(tmp_path, monkeypatch, start_row: int = 320):
         seen["load"] = (sorted(tickers), start_, fetch)
         return closes, spy
 
-    def fake_universe(paths, indexes):
+    def fake_universe(paths, indexes, write=True):
         seen["universe"] = indexes
         return pd.DataFrame({"ticker": RUN_TICKERS, "sector": ["Industrials"] * 3})
 

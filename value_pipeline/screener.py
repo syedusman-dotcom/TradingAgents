@@ -461,7 +461,7 @@ def run(paths: Paths, cfg: dict, owned: set[str], today: str | None = None) -> d
     excluded, candidates = [], []
     for rec in uni.itertuples(index=False):
         # The S&P lists carry a GICS sector; every other market's comes from Yahoo.
-        sector = rec.sector if isinstance(rec.sector, str) else market_data.gics_sector(
+        sector = market_data.gics_sector(rec.sector) if isinstance(rec.sector, str) else market_data.gics_sector(
             market_data.cached_sector(rec.ticker, paths))
         if sector in skip_sectors:
             excluded.append({"ticker": rec.ticker, "name": rec.name, "sector": sector})
@@ -481,7 +481,7 @@ def run(paths: Paths, cfg: dict, owned: set[str], today: str | None = None) -> d
                                             price_days=cfg["screen"].get("price_days"))
             if not data.get("from_cache") or data.get("price_refreshed"):
                 market_data.throttle(cfg["screen"]["throttle_seconds"])
-            sector = rec.sector if isinstance(rec.sector, str) else market_data.gics_sector(data.get("sector"))
+            sector = market_data.gics_sector(rec.sector if isinstance(rec.sector, str) else data.get("sector"))
             if sector in skip_sectors:
                 excluded.append({"ticker": rec.ticker, "name": rec.name, "sector": sector})
                 continue

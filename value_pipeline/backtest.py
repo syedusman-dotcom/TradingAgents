@@ -820,6 +820,11 @@ def _joined_after(added: dict[str, str], cohorts: list[str]) -> dict[str, int]:
 
 # --- run -----------------------------------------------------------------------------------
 
+def _read_universe(paths: Paths, indexes: list[str]) -> pd.DataFrame:
+    """The members, leaving the screen's universe cache as it is."""
+    return market_data.universe(paths, indexes, write=False)
+
+
 def _universe(paths: Paths, cfg: dict, tickers: list[str] | None, universe_fn) -> list[tuple]:
     """``(ticker, sector, market)`` for today's members less the excluded sectors, narrowed to
     ``tickers`` when given; the market is None when the frame has no ``market`` column."""
@@ -948,7 +953,7 @@ def _bar_verdicts(summary: dict) -> dict:
 
 def run(paths: Paths, cfg: dict, today: date | None = None, tickers: list[str] | None = None,
         refresh: bool = False, fetch: bool = True, progress=None,
-        universe_fn=market_data.universe, added_fn=None, keep_rows: bool = False) -> dict:
+        universe_fn=None, added_fn=None, keep_rows: bool = False) -> dict:
     """The backtest: every cohort's rows from the statements and closes known on its date, the
     rules' picks and their returns against SPY and the universe, the summary, sensitivity, the
     bar that bound and the survivorship counts. ``fetch=False`` reads the statement and price
@@ -960,8 +965,9 @@ def run(paths: Paths, cfg: dict, today: date | None = None, tickers: list[str] |
     today = today or date.today()
     holds = list(cfg["backtest"]["holds"])
     cohorts = cohort_dates(cfg, today)
-    members = _universe(paths, cfg, tickers, universe_fn)
-    added = _join_dates(paths, fetch, added_fn)
+    members = _universe(paths, cfg, tickers, universe_fn or _read_universe)
+    # Join dates are the S&P 500's: a run without that index has none.
+    added = _join_dates(paths, fetch, added_fn) if "sp500" in cfg["universe"]["indexes"] else {}
     stale = _stale_before(cohorts, holds, today)
     spy = price_history(cfg["backtest"]["benchmark"], paths, fetch=fetch, refresh=refresh,
                         stale_before=stale[1])

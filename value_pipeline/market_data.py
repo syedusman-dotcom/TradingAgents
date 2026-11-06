@@ -135,6 +135,24 @@ def share_class_key(symbol: str) -> str:
     return re.sub(r"\s+[A-Z]{1,4}$", "", symbol.strip())
 
 
+# Words that make a legal form, not a company; "group" stays, so "NCC B" and "NCC Group" differ.
+_CLASS_KEY_DROPPED = _DROPPED_WORDS - {"group"}
+_CLASS_WORDS = {"sdb", "pref", "preferred", "class"}
+
+
+def class_key(name: str) -> str:
+    """A company name without its legal form and trailing share class, so ``Orion Oyj A`` and
+    ``Orion Oyj B`` compare equal: a trailing single letter, ``SDB``, ``Pref`` or ``ser. X``/``series X``."""
+    words = [w for w in re.sub(r"[^\w\s]", "", str(name).lower()).split() if w not in _CLASS_KEY_DROPPED]
+    if len(words) > 1 and ((len(words[-1]) == 1 and words[-1].isalpha()) or words[-1] in _CLASS_WORDS):
+        words.pop()
+        if len(words) > 1 and words[-1] in ("ser", "series", "class"):
+            words.pop()
+    elif len(words) > 2 and words[-2] in ("ser", "series") and len(words[-1]) == 1:
+        words = words[:-2]
+    return " ".join(words)
+
+
 def _turnover(value) -> float:
     try:
         return float(str(value).replace(",", ""))
@@ -151,7 +169,7 @@ def _fetch_api(market: Market) -> pd.DataFrame:
         raise ValueError(f"{market.key}: no rows in the Nasdaq Nordic response")
     best: dict[str, dict] = {}
     for row in rows:
-        key = share_class_key(row["symbol"])
+        key = class_key(row.get("fullName") or "") or share_class_key(row["symbol"])
         if key not in best or _turnover(row.get("turnover")) > _turnover(best[key].get("turnover")):
             best[key] = row
     frame = pd.DataFrame({
@@ -204,6 +222,7 @@ def fetch_market(market: Market) -> pd.DataFrame:
     return pd.DataFrame(columns=cols)
 
 
+SMALL_MARKETS = frozenset({"sto", "cph", "hel", "ose", "sp600"})   # the keys of filters.small_markets
 UNIVERSE_COLUMNS = ["ticker", "name", "sector", "index", "market", "country"]
 
 
@@ -218,11 +237,13 @@ def _cached_universe(paths: Paths) -> pd.DataFrame | None:
     return cached
 
 
-def universe(paths: Paths, indexes: list[str]) -> pd.DataFrame:
+def universe(paths: Paths, indexes: list[str], write: bool = True) -> pd.DataFrame:
     """Members of every listed market as ticker, name, sector, index, market, country.
 
     ``index`` equals ``market``. A market that cannot be fetched or gives under MIN_TICKERS
     tickers keeps its rows from the cached CSV; with nothing fetched at all the cache is returned.
+    A row of a small market is also dropped when its company, share class aside, is already listed
+    by an earlier row. ``write=False`` leaves the cached CSV as it is (the backtest's call).
     """
     for key in indexes:
         if key not in MARKETS:
@@ -230,6 +251,7 @@ def universe(paths: Paths, indexes: list[str]) -> pd.DataFrame:
     cached = _cached_universe(paths)
     seen_names: dict[str, str] = {}
     seen_tickers: set[str] = set()
+    seen_classes: dict[str, str] = {}
     rows = []
     for key in indexes:
         try:
@@ -248,9 +270,16 @@ def universe(paths: Paths, indexes: list[str]) -> pd.DataFrame:
                 log.info("cross-listing dropped: %s (%s) duplicates %s",
                          rec["ticker"], key, seen_names[nk])
                 continue
+            ck = class_key(rec["name"])
+            if key in SMALL_MARKETS and ck and ck in seen_classes:
+                log.info("share-class duplicate dropped: %s (%s) duplicates %s",
+                         rec["ticker"], key, seen_classes[ck])
+                continue
             if rec["ticker"] in seen_tickers:
                 continue
             seen_tickers.add(rec["ticker"])
+            if ck:
+                seen_classes.setdefault(ck, rec["ticker"])
             if nk:
                 seen_names[nk] = rec["ticker"]
             rows.append({**rec, "index": key})
@@ -260,8 +289,9 @@ def universe(paths: Paths, indexes: list[str]) -> pd.DataFrame:
             return cached
         raise DataUnavailable("could not fetch the index lists and no cache exists")
     df = pd.DataFrame(rows, columns=UNIVERSE_COLUMNS)
-    paths.root.mkdir(parents=True, exist_ok=True)
-    df.to_csv(paths.universe, index=False)
+    if write:
+        paths.root.mkdir(parents=True, exist_ok=True)
+        df.to_csv(paths.universe, index=False)
     return df
 
 
@@ -374,6 +404,7 @@ GICS_NAMES = {
     "Consumer Defensive": "Consumer Staples",
     "Basic Materials": "Materials",
     "Healthcare": "Health Care",
+    "Telecommunications": "Communication Services",   # Nasdaq Nordic's ICB names
 }
 
 

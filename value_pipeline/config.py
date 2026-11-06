@@ -105,11 +105,17 @@ def parking_ticker(cfg: dict) -> str | None:
     return ticker or None
 
 
+_REPLACED = {"small_markets"}
+
+
 def _merge(base: dict, override: dict) -> dict:
     out = copy.deepcopy(base)
     for key, value in (override or {}).items():
         default = out.get(key)
-        if isinstance(value, dict) and isinstance(default, dict):
+        if key in _REPLACED and isinstance(value, dict):
+            # A set of names: a deleted entry stays deleted. PyYAML reads "3.0e8" as a string.
+            out[key] = {k: float(v) if isinstance(v, str) else v for k, v in value.items()}
+        elif isinstance(value, dict) and isinstance(default, dict):
             out[key] = _merge(default, value)
         elif isinstance(default, (int, float)) and not isinstance(default, bool) and isinstance(value, str):
             # PyYAML reads "2.0e9" (no sign in the exponent) as a string.

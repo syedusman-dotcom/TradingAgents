@@ -3,14 +3,24 @@
 from __future__ import annotations
 
 import copy
+from datetime import date
 
 import pandas as pd
 import pytest
 
 from tests.test_lane_backtest import AS_OF, _cfg, _hist, _snap_store
-from tests.test_nordnet_markets import _screen_setup, record
+from tests.test_nordnet_markets import (
+    FakeApiResponse,
+    FakeResponse,
+    _screen_setup,
+    api_payload,
+    api_row,
+    many,
+    members_table,
+    record,
+)
 from value_pipeline import backtest, config, market_data, screener
-from value_pipeline.config import DEFAULTS, validate_config
+from value_pipeline.config import DEFAULTS, Paths, validate_config
 
 GOOD = {"ticker": "GOOD", "market_cap": 5e9, "fscore": 7, "altman_z": 3.0, "free_cash_flow": 1e8,
         "interest_coverage": 10, "earnings_yield_avg": 0.1, "roic_ranked": 0.3, "roic_min": 0.2,
@@ -166,3 +176,137 @@ def test_the_shipped_yaml_loads_and_validates():
     validate_config(cfg)
     assert cfg["filters"]["small_markets"] == dict.fromkeys(("sto", "cph", "hel", "ose", "sp600"), 2.5e8)
     assert cfg["filters"]["min_daily_value"] == 250000
+
+
+# --- final review fixes -------------------------------------------------------------------
+
+def _hel_rows():
+    return [api_row(f"H{i}", f"H Company {i}") for i in range(10)]
+
+
+@pytest.mark.unit
+def test_finnish_share_classes_without_a_space_give_one_row(monkeypatch):
+    rows = [api_row("ORNAV", "Orion Oyj A", "1,000"), api_row("ORNBV", "Orion Oyj B", "9,000"),
+            api_row("METSA", "Metsä Board Oyj A", "50"), api_row("METSB", "Metsä Board Oyj B", "700"),
+            api_row("X1", "Kone Series A", "5"), api_row("X2", "Kone Ser. B", "8")] + _hel_rows()
+    monkeypatch.setattr(market_data.requests, "get", lambda url, **kw: FakeApiResponse(api_payload(rows)))
+    df = market_data.fetch_market(market_data.MARKETS["hel"])
+    tickers = set(df["ticker"])
+    assert "ORNBV.HE" in tickers and "ORNAV.HE" not in tickers
+    assert "METSB.HE" in tickers and "METSA.HE" not in tickers
+    assert "X2.HE" in tickers and "X1.HE" not in tickers
+
+
+def _universe_run(tmp_path, monkeypatch, index_html, api_by_code):
+    def get(url, **kwargs):
+        for code, rows in api_by_code.items():
+            if f"market={code}" in url:
+                return FakeApiResponse(api_payload(rows + _hel_rows()))
+        return FakeResponse(index_html)
+    monkeypatch.setattr(market_data.requests, "get", get)
+
+
+@pytest.mark.unit
+def test_a_small_market_row_matching_an_earlier_company_in_the_class_stripped_name_is_dropped(
+        tmp_path, monkeypatch):
+    index = members_table([("ORNBV", "Orion Oyj B")] + many(10, "I"))
+    _universe_run(tmp_path, monkeypatch, index,
+                  {"HEL": [api_row("ORNAV", "Orion Oyj A"), api_row("KESKOA", "Kesko Oyj A")]})
+    df = market_data.universe(Paths(tmp_path), ["omxh25", "hel"])
+    names = list(df["name"])
+    assert "Orion Oyj B" in names and "Orion Oyj A" not in names
+    assert "Kesko Oyj A" in names                                   # nothing earlier to match
+
+
+@pytest.mark.unit
+def test_ssab_and_autoliv_dedupe_across_markets(tmp_path, monkeypatch):
+    sto = [api_row("SSAB B", "SSAB B"), api_row("ALIV SDB", "Autoliv Inc. SDB")]
+    hel = [api_row("SSABAH", "SSAB A")]
+    index = members_table([("ALV", "Autoliv")] + many(10, "I"))
+
+    def get(url, **kwargs):
+        if "market=STO" in url:
+            return FakeApiResponse(api_payload(sto + _hel_rows()))
+        if "market=HEL" in url:
+            return FakeApiResponse(api_payload(hel + [api_row(f"K{i}", f"K Company {i}") for i in range(10)]))
+        return FakeResponse(index)
+    monkeypatch.setattr(market_data.requests, "get", get)
+    df = market_data.universe(Paths(tmp_path), ["sp500", "sto", "hel"])
+    names = set(df["name"])
+    assert "Autoliv" in names and "Autoliv Inc. SDB" not in names
+    assert "SSAB B" in names and "SSAB A" not in names
+
+
+@pytest.mark.unit
+def test_ncc_b_in_sweden_does_not_collide_with_ncc_group_in_the_uk(tmp_path, monkeypatch):
+    index = members_table([("NCC", "NCC Group")] + many(10, "I"))
+    _universe_run(tmp_path, monkeypatch, index, {"STO": [api_row("NCC B", "NCC B")]})
+    df = market_data.universe(Paths(tmp_path), ["ftse250", "sto"])
+    assert {"NCC Group", "NCC B"} <= set(df["name"])
+
+
+@pytest.mark.unit
+def test_icb_sector_names_map_to_gics():
+    assert market_data.gics_sector("Telecommunications") == "Communication Services"
+    assert market_data.gics_sector("Technology") == "Information Technology"
+    assert market_data.gics_sector("Basic Materials") == "Materials"
+    for name in ("Consumer Discretionary", "Consumer Staples", "Health Care", "Industrials", "Energy",
+                 "Financials", "Real Estate", "Utilities"):
+        assert market_data.gics_sector(name) == name
+
+
+@pytest.mark.unit
+def test_screen_run_maps_a_universe_icb_sector_and_still_excludes(tmp_path, monkeypatch):
+    tel = record(ticker="TEL.ST", sector="Telecommunications", currency="USD", financial_currency="USD")
+    bank = record(ticker="BNK.ST", sector="Financials", currency="USD", financial_currency="USD")
+    paths, cfg, screener_mod, _ = _screen_setup(
+        tmp_path, monkeypatch,
+        [("TEL.ST", "Tel", "Telecommunications", "sto", "sto", "Sweden"),
+         ("BNK.ST", "Bank", "Financials", "sto", "sto", "Sweden")],
+        {"TEL.ST": tel, "BNK.ST": bank}, rates={"USD": 1.0, "SEK": 0.1})
+    res = screener_mod.run(paths, cfg, owned=set(), today="2026-11-06")
+    rows = {r["ticker"]: r for r in pd.read_csv(res["path"]).to_dict("records")}
+    assert rows["TEL.ST"]["sector"] == "Communication Services"
+    assert "BNK.ST" not in rows and any(e["ticker"] == "BNK.ST" for e in res["excluded"])
+
+
+@pytest.mark.unit
+def test_a_backtest_run_leaves_the_screens_universe_csv_alone(tmp_path, monkeypatch):
+    from tests.test_lane_backtest import _e2e_setup
+    paths, cfg = _e2e_setup(tmp_path)
+    paths.root.mkdir(parents=True, exist_ok=True)
+    original = "ticker,name,sector,index,market,country\nOLD,Old,Industrials,sto,sto,Sweden\n"
+    paths.universe.write_text(original, encoding="utf-8")
+    cfg["universe"]["indexes"] = ["sp600"]
+    index = members_table(many(12, "S"))
+    monkeypatch.setattr(market_data.requests, "get", lambda url, **kw: FakeResponse(index))
+    monkeypatch.setattr(backtest, "added_dates", lambda *a, **k: {})
+    monkeypatch.setattr(backtest.market_data, "throttle", lambda s: None)
+    backtest.run(paths, cfg, today=date(2024, 10, 24), fetch=False)
+    assert paths.universe.read_text(encoding="utf-8") == original
+    market_data.universe(paths, ["sp600"])                       # the screen's own call still writes
+    assert paths.universe.read_text(encoding="utf-8") != original
+
+
+@pytest.mark.unit
+def test_small_markets_in_the_yaml_replace_the_default(tmp_path):
+    path = tmp_path / "config.yaml"
+    path.write_text("filters:\n  small_markets: {sto: 3.0e8}\n", encoding="utf-8")
+    assert config.load_config(path)["filters"]["small_markets"] == {"sto": 3e8}
+    path.write_text("filters:\n  small_markets: {}\n", encoding="utf-8")
+    assert config.load_config(path)["filters"]["small_markets"] == {}
+    assert DEFAULTS["filters"]["small_markets"]["hel"] == 2.5e8
+
+
+@pytest.mark.unit
+def test_an_sp600_only_backtest_has_no_join_dates(tmp_path, monkeypatch):
+    from tests.test_lane_backtest import _e2e_setup, _e2e_universe
+    paths, cfg = _e2e_setup(tmp_path)
+    cfg["universe"]["indexes"] = ["sp600"]
+    monkeypatch.setattr(backtest, "added_dates", lambda *a, **k: pytest.fail("S&P 500 dates"))
+    monkeypatch.setattr(backtest.market_data, "throttle", lambda s: None)
+    result = backtest.run(paths, cfg, today=date(2024, 10, 24), fetch=False,
+                          universe_fn=_e2e_universe)
+    assert result["joins_known"] is False and result["survivorship"] == {}
+    text = backtest.markdown(result)
+    assert backtest.NO_JOINS in text and backtest.SURVIVORSHIP not in text
