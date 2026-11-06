@@ -175,7 +175,10 @@ def build_default_config() -> dict:
             # Statements come from SEC EDGAR as filed (US filers), then Yahoo; the
         # overview and insider tools, which SEC EDGAR does not serve, from Yahoo.
         "fundamental_data": "sec_edgar,yfinance",  # Options: sec_edgar, alpha_vantage, yfinance
-            "news_data": "yfinance,google_news",  # Options: alpha_vantage, yfinance, google_news (keyless RSS)
+            # Nordic listings (.ST .HE .CO .OL) get exchange releases and insider notices
+            # from the exchanges and Sweden's FI; anything else passes on to Yahoo.
+            # News and insider tools share this chain; get_global_news skips "nordic".
+            "news_data": "nordic,yfinance,google_news",  # Options: nordic, alpha_vantage, yfinance, google_news
             "macro_data": "fred",                # Options: fred (needs FRED_API_KEY)
             "prediction_markets": "polymarket",  # Options: polymarket (keyless)
         },

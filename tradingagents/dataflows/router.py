@@ -19,6 +19,10 @@ from tradingagents.dataflows.vendors.alpha_vantage import (
 )
 from tradingagents.dataflows.vendors.fred import get_macro_data as get_fred_macro_data
 from tradingagents.dataflows.vendors.google_news import get_news as get_google_news
+from tradingagents.dataflows.vendors.nordic import (
+    get_insider_transactions as get_nordic_insiders,
+    get_news as get_nordic_news,
+)
 from tradingagents.dataflows.vendors.polymarket import (
     get_prediction_markets as get_polymarket_prediction_markets,
 )
@@ -164,6 +168,7 @@ VENDOR_METHODS = {
     },
     # news_data
     "get_news": {
+        "nordic": get_nordic_news,
         "alpha_vantage": get_alpha_vantage_news,
         "yfinance": get_news_yfinance,
         "google_news": get_google_news,
@@ -173,6 +178,7 @@ VENDOR_METHODS = {
         "alpha_vantage": get_alpha_vantage_global_news,
     },
     "get_insider_transactions": {
+        "nordic": get_nordic_insiders,
         "alpha_vantage": get_alpha_vantage_insider_transactions,
         "yfinance": get_yfinance_insider_transactions,
     },

@@ -313,6 +313,8 @@ It covers companies that file with the SEC, including foreign companies listed i
 
 Company news comes from Yahoo Finance and falls back to Google News RSS, which needs no key. Its items are a sample matched by company name.
 
+Nordic listings (`.ST`, `.HE`, `.CO`, `.OL`) are served first by the `nordic` vendor, which needs no key: the exchange's own releases (Nasdaq Nordic company news, or Oslo Børs NewsWeb) followed by the Google News sample, and insider transactions from Finansinspektionen's insynsregistret for Stockholm or the exchange's managers' transactions notices for Helsinki, Copenhagen and Oslo. Other listings pass on to Yahoo.
+
 ### Current holdings
 
 By default the agents do not know what you hold, so their guidance is written for a reader who applies it to their own position. Pass a portfolio to have the trader, the risk analysts and the portfolio manager work against your actual book.

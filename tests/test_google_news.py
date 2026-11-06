@@ -91,6 +91,7 @@ def test_router_falls_back_to_google(monkeypatch):
     def down(*a, **k):
         raise VendorUnavailableError("yahoo down")
 
+    monkeypatch.setitem(router.VENDOR_METHODS["get_news"], "nordic", down)
     monkeypatch.setitem(router.VENDOR_METHODS["get_news"], "yfinance", down)
     monkeypatch.setitem(router.VENDOR_METHODS["get_news"], "google_news", lambda *a, **k: "from google")
     assert router.route_to_vendor("get_news", "BETS-B.ST", "2026-10-30", "2026-11-06") == "from google"
