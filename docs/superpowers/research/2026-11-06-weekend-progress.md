@@ -132,3 +132,6 @@ Ruling: items (1), (2) and (10) are buildable this weekend with pre-fixed scorin
 
 ## S4 — record_momentum (verdict fixed BEFORE the run, 2026-11-07 01:30 CET)
 Rule: quality record (`_record`) rows at or above the cohort's median 12-1 momentum, top 20 by momentum. Verdict: the standard `bar_verdict` (≥ 20 cohorts with ≥ 5 picks, beats the universe in ≥ 60%, mean excess over the universe ≥ +2 and over SPY ≥ 0, 3-year ≥ 0, better than `magic_formula`) on the 2015–2025 run AND on the S&P 500-only run, AND mean 1-year excess over SPY ≥ 0 on the 2013–14 hold-out. Anything less: not supported. Implementer dispatched (sonnet, brief `weekend/s4-brief.md`).
+
+### P1 done (commit 1a94128): `calibration.brier`, the page card and the markdown reading; README. Ruling: the implementer's order (informative checked before over-confident) follows the brief as fixed; a leg both skilled and overstated reads informative, with its stated/realised numbers printed, so the overstatement is visible. Accepted.
+### S4 code done (commit ac80802); runs started 01:40 CET (task bogoxvsr1): default, sp500, hold-out 2013–14.
