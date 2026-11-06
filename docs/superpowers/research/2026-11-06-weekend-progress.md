@@ -59,3 +59,18 @@ Defects added:
 - F7: non-US insider and capital-allocation evidence: route Nordic names to the public insider registers (Finansinspektionen insynsregistret, FIN-FSA, Oslo Børs newsweb, Danish FSA) — R2 to confirm the free routes; until then the PM's "not proven" should be written as `UNPROVEN` rather than FAIL so the paper rules can count it separately (D1 decides whether paper rules accept it).
 - F8: the committee cannot see the formula value, Altman Z and the F-score for every name (CLS review: "Altman Z not retrieved" although the screen has it) → pass the screen row's accounting scores into the instrument context (same as F5).
 Ruling: the "cheap" gate is not a defect; the live process is producing the output a fair-value market should produce. The improvement targets are data completeness (F6–F8), the paper-Buy sample (F7), and the configuration decision on compounder Overweights (D1), not the bars. Cost if wrong: a bar that is too tight stays too tight; the paper Buys will show that by mid-2027.
+
+## S2 — Entry-price (pullback) study (done 2026-11-07 00:05 CET)
+Code: `value_pipeline/pullback.py`, `pullback-backtest` (commit fefff21, 20 tests). Run on the 2015–2025 picks (`pullback_2026-11-07.md`). Mean 1-year excess over SPY, points; "filled" = bought at the first close ≥ X% below the start price within 120 days, held one year from the fill:
+
+| dip 10% | picks | fill rate | buy now | filled (from fill) | same names bought at start | never filled (buy-now) |
+|---|---|---|---|---|---|---|
+| magic_formula | 1290 | 36% | −2.4 | −1.7 | −12.7 | +3.3 |
+| compounder_record | 1082 | 48% | −0.2 | +6.0 | −7.6 | +6.8 |
+| value_graded | 246 | 41% | −0.9 | +2.2 | −11.9 | +6.9 |
+| compounder | 62 | 47% | +7.6 | +15.2 | −1.7 | +15.8 |
+
+At 15%: fill rates 18–31%, filled excess −0.6 / +8.7 / +3.8 / +27.3, never-filled +1.2 / +4.4 / +4.7 / +10.1.
+
+Fixed verdict: **earns its keep** (filled beats the same names bought at the start by ≥ 2 points for all four rules; the "costs money" condition held for only 2 of 4). Portfolio-level reading, which is the one that matters (money not filled sits in the index at 0 excess): fill_rate × filled excess against buy-now — magic_formula −0.6 vs −2.4, compounder_record +2.9 vs −0.2, value_graded +0.9 vs −0.9, compounder +7.1 vs +7.6. Waiting for a 10% dip and otherwise staying in the index was as good as or better than buying at once for every rule, even though the names that never dipped were the best performers (+3 to +16). Caveats: picks are survivorship-biased; close-based fills; the filled window starts later so SPY windows differ; one sample.
+Ruling: the live entry-price queue with the index fund as the parking place is consistent with the evidence; keep it. The implementer's choices (both conditions → inconclusive; missing price cache excluded from n; dip at exactly the level fills) accepted. Cost if wrong: none to the live process; the study is informational.
