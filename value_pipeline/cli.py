@@ -200,7 +200,7 @@ def cmd_backtest(args, paths: Paths, cfg) -> None:
     try:
         result = backtest.run(paths, cfg, tickers=tickers, refresh=args.refresh,
                               fetch=not args.no_fetch, progress=progress, leavers=args.leavers)
-    except RuntimeError as exc:      # --leavers without any leave dates
+    except backtest.LeaveDatesUnavailable as exc:
         raise SystemExit(str(exc)) from exc
     md, csv = backtest.write(paths, result, result["generated"])
     console.print(Markdown(backtest.verdict(result)))

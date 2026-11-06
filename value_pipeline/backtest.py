@@ -1046,15 +1046,19 @@ def _bar_verdicts(summary: dict) -> dict:
     return out
 
 
+class LeaveDatesUnavailable(RuntimeError):
+    """``--leavers`` was asked for but no leave dates could be read or found cached."""
+
+
 def _leavers(paths: Paths, fetch: bool, removed_fn, members: list[tuple], added: dict,
              tickers: list[str] | None, cohorts: list[str]) -> dict[str, dict]:
     """The names that left the S&P 500 after the first cohort and are not members today: not in
     ``members``, and not rejoined (a join date after the leave date keeps today's row), narrowed
     to ``tickers``. No leave dates at all (no cache and no fetch, or an empty fetch) raises
-    ``RuntimeError``: a "leavers" run without them would only look survivorship-corrected."""
+    ``LeaveDatesUnavailable``: a "leavers" run without them would only look survivorship-corrected."""
     removed = _leave_dates(paths, fetch, removed_fn)
     if not removed:
-        raise RuntimeError(
+        raise LeaveDatesUnavailable(
             "--leavers: no S&P 500 leave dates (the changes table could not be read and nothing "
             "is cached); run with fetching on, or without --leavers")
     held = {t for t, _, _ in members}

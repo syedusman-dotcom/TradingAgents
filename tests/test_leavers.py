@@ -234,13 +234,24 @@ def test_the_cli_reports_missing_leave_dates_and_exits_non_zero(tmp_path, monkey
     from value_pipeline import cli
 
     def no_dates(*a, **kw):
-        raise RuntimeError("--leavers: no S&P 500 leave dates")
+        raise cli.backtest.LeaveDatesUnavailable("--leavers: no S&P 500 leave dates")
 
     monkeypatch.setattr(cli.backtest, "run", no_dates)
     with pytest.raises(SystemExit) as exc:
         cli.main(["--data-dir", str(tmp_path / "data"), "backtest", "--leavers", "--no-fetch"])
     assert exc.value.code not in (0, None)
     assert "no S&P 500 leave dates" in str(exc.value.code) + capsys.readouterr().out
+
+
+def test_the_cli_does_not_swallow_other_runtime_errors(tmp_path, monkeypatch):
+    from value_pipeline import cli
+
+    def boom(*a, **kw):
+        raise RuntimeError("dictionary changed size during iteration")
+
+    monkeypatch.setattr(cli.backtest, "run", boom)
+    with pytest.raises(RuntimeError, match="dictionary changed"):
+        cli.main(["--data-dir", str(tmp_path / "data"), "backtest", "--no-fetch"])
 
 
 def test_leavers_need_the_sp500_in_the_lists(tmp_path, monkeypatch):

@@ -655,6 +655,18 @@ def test_vendor_drops_the_price_for_an_adr_whose_share_basis_differs(monkeypatch
 
 
 @pytest.mark.unit
+def test_vendor_still_converts_a_foreign_quote_when_the_share_bases_cannot_be_compared(monkeypatch):
+    class NoCap(_cad_ticker()):      # Yahoo has no market cap: the bases cannot be checked
+        info = {k: v for k, v in _cad_ticker().info.items() if k != "marketCap"}
+
+    _patch_vendor(monkeypatch, NoCap, {"USD": 1.0, "CAD": 0.72})
+    monkeypatch.setattr(yahoo_vm, "consensus", lambda s: {})
+    report = yahoo_vm.get_value_metrics("CLS.TO", "2026-11-07")
+    assert "converted from USD statements" in report
+    assert "left out rather than mixed" not in report
+
+
+@pytest.mark.unit
 def test_vendor_keeps_a_usd_quote_against_usd_statements_unconverted(monkeypatch):
     class Same(_cad_ticker()):
         info = {**_cad_ticker().info, "currency": "USD"}

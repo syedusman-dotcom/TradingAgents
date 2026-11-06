@@ -272,8 +272,10 @@ def get_value_metrics(
         statement_shares = years[0].get("shares")
         # An ADR's price is per ADR (TSM: 5 ordinary shares), and the history multiples and buyback
         # price set it against the statements' ordinary count: convert only when the bases agree.
-        same_basis = bool(quoted_shares and statement_shares
-                          and abs(quoted_shares / statement_shares - 1) <= SHARE_BASIS_TOLERANCE)
+        # When the bases cannot be compared, a non-dollar quote (CLS.TO, BP.L) is still an
+        # ordinary share; only a dollar quote over foreign statements is the ADR case.
+        same_basis = (abs(quoted_shares / statement_shares - 1) <= SHARE_BASIS_TOLERANCE
+                      if quoted_shares and statement_shares else quote != "USD")
         if quote_usd and reported_usd and same_basis:
             cross, converted = quote_usd / reported_usd, True
     if (minor or converted) and price is not None:
