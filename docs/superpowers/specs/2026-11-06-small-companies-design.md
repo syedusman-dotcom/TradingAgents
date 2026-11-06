@@ -48,7 +48,7 @@ First North, Iceland (not a Nordnet market for this user), Euronext Growth or ot
 | `sp600` | US | Wikipedia S&P 600 list, GICS sector kept | none |
 
 - `Market` gains `api: str | None` (the Nasdaq Nordic market code). `fetch_market` reads the API for such a market: `ticker` from `symbol` through `normalise_code`, `name` from `fullName`, `sector` from `sector`. A request that fails raises, as a Wikipedia failure does, so `universe` keeps the cached rows.
-- **Share classes:** a company listed in two classes (`ACRI A`, `ACRI B`) keeps the class with the higher `turnover` that day. Two rows are one company when their symbols agree after removing a final space-separated token of one to three capital letters (`A`, `B`, `C`, `SDB`, `PREF`).
+- **Share classes:** a company listed in two classes (`ACRI A`, `ACRI B`) keeps the class with the higher `turnover` that day. Two rows are one company when their symbols agree after removing a final space-separated token of one to four capital letters (`A`, `B`, `C`, `SDB`, `PREF`).
 - The five keys go at the end of `DEFAULTS["universe"]["indexes"]` and of `config.yaml`, so the existing index lists keep their names (a company in OMX Stockholm 30 stays under `omxs30` and the large-cap filters).
 - `scripts/check_markets.py` covers the new markets as it covers the others.
 
