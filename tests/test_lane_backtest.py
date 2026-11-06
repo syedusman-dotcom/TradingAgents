@@ -703,7 +703,7 @@ def test_sensitivity_grid_rows():
     expected = [(name, bar, value) for name, rule in rules.items() for bar in rule.bars
                 for value in backtest.SENSITIVITY_GRID[bar]]
     assert [(r["rule"], r["bar"], r["value"]) for r in rows] == expected
-    assert len(rows) == 75
+    assert len(rows) == 79
     assert all(set(r) == {"rule", "bar", "value", "n", "beat_spy", "cohorts", "mean_excess_spy"}
                for r in rows)
     by = {(r["rule"], r["bar"], r["value"]): r for r in rows}
@@ -1214,17 +1214,18 @@ def _tickers(rule_name, rows, **bars) -> list[str]:
 
 
 @pytest.mark.unit
-def test_the_six_candidates_follow_the_existing_eight_with_their_default_bars():
+def test_the_seven_candidates_follow_the_existing_eight_with_their_default_bars():
     rules = backtest.rules(_bt_cfg())
     assert list(rules)[8:] == list(backtest.BAR_CANDIDATES) == [
         "er_hurdle", "er_momentum", "trending_value", "value_graded", "value_no_downtrend",
-        "compounder_fcf"]
+        "compounder_fcf", "record_momentum"]
     assert rules["er_hurdle"].bars == {"min_er": 0.12, "top_n": 20}
     assert rules["er_momentum"].bars == {"min_er": 0.12, "top_n": 20}
     assert rules["trending_value"].bars == {"pool": 60, "top_n": 20}
     assert rules["value_graded"].bars == {"top_n": 30, "mos": 0.20}
     assert rules["value_no_downtrend"].bars == {"top_n": 30, "mos": 0.30}
     assert rules["compounder_fcf"].bars == {"min_fcf_yield": 0.04, "top_n": 20}
+    assert rules["record_momentum"].bars == {"top_n": 20}
     grid = backtest.SENSITIVITY_GRID
     assert grid["min_er"] == (0.10, 0.12, 0.15) and grid["pool"] == (40, 60, 100)
     assert grid["min_fcf_yield"] == (0.03, 0.04, 0.05) and grid["mos"] == (0.10, 0.20, 0.30, 0.40)
@@ -1257,6 +1258,24 @@ def test_er_momentum_keeps_picks_at_or_above_the_passing_rows_median_momentum():
     assert _tickers("er_momentum", rows) == ["A"]
     assert _tickers("er_momentum", rows[:1]) == []                   # one row has no median
     assert _tickers("er_momentum", [rows[0], _row("H", momentum_12_1=None)]) == []
+
+
+@pytest.mark.unit
+def test_record_momentum_keeps_record_rows_at_or_above_the_cohorts_median_momentum():
+    rec = {"lane_hints": ["compounder"], "pm_record_ok": True}
+    rows = [_row("A", momentum_12_1=0.30, **rec),
+            _row("B", momentum_12_1=0.50, **rec),
+            _row("C", momentum_12_1=0.10, **rec),                    # record, under the median
+            _row("D", momentum_12_1=0.40),                           # no record: dropped
+            _row("N", momentum_12_1=None, **rec),                    # no momentum: dropped
+            _row("E", momentum_12_1=9.0, trend="FREEFALL", **rec),   # not counted
+            _row("F", momentum_12_1=9.0, passes_filters=False, **rec),
+            _row("G", momentum_12_1=-0.20)]
+    # median of .30 .50 .10 .40 -.20: 0.30, taken over every eligible row, not only the record
+    assert _tickers("record_momentum", rows) == ["B", "A"]           # sorted, the median included
+    assert _tickers("record_momentum", rows, top_n=1) == ["B"]
+    assert _tickers("record_momentum", rows[:1]) == []               # one row has no median
+    assert _tickers("record_momentum", [rows[0], _row("H", momentum_12_1=None)]) == []
 
 
 @pytest.mark.unit
@@ -1478,7 +1497,7 @@ def test_what_was_tested_states_the_overlap_caveat():
     tested = backtest.markdown(_fake_result()).split("## What was tested")[1].split("## Verdict")[0]
     for words in ("one-year holds on quarterly dates overlap", "about eleven separate years",
                   "fewer than four separate periods",
-                  "six candidates were tried against one threshold",
+                  "seven candidates were tried against one threshold",
                   "one passing by luck is plausible", "before trading costs",
                   "a pass is evidence to look closer, not proof"):
         assert words in tested

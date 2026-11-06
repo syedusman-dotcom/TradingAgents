@@ -388,6 +388,20 @@ def _er_momentum(rows, bars):
     return [r for r in _er_hurdle(rows, bars) if _at_least(r.get("momentum_12_1"), median)]
 
 
+def _record_momentum(rows, bars):
+    """The quality-record rows at or above the median ``momentum_12_1`` of the cohort's rows that
+    pass the filters, are not FREEFALL and have a momentum value (``er_momentum``'s median); with
+    fewer than two such rows, nothing. The top ``top_n`` of them by momentum."""
+    moments = [r["momentum_12_1"] for r in rows
+               if _eligible(r) and r.get("momentum_12_1") is not None]
+    if len(moments) < 2:
+        return []
+    median = statistics.median(moments)
+    return _top_by([r for r in rows if _eligible(r) and _record(r)
+                    and _at_least(r.get("momentum_12_1"), median)],
+                   "momentum_12_1", bars["top_n"])
+
+
 def _trending_value(rows, bars):
     return _top_by([r for r in rows if _ranked(r, bars["pool"])], "momentum_12_1", bars["top_n"])
 
@@ -403,11 +417,11 @@ def _compounder_fcf(rows, bars):
 
 
 BAR_CANDIDATES = ("er_hurdle", "er_momentum", "trending_value", "value_graded",
-                  "value_no_downtrend", "compounder_fcf")
+                  "value_no_downtrend", "compounder_fcf", "record_momentum")
 
 
 def rules(cfg: dict) -> dict[str, Rule]:
-    """The eight lane rules under test, then the six buy-bar candidates, with their default bars taken from the code they mirror
+    """The eight lane rules under test, then the seven buy-bar candidates, with their default bars taken from the code they mirror
     (``decision_math`` and the config), in the report's order."""
     top_n = cfg["backtest"]["value_top_n"]
     specs = [
@@ -428,6 +442,7 @@ def rules(cfg: dict) -> dict[str, Rule]:
         ("value_no_downtrend", {"top_n": top_n, "mos": cfg["watch"]["buy_margin_of_safety"]},
          _value_no_downtrend),
         ("compounder_fcf", {"min_fcf_yield": 0.04, "top_n": 20}, _compounder_fcf),
+        ("record_momentum", {"top_n": 20}, _record_momentum),
     ]
     return {name: Rule(name, bars, picks) for name, bars, picks in specs}
 
@@ -1147,7 +1162,7 @@ def _points(x) -> str:
 
 OVERLAP = ("Counting cohorts — one-year holds on quarterly dates overlap, so the cohorts are not "
            "independent and amount to about eleven separate years; three-year holds overlap far "
-           "more and amount to fewer than four separate periods; six candidates were tried "
+           "more and amount to fewer than four separate periods; seven candidates were tried "
            "against one threshold, so one passing by luck is plausible; returns are before "
            "trading costs; a pass is evidence to look closer, not proof.")
 
