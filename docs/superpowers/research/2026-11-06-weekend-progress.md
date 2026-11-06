@@ -80,3 +80,8 @@ Started 2026-11-07 00:10 CET. Flag `backtest --leavers`; the run follows when th
 
 ## R2 — Deep research: reliable LLM equity analysis (running, 4 researchers on opus)
 Started 2026-11-07 00:12 CET. Ruling: R2 researchers run on opus with a 35-call budget because the R1 sonnet researchers returned partial notes (many fetches failed within 15 calls); cost is tokens, not Fable quota.
+
+## F1 — formula value with mixed currencies (running: implementer a9639c1624e379fac on opus; brief `weekend/f1-brief.md`)
+Started 2026-11-07 00:20 CET. Cause found: `yahoo/value_metrics.py::get_value_metrics` drops the price whenever `info["currency"] != info["financialCurrency"]` (except pence/pounds), so the worksheet has no formula value for CAD/USD, SEK/EUR, CHF/USD names. Fix: convert at the cross rate, render per-share values in the quote unit as the pence case does.
+
+## R1 — report writer running (a641729c75aae58b2, opus); second round done: `european_momentum.md`, `swedish_investment_companies.md`.
