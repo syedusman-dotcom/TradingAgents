@@ -402,6 +402,7 @@ def offscreen_row(ticker: str, paths: Paths, cfg: dict, screen: dict[str, dict])
     suffix = ticker[ticker.rfind("."):] if "." in ticker else ""
     market = next((m for m in market_data.MARKETS.values() if m.suffix == suffix), None)
     row["market"], row["country"] = (market.key, market.country) if market else (None, None)
+    row["daily_value"] = screener.daily_value(data)
     target = screener.sector_target(list(screen.values()), row["sector"])
     screener.with_target(row, data["years"], data.get("price"), row["market_cap"], row["shares"], target)
     reasons = screener.failed_filters(row, cfg["filters"])

@@ -116,9 +116,31 @@ def test_backtest_universe_returns_the_market_and_still_takes_a_frame_without_on
 
 @pytest.mark.unit
 def test_report_limit_names_the_missing_volume_history():
-    text = " ".join(backtest._small_market_limits({"indexes": ["sp600"]}))
-    assert "trading-value floor cannot be applied to past dates" in text
-    assert backtest._small_market_limits({"indexes": ["sp500"]}) == []
+    run = {"indexes": ["sp600"], "small_markets": ["sp600"]}
+    assert "trading-value floor cannot be applied to past dates" in " ".join(backtest._small_market_limits(run))
+    assert backtest._small_market_limits({"indexes": ["sp500"], "small_markets": ["sp600"]}) == []
+    assert backtest._small_market_limits({"indexes": ["sp600"], "small_markets": ["sto"]}) == []   # the run's map, not the defaults
+
+
+@pytest.mark.unit
+def test_offscreen_rows_carry_daily_value(tmp_path, monkeypatch):
+    from value_pipeline import metrics, review
+    monkeypatch.setattr(market_data, "usd_rate", lambda c: {"USD": 1.0, "SEK": 0.1}.get(c))
+    monkeypatch.setattr(metrics, "current_discount_rate", lambda: {"rate": 0.10, "treasury_10y": None})
+    cfg = copy.deepcopy(DEFAULTS)
+    data = record(ticker="ABC.ST", currency="SEK", financial_currency="SEK", price=100.0, market_cap=3.0e10,
+                  average_volume=10000, sector="Industrials")
+    monkeypatch.setattr(market_data, "fundamentals", lambda *a, **k: dict(data))
+    row = review.offscreen_row("ABC.ST", config.Paths(tmp_path), cfg, {})
+    assert row["daily_value"] == pytest.approx(100000.0)        # 10,000 shares x $10
+    assert "liquidity" not in row["fail_reasons"]               # .ST maps to omxs30: not a small market
+    cfg["filters"]["small_markets"] = {"omxs30": 2.5e8}
+    row = review.offscreen_row("ABC.ST", config.Paths(tmp_path), cfg, {})
+    assert "liquidity" in row["fail_reasons"]                   # under $250,000 a day
+    data["average_volume"] = 1_000_000
+    assert "liquidity" not in review.offscreen_row("ABC.ST", config.Paths(tmp_path), cfg, {})["fail_reasons"]
+    del data["average_volume"]
+    assert "liquidity" in review.offscreen_row("ABC.ST", config.Paths(tmp_path), cfg, {})["fail_reasons"]
 
 
 @pytest.mark.unit

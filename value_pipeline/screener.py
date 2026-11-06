@@ -156,6 +156,15 @@ def apply_sector_targets(rows: list[dict], inputs: dict[str, tuple]) -> None:
         with_target(r, *inputs[r["ticker"]], targets[r.get("sector")])
 
 
+def daily_value(data: dict) -> float | None:
+    """Average daily traded value in dollars: ``average_volume`` times the dollar price of
+    ``data`` (after ``market_data.in_usd``); None when either is missing."""
+    volume, price = data.get("average_volume"), data.get("price")
+    if isinstance(volume, (int, float)) and isinstance(price, (int, float)):
+        return volume * price
+    return None
+
+
 def failed_filters(row: dict, filters: dict, check_liquidity: bool = True) -> list[str]:
     """The hard filters a row fails; a missing value fails its filter. A row of a market in
     ``filters["small_markets"]`` uses that market's size floor in place of ``min_market_cap`` and,
@@ -479,9 +488,7 @@ def run(paths: Paths, cfg: dict, owned: set[str], today: str | None = None) -> d
         inputs[rec.ticker] = (data["years"], data.get("price"), row["market_cap"], row["shares"])
         quoted[rec.ticker] = data
         row.update(name=rec.name, sector=sector, index=rec.index, market=rec.market, country=rec.country)
-        volume, dollars = data.get("average_volume"), data.get("price")
-        row["daily_value"] = (volume * dollars if isinstance(volume, (int, float))
-                              and isinstance(dollars, (int, float)) else None)
+        row["daily_value"] = daily_value(data)
         row["fail_reasons"] = failed_filters(row, cfg["filters"])
         rows.append(row)
 

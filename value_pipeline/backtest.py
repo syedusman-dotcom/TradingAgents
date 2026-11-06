@@ -44,7 +44,7 @@ from tradingagents.agents.decision_math import (
 from tradingagents.dataflows.files import replace_file
 from tradingagents.dataflows.value_metrics import EQUITY_PREMIUM, MIN_DISCOUNT_RATE
 from value_pipeline import market_data, metrics, screener
-from value_pipeline.config import DEFAULTS, Paths
+from value_pipeline.config import Paths
 from value_pipeline.pit_statements import (
     facts_for,
     quarters_as_of,
@@ -972,6 +972,7 @@ def run(paths: Paths, cfg: dict, today: date | None = None, tickers: list[str] |
         "generated": today.isoformat(), "cohorts": cohorts, "holds": holds,
         "universe_size": len(members), "with_data": with_data,
         "indexes": list(cfg["universe"]["indexes"]),
+        "small_markets": list(cfg["filters"]["small_markets"]),
         "rows_per_cohort": {c: len(rows[c]) for c in cohorts}, "picks": picks,
         "missing_fields": {c: _missing_fields(inputs[c]) for c in cohorts},
         "summary": summary, "bar_verdicts": _bar_verdicts(summary),
@@ -1048,7 +1049,7 @@ def _is_default(indexes: list[str]) -> bool:
 
 def _small_market_limits(result: dict) -> list[str]:
     """The limit line for a run that includes a small-company market (empty otherwise)."""
-    if not set(_indexes(result)) & set(DEFAULTS["filters"]["small_markets"]):
+    if not set(_indexes(result)) & set(result.get("small_markets") or ()):
         return []
     return ["The trading-value floor cannot be applied to past dates (no volume history), so "
             "small companies are filtered on size only."]
