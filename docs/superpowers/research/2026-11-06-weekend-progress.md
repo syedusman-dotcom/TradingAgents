@@ -129,3 +129,6 @@ Ruling: items (1), (2) and (10) are buildable this weekend with pre-fixed scorin
 ## F7 — Nordic releases and insiders as vendors (running: implementer af17fcc611e8be8e9 on opus; brief `weekend/f7-brief.md`). Started 2026-11-07 01:20 CET.
 
 ## P1 — Brier scores for scenario probabilities (running: implementer ae83881b733b9a154 on sonnet; brief `weekend/p1-brief.md`). Started 2026-11-07 01:25 CET. Reading rule fixed in the brief: n ≥ 30 at 365 days; informative = both skill scores > 0; over-confident = stated − realised > 10 points; else uninformative. No bar change; measurement only (R2 change #1).
+
+## S4 — record_momentum (verdict fixed BEFORE the run, 2026-11-07 01:30 CET)
+Rule: quality record (`_record`) rows at or above the cohort's median 12-1 momentum, top 20 by momentum. Verdict: the standard `bar_verdict` (≥ 20 cohorts with ≥ 5 picks, beats the universe in ≥ 60%, mean excess over the universe ≥ +2 and over SPY ≥ 0, 3-year ≥ 0, better than `magic_formula`) on the 2015–2025 run AND on the S&P 500-only run, AND mean 1-year excess over SPY ≥ 0 on the 2013–14 hold-out. Anything less: not supported. Implementer dispatched (sonnet, brief `weekend/s4-brief.md`).
