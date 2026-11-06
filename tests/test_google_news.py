@@ -55,7 +55,8 @@ def test_in_window_articles_only(monkeypatch):
     assert "2026-11-03" in out and "2026-11-05" in out
     assert "old story" not in out
     assert "Betsson%20AB" in seen["url"] or "Betsson+AB" in seen["url"]
-    assert "after%3A2026-10-30" in seen["url"] and "before%3A2026-11-06" in seen["url"]
+    # Google's before: is exclusive: ask for the day after the window so its last day is in.
+    assert "after%3A2026-10-30" in seen["url"] and "before%3A2026-11-07" in seen["url"]
     assert seen["kwargs"]["timeout"] == 20
     assert "User-Agent" in seen["kwargs"]["headers"]
 
@@ -95,3 +96,17 @@ def test_router_falls_back_to_google(monkeypatch):
     monkeypatch.setitem(router.VENDOR_METHODS["get_news"], "yfinance", down)
     monkeypatch.setitem(router.VENDOR_METHODS["get_news"], "google_news", lambda *a, **k: "from google")
     assert router.route_to_vendor("get_news", "BETS-B.ST", "2026-10-30", "2026-11-06") == "from google"
+
+
+def test_a_page_that_is_not_an_rss_feed_is_unavailable(monkeypatch):
+    _serve(monkeypatch, _Resp(text="<html><body><form>Before you continue</form></body></html>"))
+    with pytest.raises(VendorUnavailableError, match="not an RSS feed"):
+        google_news.get_news("BETS-B.ST", "2026-10-30", "2026-11-06")
+
+
+def test_yahoo_name_is_none_when_the_lookup_fails(monkeypatch):
+    import yfinance as yf
+
+    monkeypatch.setattr(yf, "Ticker", lambda *a: (_ for _ in ()).throw(RuntimeError("throttled")))
+    monkeypatch.setattr("tradingagents.dataflows.vendors.yahoo.common.yf_retry", lambda f: f())
+    assert google_news._yahoo_name("ERIC-B.ST") is None

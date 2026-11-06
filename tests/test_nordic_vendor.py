@@ -347,3 +347,75 @@ def test_router_falls_through_to_yahoo_for_us(monkeypatch):
         assert router.route_to_vendor("get_news", "AAPL", "2026-10-30", "2026-11-06") == "from yahoo"
         assert router.route_to_vendor("get_insider_transactions", "AAPL") == "yahoo insiders"
     assert seen == []
+
+
+def test_nordic_name_lookup_failure_is_unavailable(monkeypatch):
+    monkeypatch.setattr(nordic, "_company_name", lambda canonical: None)   # Yahoo failed
+    seen = _serve(monkeypatch, {})
+    with pytest.raises(VendorUnavailableError, match="company name"):
+        nordic.get_insider_transactions("ERIC-B.ST", "2026-11-07")
+    with pytest.raises(VendorUnavailableError, match="company name"):
+        nordic.get_news("ERIC-B.ST", "2026-10-15", "2026-11-06")
+    assert seen == []
+
+
+def test_company_name_is_none_when_yahoo_fails(monkeypatch):
+    monkeypatch.undo()
+    monkeypatch.setattr(google_news, "_yahoo_name", lambda canonical: None)
+    assert nordic._company_name("ERIC-B.ST") is None
+
+
+def test_fi_rows_none_of_the_issuers_is_no_data_not_an_absence(monkeypatch):
+    _serve(monkeypatch, {"marknadssok.fi.se": _fi(FI_ROWS[2:])})     # only Betsson Car AB
+    with pytest.raises(NoMarketDataError, match="issuer name not matched"):
+        nordic.get_insider_transactions("BETS-B.ST", "2026-11-07")
+
+
+def test_a_truncated_yahoo_name_matches_on_its_first_twelve_characters(monkeypatch):
+    monkeypatch.setattr(nordic, "_company_name", lambda canonical: "Telefonaktiebolaget LM Ericsso")
+    rows = [FI_ROWS[0].replace("2026-10-27 14:18:37;Betsson AB;", "2026-10-27 14:18:37;Telefonaktiebolaget LM Ericsson;")]
+    _serve(monkeypatch, {"marknadssok.fi.se": _fi(rows)})
+    out = nordic.get_insider_transactions("ERIC-B.ST", "2026-11-07")
+    assert out.splitlines()[-1] == "Totals: 1 buys 1000, 0 sells 0"
+
+
+def test_nasdaq_rows_none_of_the_issuers_is_no_data(monkeypatch):
+    feed = {"count": 1, "results": {"item": [NASDAQ["results"]["item"][3]]}}      # Avanza only
+    _serve(monkeypatch, {"api.news.eu.nasdaq.com": _Resp(text=json.dumps(feed))})
+    with pytest.raises(NoMarketDataError, match="issuer name not matched"):
+        nordic.get_news("BETS-B.ST", "2026-10-15", "2026-11-06")
+
+
+def test_nasdaq_page_cap_before_the_window_is_unavailable(monkeypatch):
+    item = dict(NASDAQ["results"]["item"][0])
+    monkeypatch.setattr(nordic, "NASDAQ_PAGE", 1)
+    monkeypatch.setattr(nordic, "NASDAQ_MAX_PAGES", 2)
+    feed = {"count": 50, "results": {"item": [item]}}                  # every page is 2026-11-05
+    _serve(monkeypatch, {"api.news.eu.nasdaq.com": _Resp(text=json.dumps(feed))})
+    with pytest.raises(VendorUnavailableError, match="window not reached"):
+        nordic.get_news("BETS-B.ST", "2025-01-01", "2025-01-31")
+
+
+def test_a_swedish_release_at_the_same_minute_as_an_unrelated_english_one_is_kept(monkeypatch):
+    sv = {**NASDAQ["results"]["item"][0], "disclosureId": 1005, "language": "sv",
+          "headline": "Betsson AB Kallelse till extra bolagsstämma", "cnsCategory": "Notice to general meeting",
+          "messageUrl": "https://view.news.eu.nasdaq.com/view?id=b5&lang=sv"}
+    feed = {"count": 2, "results": {"item": [NASDAQ["results"]["item"][0], sv]}}
+    _serve(monkeypatch, {"api.news.eu.nasdaq.com": _Resp(text=json.dumps(feed)), "view?id=": _Resp(text="")})
+    out = nordic.get_news("BETS-B.ST", "2026-10-15", "2026-11-06")
+    assert "Interim report Q3 2026" in out and "Kallelse till extra bolagsstämma" in out
+
+
+def test_fi_totals_skip_revised_notices_and_split_by_instrument(monkeypatch):
+    revised = FI_ROWS[0].replace(";Aktuell;", ";Reviderad;")
+    option = (FI_ROWS[0].replace(";Aktie;Betsson AB ser. B;", ";Option;Betsson AB köpoption 2027;")
+              .replace("1000,0;Antal", "20,0;Antal"))
+    _serve(monkeypatch, {"marknadssok.fi.se": _fi([FI_ROWS[0], revised, option])})
+    out = nordic.get_insider_transactions("BETS-B.ST", "2026-11-07")
+    assert ",Reviderad" in out                              # still listed
+    totals = [line for line in out.splitlines() if line.startswith("Totals")]
+    assert totals == [
+        "Totals, Betsson AB ser. B (Antal): 1 buys 1000, 0 sells 0",
+        "Totals, Betsson AB köpoption 2027 (Antal): 1 buys 20, 0 sells 0",
+    ]
+    assert "revised or cancelled notices are not counted" in out

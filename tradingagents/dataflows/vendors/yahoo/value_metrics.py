@@ -151,6 +151,33 @@ def fiscal_average_closes(history: pd.DataFrame, fiscal_year_ends: list[str]) ->
         return {}
 
 
+def fx_history(code: str) -> pd.DataFrame | None:
+    """Ten years of daily closes of ``{code}USD=X`` (US dollars per unit); None when it fails."""
+    try:
+        return yf_retry(lambda: yf.Ticker(f"{code}USD=X").history(period="10y"))
+    except Exception:
+        return None
+
+
+def _historic_cross(quote: str, reported: str, fiscal_year_ends: list[str]) -> dict[str, float]:
+    """Fiscal year end -> that year's average rate in ``reported`` units per ``quote`` unit (major
+    codes), from each currency's ``{code}USD=X`` history; a year either history lacks is left out."""
+    averages = []
+    for code in (quote, reported):
+        if code == "USD":
+            averages.append(dict.fromkeys(map(str, fiscal_year_ends), 1.0))
+            continue
+        history = fx_history(code)
+        averages.append(fiscal_average_closes(history, fiscal_year_ends) if history is not None else {})
+    q, r = averages
+    return {k: q[k] / r[k] for k in q if k in r and r[k]}
+
+
+# How far market cap / price may sit from the statements' share count before the quote is taken to
+# count a different share (an ADR of 5 ordinary shares) and the price is not converted.
+SHARE_BASIS_TOLERANCE = 0.10
+
+
 TARGET_KEYS = ("target_mean", "target_median", "target_high", "target_low")
 
 
@@ -169,10 +196,11 @@ def _consensus_in(price, factor: float, symbol: str, cross: float = 1.0) -> dict
     return c
 
 
-def _to_quote_unit(metrics: dict, factor: float) -> dict:
+def _to_quote_unit(metrics: dict, factor: float, year_factors: dict | None = None) -> dict:
     """``metrics`` with every per-share price multiplied by ``factor``, quote units per statement
     unit (100 for pence, 1 / rate for another currency); ratios, totals in money and share counts
-    are left alone. Returns a copy."""
+    are left alone. ``year_factors`` (fiscal year end -> factor) scales a year's buyback and average
+    price at that year's rate instead. Returns a copy."""
     import copy
 
     m = copy.deepcopy(metrics)
@@ -196,7 +224,9 @@ def _to_quote_unit(metrics: dict, factor: float) -> dict:
     ca = m.get("capital_allocation")
     if ca:
         for r in ca["per_year"]:
-            r["buyback_price"], r["avg_price"] = scale(r["buyback_price"]), scale(r["avg_price"])
+            f = (year_factors or {}).get(str(r.get("fiscal_year_end")), factor)
+            r["buyback_price"] = None if r["buyback_price"] is None else r["buyback_price"] * f
+            r["avg_price"] = None if r["avg_price"] is None else r["avg_price"] * f
         ca["totals"]["avg_buyback_price"] = scale(ca["totals"].get("avg_buyback_price"))
         ca["price"] = scale(ca.get("price"))
     c = m.get("consensus")
@@ -238,7 +268,13 @@ def get_value_metrics(
     cross, converted = 1.0, False
     if quote and reported and major != reported:
         quote_usd, reported_usd = usd_rate(quote), usd_rate(reported)
-        if quote_usd and reported_usd:
+        quoted_shares = share_count(info.get("marketCap"), price / factor if price else None)
+        statement_shares = years[0].get("shares")
+        # An ADR's price is per ADR (TSM: 5 ordinary shares), and the history multiples and buyback
+        # price set it against the statements' ordinary count: convert only when the bases agree.
+        same_basis = bool(quoted_shares and statement_shares
+                          and abs(quoted_shares / statement_shares - 1) <= SHARE_BASIS_TOLERANCE)
+        if quote_usd and reported_usd and same_basis:
             cross, converted = quote_usd / reported_usd, True
     if (minor or converted) and price is not None:
         price = price / factor * cross
@@ -265,12 +301,20 @@ def get_value_metrics(
                 "figures and the formula valuation are left out rather than mixed.")
     rate = current_discount_rate()
     avg_prices = {}  # fail-open: the report renders without average prices
+    year_cross = {}  # fiscal year end -> that year's average rate, for a converted quote
     if price is not None:  # None means no rate for the quote currency; its averages would mix currencies
         try:
             # Unadjusted closes: the prices actually paid, as the buyback comparison needs.
             history = yf_retry(lambda: t.history(period="10y", auto_adjust=False))
             fyes = [y["fiscal_year_end"] for y in years]
-            avg_prices = {k: v / factor * cross for k, v in fiscal_average_closes(history, fyes).items()}
+            closes = fiscal_average_closes(history, fyes)
+            if converted:
+                # Each year at its own average rate, so the history multiples and buyback prices
+                # do not pick up the currency's move since; today's rate where no history is had.
+                year_cross = _historic_cross(major, reported, list(closes))
+                if any(k not in year_cross for k in closes):
+                    note += " (historic averages converted at today's rate)"
+            avg_prices = {k: v / factor * year_cross.get(k, cross) for k, v in closes.items()}
         except Exception:
             avg_prices = {}
     revenue_usd = None  # the growth base rates are in dollars; revenue arrives in the reporting currency
@@ -283,5 +327,5 @@ def get_value_metrics(
                               revenue_history=sec_revenue_history(canonical, reported),
                               consensus=_consensus_in(price, factor, canonical, cross))
     if minor or converted:
-        metrics = _to_quote_unit(metrics, factor / cross)
+        metrics = _to_quote_unit(metrics, factor / cross, {k: factor / c for k, c in year_cross.items()})
     return render_report(canonical, as_of_date or "today", metrics, currency=reported or quote) + note

@@ -566,12 +566,13 @@ def _cad_ticker():
     return FakeTicker
 
 
-def _patch_vendor(monkeypatch, fake, rates):
+def _patch_vendor(monkeypatch, fake, rates, fx_histories=None):
     monkeypatch.setattr(yahoo_vm.yf, "Ticker", lambda *a: fake())
     monkeypatch.setattr(yahoo_vm, "is_historical", lambda d: False)
     monkeypatch.setattr(yahoo_vm, "current_discount_rate", lambda: {"rate": 0.09, "treasury_10y": None})
     monkeypatch.setattr(yahoo_vm, "usd_rate", lambda c: rates.get(c))
     monkeypatch.setattr(yahoo_vm, "sec_revenue_history", lambda *a: None)
+    monkeypatch.setattr(yahoo_vm, "fx_history", lambda code: (fx_histories or {}).get(code))
 
 
 @pytest.mark.unit
@@ -598,6 +599,59 @@ def test_vendor_values_a_cad_quote_against_usd_statements_in_cad(monkeypatch):
     assert buyback is not None and f"{buyback / 0.72:,.2f}" in row              # buyback price, CAD
     assert "- Consensus price target median 120.00" in report                 # CAD in, CAD out
     assert "Money in millions USD" in report and "Market cap 7,200" in report  # money stays USD
+    assert "(historic averages converted at today's rate)" in report          # no rate history here
+
+
+@pytest.mark.unit
+def test_vendor_converts_each_years_average_close_at_that_years_rate(monkeypatch):
+    fake = _cad_ticker()
+    cad = pd.DataFrame({"Close": [0.74, 0.76]}, index=pd.to_datetime(["2025-03-31", "2025-09-30"]))
+    _patch_vendor(monkeypatch, fake, {"CAD": 0.72, "USD": 1.0}, fx_histories={"CAD": cad})
+    monkeypatch.setattr(yahoo_vm, "consensus", lambda s: {})
+    report = yahoo_vm.get_value_metrics("CLS.TO", "2026-11-07")
+    # 2025's closes averaged C$100 at 0.75 USD per CAD: US$75, which is what each of the 4M shares
+    # retired cost (US$300M). Both read back in that year's CAD, not at today's 0.72.
+    row = [line for line in report.splitlines() if line.startswith("| 2025-12-31 |")][-1]
+    assert row.rstrip().endswith("| 100.00 | 100.00 |"), row
+    assert "historic averages converted at today's rate" not in report
+    assert yahoo_vm._historic_cross("CAD", "USD", ["2025-12-31", "2024-12-31"]) == {
+        "2025-12-31": pytest.approx(0.75)}
+
+
+def _pence_usd_ticker():
+    """BP's shape: quoted in pence, reporting in USD."""
+    class Pence(_cad_ticker()):
+        info = {"currency": "GBp", "financialCurrency": "USD", "currentPrice": 500.0,
+                "marketCap": 5e8, "sharesOutstanding": 1e8}
+    return Pence
+
+
+@pytest.mark.unit
+def test_vendor_values_a_pence_quote_against_usd_statements_in_pence(monkeypatch):
+    from tradingagents.agents.decision_math import worksheet_base
+
+    fake = _pence_usd_ticker()
+    _patch_vendor(monkeypatch, fake, {"GBp": 1.25, "GBP": 1.25, "USD": 1.0})
+    monkeypatch.setattr(yahoo_vm, "consensus", lambda s: {})
+    report = yahoo_vm.get_value_metrics("BP.L", "2026-11-07")
+    years = yahoo_vm.statement_years(fake.income_stmt, fake.balance_sheet, fake.cashflow)
+    usd = vm.company_metrics(years, 6.25, 6.25e8, 1e8, rate=0.09)        # 500p = £5 = $6.25
+    assert worksheet_base(report) == pytest.approx(usd["valuation"]["base"] / 1.25 * 100, rel=1e-3)
+    assert "Price 500.00" in report
+    assert "Per-share values in GBp, the quote unit, converted from USD statements at 1.2500 USD per GBP" in report
+
+
+@pytest.mark.unit
+def test_vendor_drops_the_price_for_an_adr_whose_share_basis_differs(monkeypatch):
+    class Adr(_cad_ticker()):      # one ADR is 5 ordinary shares: market cap / price counts ADRs
+        info = {"currency": "USD", "financialCurrency": "TWD", "currentPrice": 100.0,
+                "marketCap": 2e9, "sharesOutstanding": 2e7}
+
+    _patch_vendor(monkeypatch, Adr, {"USD": 1.0, "TWD": 0.031})
+    monkeypatch.setattr(yahoo_vm, "consensus", lambda s: {})
+    report = yahoo_vm.get_value_metrics("TSM", "2026-11-07")
+    assert "quote is in USD but the statements are in TWD" in report
+    assert "Price: not available" in report and "converted from" not in report
 
 
 @pytest.mark.unit

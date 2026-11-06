@@ -3,7 +3,7 @@
 import contextlib
 import logging
 import xml.etree.ElementTree as ET
-from datetime import datetime
+from datetime import datetime, timedelta
 from email.utils import parsedate_to_datetime
 from urllib.parse import quote
 
@@ -26,8 +26,8 @@ HEADERS = {
 }
 
 
-def _company_name(canonical: str) -> str:
-    """The company's short name from Yahoo, else the symbol without its exchange suffix."""
+def _yahoo_name(canonical: str) -> str | None:
+    """The company's short name from Yahoo; None when the lookup fails or has none."""
     with contextlib.suppress(Exception):
         import yfinance as yf
 
@@ -37,7 +37,12 @@ def _company_name(canonical: str) -> str:
         name = (info.get("shortName") or "").strip()
         if name:
             return name
-    return canonical.rsplit(".", 1)[0]
+    return None
+
+
+def _company_name(canonical: str) -> str:
+    """The company's short name from Yahoo, else the symbol without its exchange suffix."""
+    return _yahoo_name(canonical) or canonical.rsplit(".", 1)[0]
 
 
 def _parse_items(body: bytes) -> list[dict]:
@@ -45,6 +50,9 @@ def _parse_items(body: bytes) -> list[dict]:
         root = ET.fromstring(body)
     except ET.ParseError as exc:
         raise VendorUnavailableError(f"Google News returned unparseable XML: {exc}") from exc
+    if root.tag != "rss" or root.find("channel") is None:
+        # A consent or interstitial page parses too, with no items: not "no news".
+        raise VendorUnavailableError(f"Google News returned <{root.tag}>, not an RSS feed")
     items = []
     for item in root.iter("item"):
         pub_date = None
@@ -71,7 +79,9 @@ def get_news(ticker: str, start_date: str, end_date: str) -> str:
     canonical = normalize_symbol(ticker)
     resolved = "" if canonical == ticker else f" (resolved to {canonical})"
     name = _company_name(canonical)
-    query = f'"{name}" after:{start_date} before:{end_date}'
+    # ``before:`` is exclusive: ask for the day after the window so its last day is searched.
+    before = (datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+    query = f'"{name}" after:{start_date} before:{before}'
     url = f"{SEARCH_URL}?q={quote(query, safe='')}&hl=en-US&gl=US&ceid=US:en"
     try:
         resp = requests.get(url, headers=HEADERS, timeout=20)

@@ -132,7 +132,7 @@ def pipeline_note(row: dict | None) -> str:
     if isinstance(flags, str) and flags.strip():
         parts.append(f"accounting flags: {flags.strip()}")
     if (base := _present(row, "value_base")) is not None:
-        parts.append(f"screen formula value {base:.2f} per share (no-growth)")
+        parts.append(f"screen formula value {base:.2f} per share (3% growth base)")
     return "; ".join(parts) + "." if parts else ""
 
 

@@ -86,8 +86,10 @@ def market_of(canonical: str) -> str | None:
     return None
 
 
-def _company_name(canonical: str) -> str:
-    return google_news._company_name(canonical)
+def _company_name(canonical: str) -> str | None:
+    """Yahoo's short name for the listing; None when the lookup fails (no ticker-root guess:
+    the exchanges would match nothing and the answer would read as an absence)."""
+    return google_news._yahoo_name(canonical)
 
 
 def _name_words(name: str) -> list[str]:
@@ -100,12 +102,25 @@ def _name_key(name: str) -> tuple[str, ...]:
     return tuple(w.lower() for w in _name_words(name))
 
 
+# Characters of the reduced name that must agree when the names differ: Yahoo truncates long names
+# ("Telefonaktiebolaget LM Ericsso"), so an exact key would miss the issuer.
+NAME_PREFIX = 12
+
+
+def _matches(name: str, key: tuple[str, ...]) -> bool:
+    """Whether an issuer name is the company: the same key, or the same first ``NAME_PREFIX``
+    characters once legal forms are stripped."""
+    other = _name_key(name or "")
+    return other == key or " ".join(other)[:NAME_PREFIX] == " ".join(key)[:NAME_PREFIX]
+
+
 def _search_term(canonical: str) -> tuple[str, tuple[str, ...]]:
-    """What to search the exchange for, and the key an issuer name must reduce to."""
+    """What to search the exchange for, and the key an issuer name must reduce to. No name from
+    Yahoo raises ``VendorUnavailableError``: a guess from the ticker would match no issuer."""
     name = _company_name(canonical)
-    words = _name_words(name)
+    words = _name_words(name or "")
     if not words:
-        words = [canonical.rsplit(".", 1)[0]]
+        raise VendorUnavailableError(f"Nordic vendor: no company name for {canonical} (Yahoo lookup failed)")
     return " ".join(words), tuple(w.lower() for w in words)
 
 
@@ -195,10 +210,22 @@ def _nasdaq_releases(canonical: str, start_date: str, end_date: str, category: s
             break
         if (page + 1) * NASDAQ_PAGE >= count:
             break
+    else:
+        # The page cap, with the oldest release still after the window's start: what is in the
+        # window was never listed, so "no releases" would be a guess.
+        raise VendorUnavailableError(
+            f"Nasdaq news for {term!r}: window not reached in {NASDAQ_MAX_PAGES * NASDAQ_PAGE} results"
+        )
     # freeText matches any release that names the company: keep the issuer's own.
-    own = [r for r in found if _name_key(r["company"]) == key and in_window(r["time"], start_dt, end_dt)]
-    english = {r["time"] for r in own if r["language"] == "en"}
-    own = [r for r in own if r["language"] == "en" or r["time"] not in english]
+    issuer = [r for r in found if _matches(r["company"], key)]
+    if found and not issuer:
+        raise NoMarketDataError(canonical, canonical, "issuer name not matched")
+    own = [r for r in issuer if in_window(r["time"], start_dt, end_dt)]
+    # A translated twin shares the English release's minute and its category (or headline).
+    english = {(r["time"], r["category"]) for r in own if r["language"] == "en"}
+    english |= {(r["time"], r["headline"].casefold()) for r in own if r["language"] == "en"}
+    own = [r for r in own if r["language"] == "en"
+           or ((r["time"], r["category"]) not in english and (r["time"], r["headline"].casefold()) not in english)]
     own.sort(key=lambda r: r["time"], reverse=True)
     return own
 
@@ -369,7 +396,10 @@ def _fi_rows(term: str, frm: datetime, to: datetime) -> list[dict]:
 def _fi_insiders(ticker: str, canonical: str, frm: datetime, to: datetime) -> str:
     term, key = _search_term(canonical)
     span = f"{frm:%Y-%m-%d} to {to:%Y-%m-%d}"
-    rows = [r for r in _fi_rows(term, frm, to) if _name_key(r["Emittent"] or "") == key]
+    exported = _fi_rows(term, frm, to)
+    rows = [r for r in exported if _matches(r["Emittent"], key)]
+    if exported and not rows:
+        raise NoMarketDataError(ticker, canonical, "issuer name not matched")
     if not rows:
         return (
             f"No insider transactions published for {ticker} between {frm:%Y-%m-%d} and "
@@ -381,14 +411,20 @@ def _fi_insiders(ticker: str, canonical: str, frm: datetime, to: datetime) -> st
         "published", "person", "position", "nature", "instrument", "transaction_date",
         "volume", "unit", "price", "currency", "status",
     ])
-    totals = {"buy": [0, 0.0], "sell": [0, 0.0]}
+    totals: dict[tuple[str, str], dict[str, list]] = {}   # (instrument, unit) -> nature -> [count, volume]
+    skipped = False
     try:
         for r in rows:
             nature = FI_NATURE.get(r["Karaktär"], r["Karaktär"])
             volume = _number(r["Volym"])
-            if nature in totals:
-                totals[nature][0] += 1
-                totals[nature][1] += volume
+            if nature in ("buy", "sell"):
+                if _superseded(r["Status"]):
+                    skipped = True     # the revision is its own row: counting both would double it
+                else:
+                    group = totals.setdefault((r["Instrumentnamn"], r["Volymsenhet"]),
+                                              {"buy": [0, 0.0], "sell": [0, 0.0]})
+                    group[nature][0] += 1
+                    group[nature][1] += volume
             writer.writerow([
                 r["Publiceringsdatum"][:10], r["Person i ledande ställning"], r["Befattning"], nature,
                 r["Instrumentnamn"], r["Transaktionsdatum"][:10], _plain(volume), r["Volymsenhet"],
@@ -396,12 +432,22 @@ def _fi_insiders(ticker: str, canonical: str, frm: datetime, to: datetime) -> st
             ])
     except (TypeError, ValueError) as exc:
         raise VendorUnavailableError(f"FI export has an unreadable row: {exc}") from exc
-    (n_buy, v_buy), (n_sell, v_sell) = totals["buy"], totals["sell"]
-    return (
-        f"# Insider transactions for {ticker} ({FI_SOURCE}, {span})\n"
-        f"{out.getvalue()}"
-        f"Totals: {n_buy} buys {_plain(v_buy)}, {n_sell} sells {_plain(v_sell)}"
-    )
+    def line(label: str, group: dict) -> str:
+        (n_buy, v_buy), (n_sell, v_sell) = group["buy"], group["sell"]
+        return f"Totals{label}: {n_buy} buys {_plain(v_buy)}, {n_sell} sells {_plain(v_sell)}"
+
+    if len(totals) > 1:   # shares, options and bonds do not add up: one line each
+        lines = [line(f", {inst} ({unit})", g) for (inst, unit), g in totals.items()]
+    else:
+        lines = [line("", next(iter(totals.values()), {"buy": [0, 0.0], "sell": [0, 0.0]}))]
+    if skipped:
+        lines.append("(revised or cancelled notices are not counted in the totals)")
+    return f"# Insider transactions for {ticker} ({FI_SOURCE}, {span})\n{out.getvalue()}" + "\n".join(lines)
+
+
+def _superseded(status: str) -> bool:
+    """A notice FI lists as revised or cancelled (``Reviderad``, ``Makulerad``), not current."""
+    return (status or "").strip().lower().startswith(("revider", "makuler", "annuller"))
 
 
 def _notice_list(ticker: str, source: str, span: tuple[str, str], notices: list, fetch) -> str:

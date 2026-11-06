@@ -687,7 +687,7 @@ def test_pipeline_note_carries_the_screens_accounting_scores():
     clean = review.pipeline_note({"fscore": 7, "fscore_missing": 0, "altman_z": 5.665, "beneish_m": -2.2,
                                   "accounting_flags": "", "value_base": 58.31})
     assert clean == ("F-Score 7/9; Altman Z 5.67; Beneish M -2.20; "
-                     "screen formula value 58.31 per share (no-growth).")
+                     "screen formula value 58.31 per share (3% growth base).")
     assert "accounting flags" not in clean
     flagged = review.pipeline_note({"fscore": 4, "accounting_flags": "accruals high; cash conversion < 1"})
     assert "accounting flags: accruals high; cash conversion < 1" in flagged
