@@ -681,6 +681,32 @@ def test_pipeline_note_from_the_screen_row():
 
 
 @pytest.mark.unit
+def test_pipeline_note_carries_the_screens_accounting_scores():
+    from value_pipeline import review
+
+    clean = review.pipeline_note({"fscore": 7, "fscore_missing": 0, "altman_z": 5.665, "beneish_m": -2.2,
+                                  "accounting_flags": "", "value_base": 58.31})
+    assert clean == ("F-Score 7/9; Altman Z 5.67; Beneish M -2.20; "
+                     "screen formula value 58.31 per share (no-growth).")
+    assert "accounting flags" not in clean
+    flagged = review.pipeline_note({"fscore": 4, "accounting_flags": "accruals high; cash conversion < 1"})
+    assert "accounting flags: accruals high; cash conversion < 1" in flagged
+    assert "(2 inputs missing)" in review.pipeline_note({"fscore": 5, "fscore_missing": 2})
+    assert "F-Score" not in review.pipeline_note({"fscore": float("nan"), "altman_z": 3.0})
+    assert review.pipeline_note({"hints": "compounder", "altman_z": None, "value_base": float("nan")}) \
+        == "lane hint compounder."
+
+
+@pytest.mark.unit
+def test_results_json_carries_the_whole_thesis(tmp_path, monkeypatch):
+    from tests.test_decision_math import _good_decision
+
+    row, _ = _review_one(tmp_path, monkeypatch, _good_decision(), 50.0)
+    whole = " ".join(parse.section(_rendered(_good_decision()), "Investment Thesis").split())
+    assert row["thesis_full"] == whole and whole.startswith(row["thesis"].rstrip("…").rstrip())
+
+
+@pytest.mark.unit
 def test_run_agents_usage_counts_a_failed_first_attempt(tmp_path):
     from value_pipeline import review
 
@@ -1912,3 +1938,9 @@ def test_a_dry_run_review_writes_no_paper_buys_section(tmp_path, monkeypatch):
     rows = json.loads((out.parent / "results.json").read_text())
     assert any(paper.flags(r) for r in rows)    # fake_run's rows pass the gate
     assert "## Paper Buys" not in out.read_text()
+
+
+def _rendered(decision):
+    from tradingagents.agents.schemas import render_pm_decision
+
+    return render_pm_decision(decision)

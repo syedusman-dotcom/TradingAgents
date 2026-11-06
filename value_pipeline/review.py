@@ -102,7 +102,7 @@ def _present(row: dict, key: str) -> float | None:
 def pipeline_note(row: dict | None) -> str:
     """The screen's figures for a ticker, for every agent's instrument context: its lane hints
     (and theme), the 3-month move, the drawdown from the 52-week high, TTM EBIT on the 5-year
-    average and the revenue acceleration; the missing ones left out, "" when none is known.
+    average, the revenue acceleration, and the accounting scores and formula value; the missing ones left out, "" when none is known.
     Analysts run in parallel, so the news analyst learns of a hint or a fall only here."""
     if not row:
         return ""
@@ -120,6 +120,19 @@ def pipeline_note(row: dict | None) -> str:
                ("ttm_vs_5y_ebit", lambda x: f"TTM EBIT {x:.2f}× the 5-year average"),
                ("revenue_acceleration", lambda x: f"revenue acceleration {x * 100:+.0f} points"))
     parts += [fmt(v) for key, fmt in figures if (v := _present(row, key)) is not None]
+    fscore = _present(row, "fscore")
+    if fscore is not None:
+        missing = _present(row, "fscore_missing")
+        parts.append(f"F-Score {int(fscore)}/9" + (f" ({int(missing)} inputs missing)" if missing else ""))
+    if (z := _present(row, "altman_z")) is not None:
+        parts.append(f"Altman Z {z:.2f}")
+    if (m := _present(row, "beneish_m")) is not None:
+        parts.append(f"Beneish M {m:.2f}")
+    flags = row.get("accounting_flags")
+    if isinstance(flags, str) and flags.strip():
+        parts.append(f"accounting flags: {flags.strip()}")
+    if (base := _present(row, "value_base")) is not None:
+        parts.append(f"screen formula value {base:.2f} per share (no-growth)")
     return "; ".join(parts) + "." if parts else ""
 
 
@@ -632,7 +645,8 @@ def _run(paths: Paths, cfg: dict, *, yes: bool, dry_run: bool, today: str | None
          "earnings_date": r.earnings_date, "trend": trends.get(r.ticker),
          "tokens_in": r.tokens_in, "tokens_out": r.tokens_out, "nominal_cost_usd": round(r.nominal_cost_usd, 4),
          "intrinsic_value": parse.intrinsic_value(r.decision), "margin_of_safety": parse.margin_of_safety(r.decision),
-         "thesis": parse.thesis_summary(r.decision), "price": prices.get(r.ticker),
+         "thesis": parse.thesis_summary(r.decision),
+         "thesis_full": " ".join(parse.section(r.decision, "Investment Thesis").split()), "price": prices.get(r.ticker),
          "formula_value": _float(screen_row[r.ticker].get("value_base")) if screen_row.get(r.ticker) else None,
          "expected_return": _float(screen_row[r.ticker].get("expected_return"))
          if screen_row.get(r.ticker) else None,

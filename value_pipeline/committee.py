@@ -99,7 +99,7 @@ def build_payload(decisions: list[Decision], results: list[dict], portfolio, sum
             "upside_downside": d.upside_downside, "sector": d.sector, "fscore": d.fscore, "trend": d.trend,
             "checklist": row.get("checklist"), "scenarios": row.get("scenarios"),
             "red_flags": row.get("red_flags") or [], "kill_criteria": list(d.kill_criteria),
-            "thesis": row.get("thesis"),
+            "thesis": row.get("thesis_full") or row.get("thesis"),
             "lane": d.lane, "lane_evidence": row.get("lane_evidence") or [],
             "consensus_growth": row.get("consensus_growth"), "consensus_target": row.get("consensus_target"),
         })

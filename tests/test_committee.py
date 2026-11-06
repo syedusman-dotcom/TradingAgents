@@ -351,3 +351,17 @@ def test_payload_skips_the_fund_and_tells_the_committee_it_is_cash():
     assert {h["ticker"] for h in plain["other_holdings"]} == {"DNLM.L", fund}
     hrb_only = pfmod.Portfolio(cash=1.0, positions=[pfmod.Position("X", 1, 2.0, "2026-01-01")])
     assert build_payload([], [], hrb_only, {"total_value": 3.0}, SIZING)["other_holdings"][0]["currency"] == "USD"
+
+
+@pytest.mark.unit
+def test_payload_uses_the_whole_thesis_when_present_else_the_short_one():
+    from value_pipeline import portfolio as pfmod
+    from value_pipeline.committee import build_payload
+
+    decisions = _decisions()[:2]
+    results = [{"ticker": "HRB", "rating": "Hold", "error": None, "thesis": "short…", "thesis_full": "short and whole"},
+               {"ticker": "AAPL", "rating": "Sell", "error": None, "thesis": "old short"}]
+    pf = pfmod.Portfolio(cash=500.0, positions=[])
+    _, summary = plan(decisions, pf.cash, SIZING)
+    stocks = {s["ticker"]: s for s in build_payload(decisions, results, pf, summary, SIZING)["stocks"]}
+    assert stocks["HRB"]["thesis"] == "short and whole" and stocks["AAPL"]["thesis"] == "old short"
