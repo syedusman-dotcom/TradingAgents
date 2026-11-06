@@ -89,3 +89,5 @@ Started 2026-11-07 00:20 CET. Cause found: `yahoo/value_metrics.py::get_value_me
 ## F6 — Google News RSS fallback (running: implementer a63613793f47589d9 on sonnet; brief `weekend/f6-brief.md`)
 Started 2026-11-07 00:30 CET. Ruling: three implementers (S3, F1, F6) work in the same tree on disjoint files, told to `git add` by name; a conflict costs one re-run.
 F4 (committee thesis truncation: `parse.thesis_summary` limit 300 feeds results.json) and F5/F8 (screen accounting scores into the pipeline note) are queued after these land to avoid touching `review.py` twice.
+
+### S3 code landed (commit 55b4fe0, 2353 tests); run `backtest --leavers` started 2026-11-07 00:35 CET (task bwvuhvmnv, log `backtest_leavers_2026-11-07.log`; fetches EDGAR facts and Yahoo prices for the leavers, so it takes a while).
