@@ -127,3 +127,5 @@ Ruling: items (1), (2) and (10) are buildable this weekend with pre-fixed scorin
 ### S3 rerun: the live Wikipedia page lost its changes table (the first run found 0 leavers); `removed_dates` now reads the pinned 2025-12-23 revision (commit on main); rerun started 01:12 CET (task bw36oj1a8).
 
 ## F7 — Nordic releases and insiders as vendors (running: implementer af17fcc611e8be8e9 on opus; brief `weekend/f7-brief.md`). Started 2026-11-07 01:20 CET.
+
+## P1 — Brier scores for scenario probabilities (running: implementer ae83881b733b9a154 on sonnet; brief `weekend/p1-brief.md`). Started 2026-11-07 01:25 CET. Reading rule fixed in the brief: n ≥ 30 at 365 days; informative = both skill scores > 0; over-confident = stated − realised > 10 points; else uninformative. No bar change; measurement only (R2 change #1).
