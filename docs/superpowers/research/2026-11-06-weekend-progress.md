@@ -161,3 +161,6 @@ Ruling: I2's per-year rate adds two FX history calls per mixed-currency review; 
 
 ## P2 — `sizing.max_stock_share` (running: implementer a1424bca8f45d0be5 on sonnet; brief `weekend/p2-brief.md`). Default 1.0 = no change; gives the user the one-line lever for D1's satellite cap. Started 03:30 CET.
 Correction to A1: the compounder Overweight block (`lane_buy_only`) was set on 2026-10-24 on the first backtest's −2.5 points, not without evidence; D1 §5.2 corrected and the recommendation softened to "weakly held".
+
+### S3 corrected rerun (03:40 CET): with membership intervals and the ticker-reuse guard, 51 leavers included (137 rejected: no EDGAR facts or ticker reused). Mean 1-year excess over SPY 2015–25 moves the same way as before: magic_formula −2.4 → −2.7, compounder_record +0.1 → −0.5, compounder_hint +0.1 → −0.4, value_graded −1.9 → −2.6, er_momentum +0.4 → −0.2, trending_value −2.3 → −2.7, value −0.7 → −1.2; the universe's own excess falls by 0.5–1.0. Conclusion unchanged: no rule has an edge; the quality-record rules are slightly negative once demoted leavers are in.
+### P2 done (commit 4f59769, 2425 tests, pushed): `sizing.max_stock_share`, default 1.0, ACTIONS shows "Stocks: x% of the account (cap y%)" when set. The user flips it to 0.2 to apply D1 §5.1.
