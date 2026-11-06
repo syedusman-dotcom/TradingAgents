@@ -74,3 +74,9 @@ At 15%: fill rates 18–31%, filled excess −0.6 / +8.7 / +3.8 / +27.3, never-f
 
 Fixed verdict: **earns its keep** (filled beats the same names bought at the start by ≥ 2 points for all four rules; the "costs money" condition held for only 2 of 4). Portfolio-level reading, which is the one that matters (money not filled sits in the index at 0 excess): fill_rate × filled excess against buy-now — magic_formula −0.6 vs −2.4, compounder_record +2.9 vs −0.2, value_graded +0.9 vs −0.9, compounder +7.1 vs +7.6. Waiting for a 10% dip and otherwise staying in the index was as good as or better than buying at once for every rule, even though the names that never dipped were the best performers (+3 to +16). Caveats: picks are survivorship-biased; close-based fills; the filled window starts later so SPY windows differ; one sample.
 Ruling: the live entry-price queue with the index fund as the parking place is consistent with the evidence; keep it. The implementer's choices (both conditions → inconclusive; missing price cache excluded from n; dip at exactly the level fills) accepted. Cost if wrong: none to the live process; the study is informational.
+
+## S3 — Leaver bias (running: implementer a73869910b022b68f on sonnet; brief `weekend/s3-brief.md` in the session scratchpad)
+Started 2026-11-07 00:10 CET. Flag `backtest --leavers`; the run follows when the code lands.
+
+## R2 — Deep research: reliable LLM equity analysis (running, 4 researchers on opus)
+Started 2026-11-07 00:12 CET. Ruling: R2 researchers run on opus with a 35-call budget because the R1 sonnet researchers returned partial notes (many fetches failed within 15 calls); cost is tokens, not Fable quota.
