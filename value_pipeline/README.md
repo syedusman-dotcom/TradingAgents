@@ -327,6 +327,15 @@ after the watch, so the page stays current. It stays empty until a decision is a
 the decisions table shows; the scores and verdicts always use 180 days (365 days for "reached
 value"). A few decisions say little: read the counts before the shares.
 
+Brier scores: for the bear and the bull case, the squared gap between the probability the agents
+stated and what happened (the price at or below the bear value, or at or above the bull value,
+at 365 days; the same at 180 days is shown as an early read). The reference is the base rate, a
+forecaster who always states the frequency actually realised, and the skill score is 1 minus the
+ratio of the two Brier scores. The reading rule is fixed in advance: with at least 30 rows at 365
+days the probabilities are informative when both skill scores are above 0, over-confident when the
+stated mean exceeds the realised frequency by more than 10 points for either leg, uninformative
+otherwise; before 30 rows they are not yet readable.
+
 Paper Buys: the Calibration page, `calibration` and each review's `ACTIONS.md` also show
 what a looser Buy rule would have done. A paper Buy is a decision the agents rated Hold or
 better, with a good business and good management, priced at or below their own value. The
@@ -361,7 +370,7 @@ trades and no bar is changed. The backtest covers the S&P 500 and 400 only: non-
 
 ### Buy-bar candidates
 
-Six more rules ask whether the live Buy bar (the Magic Formula top 30 with a margin of safety of
+Seven more rules ask whether the live Buy bar (the Magic Formula top 30 with a margin of safety of
 at least 30%) could be better. All require the screen's filters and a trend other than FREEFALL;
 "top n by x" sorts descending and drops rows without x. `er_hurdle`: expected return at least 12%,
 then the top 20 by expected return. `er_momentum`: `er_hurdle`'s picks whose 12-1 month momentum is
@@ -372,6 +381,8 @@ have a momentum value (nothing with fewer than two such rows).
 `value_no_downtrend`: the `value` rule (top `value_top_n`, margin `watch.buy_margin_of_safety`,
 30%) without DOWNTREND names. `compounder_fcf`: the compounder hint and
 the PM's record bars with a free cash flow yield of at least 4%, then the top 20 by expected return.
+`record_momentum`: the rows with the PM's compounder record whose momentum is at or above the same
+cohort median as `er_momentum`'s, then the top 20 by momentum.
 The Sensitivity table moves their bars too.
 
 The report's *Buy-bar candidates* section gives each a verdict by a pass rule fixed before any run.

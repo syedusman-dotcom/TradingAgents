@@ -24,6 +24,8 @@ HORIZONS = (30, 90, 180, 365)
 BUYS = ("Buy", "Overweight")
 SELLS = ("Sell", "Underweight")
 MIN_CALIBRATION_ROWS = 10
+MIN_BRIER_ROWS = 30
+OVER_CONFIDENT = 0.10        # stated mean above the realised frequency by more than this
 BENCHMARK = "SPY"
 PAPER_GAP_DAYS = 90          # the same ticker counts again only this long after its last count
 PAPER_HORIZON = 180
@@ -224,6 +226,77 @@ def _calibrated(rs: list[dict]) -> dict | None:
             "bull_probability": mean(r["bull_probability"] for r in bulls)}
 
 
+def _brier_leg(ps: list[float], outcomes: list[float]) -> dict:
+    bs = statistics.fmean((p - o) ** 2 for p, o in zip(ps, outcomes, strict=True))
+    base = statistics.fmean(outcomes)
+    ref = statistics.fmean((base - o) ** 2 for o in outcomes)
+    return {"brier": bs, "reference": ref, "skill": None if ref == 0 else 1 - bs / ref,
+            "stated": statistics.fmean(ps), "realised": base}
+
+
+def _brier_text(name: str, g: dict) -> str:
+    if g["skill"] is None:
+        skill = "no skill score, every outcome was the same"
+    else:
+        skill = f"skill {g['skill']:+.2f}"
+    return (f"{name}: Brier {g['brier']:.2f} vs {g['reference']:.2f} for the base rate ({skill}), "
+            f"stated {g['stated']:.0%} vs realised {g['realised']:.0%}")
+
+
+def brier(rs: list[dict], horizon: int = 365) -> dict | None:
+    """Brier scores of the stated bear and bull probabilities at one horizon.
+
+    Over the rows with ``h{horizon}`` and a scenario value and probability for the leg, the bear
+    outcome is 1 when the price at the horizon is at or below the bear value (the bull outcome:
+    at or above the bull value), else 0. ``brier`` is the mean squared gap between the stated
+    probability and the outcome; ``reference`` is the same score for a forecaster who always
+    states the realised frequency; ``skill`` is 1 - brier / reference (None when every outcome
+    was the same). None below ``MIN_BRIER_ROWS`` rows.
+
+    Reading rule, fixed in advance: with at least 30 rows at 365 days the probabilities are
+    informative when both skill scores are above 0, over-confident when the stated mean exceeds
+    the realised frequency by more than 10 points for either leg, uninformative otherwise.
+    Before 30 rows the reading is "not yet readable (n of 30 at 365 days)". The same rule
+    labels the 180-day read, which is an early read.
+    """
+    have = [r for r in rs if r.get(f"h{horizon}")]
+    out: dict = {"horizon": horizon}
+    legs = {}
+    for leg, hit in (("bear", lambda price, ref: price <= ref), ("bull", lambda price, ref: price >= ref)):
+        use = [r for r in have if r.get(leg) is not None and r.get(f"{leg}_probability") is not None]
+        if len(use) < MIN_BRIER_ROWS:
+            return None
+        legs[leg] = (use, [r[f"{leg}_probability"] for r in use],
+                     [float(hit(r[f"h{horizon}"]["price"], r[leg])) for r in use])
+    out["n"] = min(len(v[0]) for v in legs.values())
+    for leg, (_, ps, outcomes) in legs.items():
+        out[leg] = _brier_leg(ps, outcomes)
+    bear, bull = out["bear"], out["bull"]
+    if all(g["skill"] is not None and g["skill"] > EPS for g in (bear, bull)):
+        label = "Informative"
+    elif any(g["stated"] - g["realised"] > OVER_CONFIDENT + EPS for g in (bear, bull)):
+        label = "Over-confident"
+    else:
+        label = "Uninformative"
+    out["reading"] = f"{label}. {_brier_text('Bear', bear)}; {_brier_text('Bull', bull)}"
+    return out
+
+
+def brier_view(rs: list[dict], scores: dict) -> list[dict]:
+    """The 365-day reading and the 180-day early read, as label and text."""
+    view = []
+    for h, label in ((365, "365 days"), (180, "180 days, early read")):
+        b = scores["brier"][str(h)]
+        if b:
+            text = b["reading"]
+        else:
+            n = max(sum(1 for r in rs if r.get(f"h{h}") and r.get(leg) is not None
+                        and r.get(f"{leg}_probability") is not None) for leg in ("bear", "bull"))
+            text = f"not yet readable ({n} of {MIN_BRIER_ROWS} at {h} days)"
+        view.append({"label": label, "text": text})
+    return view
+
+
 def _decisions(n: int) -> str:
     return f"{n} decision{'' if n == 1 else 's'}"
 
@@ -249,7 +322,8 @@ def score(rs: list[dict]) -> dict:
     whose price reached the value at a checkpoint within a year, the share of Sell/Underweight
     calls that fell by 180 days; overall the median gap between the agents' value and the
     formula value, and (with at least ten 180-day rows) how often the price ended below the bear
-    case or above the bull case against the probabilities the agents stated."""
+    case or above the bull case against the probabilities the agents stated, and their Brier
+    scores at 365 and 180 days (see ``brier``)."""
     gaps = [r["value"] / r["formula_value"] - 1 for r in rs
             if r.get("value") is not None and r.get("formula_value")]
     by_lane = _by(rs, "lane")
@@ -261,6 +335,7 @@ def score(rs: list[dict]) -> dict:
             "by_lane": by_lane,
             "median_value_gap": _median(gaps),
             "calibrated_probabilities": _calibrated(rs),
+            "brier": {"365": brier(rs, 365), "180": brier(rs, 180)},
             "verdicts": [_verdict(lane, lanes[lane], by_lane[lane]) for lane in by_lane]}
 
 
@@ -478,6 +553,8 @@ def markdown(rs: list[dict], scores: dict, horizon: int = 180) -> str:
     else:
         lines.append("\nProbabilities: not enough decisions past 180 days yet "
                      f"(needs {MIN_CALIBRATION_ROWS}).")
+    lines += ["", "### Brier scores", ""]
+    lines += [f"- {v['label']}: {v['text']}" for v in brier_view(rs, scores)]
     lines += ["", "## Paper Buys", "",
               "Tracked only: no money follows these. Each rule is applied in code to what a "
               "review recorded.", ""]

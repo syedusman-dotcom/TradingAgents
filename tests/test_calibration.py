@@ -211,6 +211,102 @@ def test_probability_calibration_needs_ten_rows():
     assert cp["above_bull"] == pytest.approx(0.1) and cp["bull_probability"] == pytest.approx(0.2)
 
 
+def _brier_row(bear_p, below, bull_p, above, *, key="h365", bear=80.0, bull=130.0):
+    price = 75.0 if below else (135.0 if above else 100.0)
+    return {"date": "2025-01-10", "ticker": "X", "price": 100.0, "bear": bear, "bull": bull,
+            "bear_probability": bear_p, "bull_probability": bull_p,
+            key: {"price": price, "ret": price / 100 - 1, "below_bear": below}}
+
+
+def _brier_rows(n_below=9, n_above=6, bear_p=0.3, bull_p=0.2, n=30):
+    return [_brier_row(bear_p, i < n_below, bull_p, i >= n - n_above) for i in range(n)]
+
+
+@pytest.mark.unit
+def test_brier_by_hand():
+    b = calibration.brier(_brier_rows(), 365)
+    assert b["horizon"] == 365 and b["n"] == 30
+    # bear: p 0.3, 9 of 30 outcomes are 1 (realised 0.3): bs = (9*0.49 + 21*0.09) / 30
+    assert b["bear"]["brier"] == pytest.approx((9 * 0.49 + 21 * 0.09) / 30, abs=1e-9)
+    assert b["bear"]["reference"] == pytest.approx(0.3 * 0.7, abs=1e-9)
+    assert b["bear"]["skill"] == pytest.approx(1 - ((9 * 0.49 + 21 * 0.09) / 30) / 0.21, abs=1e-9)
+    assert b["bear"]["stated"] == pytest.approx(0.3) and b["bear"]["realised"] == pytest.approx(0.3)
+    # bull: p 0.2, 6 of 30 outcomes are 1 (realised 0.2): the same shape
+    assert b["bull"]["brier"] == pytest.approx((6 * 0.64 + 24 * 0.04) / 30, abs=1e-9)
+    assert b["bull"]["reference"] == pytest.approx(0.2 * 0.8, abs=1e-9)
+    assert b["bull"]["skill"] == pytest.approx(1 - ((6 * 0.64 + 24 * 0.04) / 30) / 0.16, abs=1e-9)
+    assert "Bear: Brier 0.21 vs 0.21 for the base rate" in b["reading"]
+    assert "stated 30% vs realised 30%" in b["reading"]
+
+
+@pytest.mark.unit
+def test_brier_reading_rule():
+    # skill above zero for both legs: informative. Probabilities that follow the outcomes.
+    good = [_brier_row(0.8 if i < 9 else 0.1, i < 9, 0.8 if i >= 24 else 0.05, i >= 24)
+            for i in range(30)]
+    b = calibration.brier(good, 365)
+    assert b["bear"]["skill"] > 0 and b["bull"]["skill"] > 0
+    assert b["reading"].startswith("Informative")
+    # stated well above realised (by more than 10 points) on one leg: over-confident
+    over = [_brier_row(0.5, i < 9, 0.2, i >= 24) for i in range(30)]
+    b = calibration.brier(over, 365)
+    assert b["reading"].startswith("Over-confident")
+    # same stated as realised and no skill: uninformative
+    assert calibration.brier(_brier_rows(), 365)["reading"].startswith("Uninformative")
+
+
+@pytest.mark.unit
+def test_brier_needs_thirty_rows_and_skips_incomplete_ones():
+    assert calibration.brier(_brier_rows(n=29, n_below=9, n_above=6), 365) is None
+    rs = _brier_rows()
+    extra = [_brier_row(0.3, False, 0.2, False, key="h180"),                  # no h365
+             _brier_row(None, False, None, False), _brier_row(0.3, False, 0.2, False, bear=None, bull=None)]
+    b = calibration.brier(rs + extra, 365)
+    assert b["n"] == 30 and b["bear"]["stated"] == pytest.approx(0.3)
+    assert calibration.brier(extra, 180) is None
+    # the 180 day read uses the h180 rows
+    r180 = [_brier_row(0.3, i < 9, 0.2, i >= 24, key="h180") for i in range(30)]
+    assert calibration.brier(r180, 180)["horizon"] == 180
+    assert calibration.brier(r180, 365) is None
+
+
+@pytest.mark.unit
+def test_brier_with_one_outcome_has_no_skill():
+    rs = [_brier_row(0.3, False, 0.2, False) for _ in range(30)]
+    b = calibration.brier(rs, 365)
+    assert b["bear"]["reference"] == 0 and b["bear"]["skill"] is None
+    assert b["bull"]["skill"] is None
+    assert "no skill" in b["reading"].lower() or "every outcome" in b["reading"]
+    assert b["reading"].startswith("Over-confident")   # stated 30% against 0% realised
+    low = calibration.brier([_brier_row(0.05, False, 0.05, False) for _ in range(30)], 365)
+    assert low["reading"].startswith("Uninformative") and "every outcome" in low["reading"]
+
+
+@pytest.mark.unit
+def test_score_carries_brier_and_markdown_shows_the_readings():
+    rs = _brier_rows()
+    s = calibration.score(rs)
+    assert set(s["brier"]) == {"365", "180"}
+    assert s["brier"]["365"]["n"] == 30 and s["brier"]["180"] is None
+    text = calibration.markdown(rs, s)
+    assert "Brier scores" in text and "365 days" in text and "Uninformative" in text
+    assert "early read" in text and "not yet readable (0 of 30 at 180 days)" in text
+    s = calibration.score([_row("value", "Buy", 0.1)])
+    text = calibration.markdown([_row("value", "Buy", 0.1)], s)
+    assert "not yet readable (0 of 30 at 365 days)" in text
+
+
+@pytest.mark.unit
+def test_page_shows_the_brier_reading(tmp_path):
+    paths = _reviews(tmp_path)
+    (paths.cache / "prices").mkdir(parents=True)
+    (paths.cache / "prices" / "ADBE.json").write_text(json.dumps(
+        {"2025-02-09": 105.0, "2025-04-10": 110.0, "2025-07-09": 125.0, "2026-01-10": 130.0}))
+    r = _web(tmp_path, paths).get("/calibration")
+    assert r.status_code == 200
+    assert "Brier" in r.text and "not yet readable" in r.text and "early read" in r.text
+
+
 def _web(tmp_path, paths):
     app = create_app(paths, config_path=tmp_path / "config.yaml", price_fn=lambda t: None,
                      series_fn=lambda p: [], benchmark_fn=lambda *a: None,

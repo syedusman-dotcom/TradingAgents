@@ -20,6 +20,8 @@
   <div class="card"><span class="muted">Ended above the bull case at 180 days</span><b>{{ "{:.0%}".format(cp.above_bull) if cp and cp.above_bull is not none else "–" }}</b>
     <span class="muted">{% if cp %}stated {{ "{:.0%}".format(cp.bull_probability) if cp.bull_probability is not none else "–" }}{% else %}needs 10 decisions past 180 days{% endif %}</span></div>
 </div>
+<h2>Brier scores</h2>
+<ul>{% for v in brier_view %}<li><b>{{ v.label }}</b>: {{ v.text }}</li>{% endfor %}</ul>
 {% for title, key in (("By rating", "by_rating"), ("By lane", "by_lane")) %}
 <h2>{{ title }}</h2>
 <div class="cards">
