@@ -198,7 +198,7 @@ def cmd_backtest(args, paths: Paths, cfg) -> None:
             console.print(f"{i}/{n} tickers ({ticker})")
 
     result = backtest.run(paths, cfg, tickers=tickers, refresh=args.refresh,
-                          fetch=not args.no_fetch, progress=progress)
+                          fetch=not args.no_fetch, progress=progress, leavers=args.leavers)
     md, csv = backtest.write(paths, result, result["generated"])
     console.print(Markdown(backtest.verdict(result)))
     console.print(Markdown(backtest.candidates(result)))
@@ -361,6 +361,9 @@ def build_parser() -> argparse.ArgumentParser:
                         "survivorship check, saved as backtest_<date>_sp500.md)")
     s.add_argument("--refresh", action="store_true", help="refetch the cached statements and prices")
     s.add_argument("--no-fetch", action="store_true", help="read the statement and price caches only")
+    s.add_argument("--leavers", action="store_true",
+                   help="also replay the names that left the S&P 500 until their leave date "
+                        "(saved as backtest_<date>_leavers.md)")
     s.set_defaults(func=cmd_backtest)
 
     s = sub.add_parser("trend-backtest",

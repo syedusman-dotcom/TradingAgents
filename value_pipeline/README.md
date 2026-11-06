@@ -52,7 +52,7 @@ uv run python -m value_pipeline status
 | `superinvestors [--force]` | Refresh which tracked value investors (Buffett, Klarman, Li Lu, Pabrai, Russo, Akre; editable in `config.yaml`) hold what, from their latest 13F filings. Shown in the screen's Superinvestors column and on stock pages. A second opinion only: 13Fs are up to ~4.5 months old by the time you read them, and they never feed the agents or the action rules. The monthly screen refreshes it weekly at most. |
 | `web [--port 8765] [--no-browser]` | Open the local website (this Mac only): dashboard, trades, history with undo, reviews and reports, stock pages, the screen, running jobs and settings. Stop with Ctrl+C. |
 | `calibration [--horizon {30,90,180,365}]` | Every past decision against the closes that followed it, then the scores and one verdict per lane (see Calibration below). Fetches and caches the closes it has not seen. Default horizon 180 days. |
-| `backtest [--from YEAR] [--to YEAR] [--holds 1,3] [--indexes sp500,sp400] [--tickers A,B] [--refresh] [--no-fetch]` | The lane rules replayed on past cohort dates against SPY (see Backtest below). No agents. Writes `reports/backtest/backtest_<date>.md` and `_picks.csv` (`backtest_<date>_sp500.md` for `--indexes sp500`) and prints the verdict and the buy-bar candidates. |
+| `backtest [--from YEAR] [--to YEAR] [--holds 1,3] [--indexes sp500,sp400] [--tickers A,B] [--refresh] [--no-fetch] [--leavers]` | The lane rules replayed on past cohort dates against SPY (see Backtest below). No agents. Writes `reports/backtest/backtest_<date>.md` and `_picks.csv` (`backtest_<date>_sp500.md` for `--indexes sp500`) and prints the verdict and the buy-bar candidates. |
 | `trend-backtest [--from YYYY-MM-DD] [--no-fetch]` | Turtle-style breakouts and 12-1 momentum replayed on daily closes of today's S&P 500 and 400 members, after costs, with the fixed verdict (see Trend backtest below). No agents, nothing trades. Writes `reports/backtest/trend_<date>.md`, `.html` and `_trades.csv` and prints the report. |
 | `momentum-backtest [--no-fetch]` | 12-1 momentum on today's S&P 500 members, each from the day it joined, over a recent period and an earlier hold-out, after costs, with a fixed pass rule and the record of real momentum funds (see Momentum sleeve backtest below). No agents, nothing trades. Writes `reports/backtest/momentum_<date>.md`, `.html` and `_trades.csv` and prints the report. |
 | `pullback-backtest [--picks PATH]` | What waiting for a dip would have done to the lane backtest's past picks, with a fixed verdict (see Pullback study below). Reads the newest `backtest_<date>_picks.csv` (not an `_sp500` or `_sp600` one) and the cached prices only. No agents, nothing trades. Writes `reports/backtest/pullback_<date>.md` and prints the verdict. |
@@ -438,7 +438,11 @@ filers. `--indexes sp500` is the survivorship check: the S&P 500 alone, where me
 in time by join date, saved as `backtest_<date>_sp500.md` and `_sp500_picks.csv`. The S&P 400
 publishes no join dates, so names that entered it after rising are in every cohort; a 20-name
 basket ranked on momentum can hold several while the universe holds each at a small weight, so
-the bias is shared but not equal. A candidate is recommended for a live change only when it
+the bias is shared but not equal. `--leavers` adds the S&P 500
+names that left the index since 2013 (Wikipedia's changes table, cached at
+`data/cache/backtest/removed_dates.json`) as members until their leave date, with no sector; the
+report counts those without EDGAR facts or prices, and the file gets `_leavers` in its name.
+Names acquired or delisted usually have neither, so they still cannot be included. A candidate is recommended for a live change only when it
 supports on the full universe and, on the S&P 500 alone, its mean one-year excess over the
 universe is above zero and above the plain screen's on the same cohorts. A cohort is
 evaluated only when its one-year hold has ended; a three-year result only when that hold has.
