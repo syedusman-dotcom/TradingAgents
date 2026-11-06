@@ -67,6 +67,7 @@ DEFAULTS: dict = {
         "overweight_size_factor": 0.5,
         "min_trade_amount": 25,
         "max_sector_weight": 0.30,
+        "max_stock_share": 1.0,
         "lane_caps": {"compounder": 0.30, "inflection": 0.20},
         "lane_size_factor": {"compounder": 0.5, "inflection": 0.5},
         "lane_buy_only": [],
@@ -126,7 +127,7 @@ def _merge(base: dict, override: dict) -> dict:
 
 
 # Numbers that disable a safeguard at zero: the cost cap would never block, sizes would be nothing.
-_POSITIVE = {"cost_per_run", "max_cost_per_review", "max_position_weight", "max_sector_weight", "min_holdings",
+_POSITIVE = {"cost_per_run", "max_cost_per_review", "max_position_weight", "max_sector_weight", "max_stock_share", "min_holdings",
              "max_reviews", "min_daily_value", "big_move", "positions", "check_positions", "equity"}
 
 
@@ -151,6 +152,8 @@ def validate_config(cfg: dict) -> None:
                     raise ValueError(f"{section}.{key} must be a finite number of zero or more, not {value!r}")
                 if key in _POSITIVE and value <= 0:
                     raise ValueError(f"{section}.{key} must be more than zero, not {value!r}")
+                if key == "max_stock_share" and value > 1:
+                    raise ValueError(f"{section}.{key} must be a share of the account, 1 or less, not {value!r}")
     _validate_small_markets(cfg["filters"]["small_markets"])
     _validate_cohort_days(cfg["backtest"]["cohort_days"])
     for country in cfg["review"]["candidate_countries"]:

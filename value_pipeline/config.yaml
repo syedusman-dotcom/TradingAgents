@@ -92,6 +92,7 @@ sizing:
   overweight_size_factor: 0.5 # Overweight gets half the target size
   min_trade_amount: 25        # don't suggest buys smaller than this (USD)
   max_sector_weight: 0.30     # buys and adds stop at 30% of the portfolio in one sector
+  max_stock_share: 1.0        # buys and adds stop when stock positions would exceed this share of the account (the index fund does not count); 1.0 = no cap
   lane_caps: {compounder: 0.30, inflection: 0}          # buys and adds stop at these shares per lane
   lane_size_factor: {compounder: 0.5, inflection: 0.5}  # a lane buy is this fraction of the target size
   # Lanes that buy and add on a Buy rating only; their Overweights are watched, not sized. The

@@ -147,6 +147,7 @@ The first screen of a week fetches every ticker (roughly 20-40 minutes); later r
    | FREEFALL | never buy or add, whatever the rating |
 
 6. Sizing: equal weight, `1 / max(min_holdings, positions)`, capped at `max_position_weight` (10%); Overweight gets half. Buys and adds also stop at `max_sector_weight` (30%) in one sector (GICS, from the screen, else from the fundamentals cache), counting the sells on the same list and the holdings not on it. Buys never exceed cash. Cash includes the proceeds of the sells and trims on the same list, so place those first. Amounts are in dollars plus share counts at the latest price.
+   `sizing.max_stock_share` (default 1.0, off) also stops buys and adds when stock positions would exceed that share of the account; the index fund does not count, and ACTIONS shows the share under Portfolio when the cap is below 1.0.
 7. Once every stock is done, the investment committee looks at all of them together (below).
 8. Writes `ACTIONS.md` and `ACTIONS.html` (one self-contained page that works on a phone) and prints the list.
 9. Updates each holding's `last_rating`, `last_review_date`, `consecutive_underweight`, `intrinsic_value_estimate` and kill criteria in `portfolio.json`. It does not touch positions or cash.

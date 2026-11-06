@@ -214,6 +214,7 @@ def plan(decisions: list[Decision], cash: float, sizing: dict,
     # Money per sector after the sells and trims on this list, for the sector cap.
     sector_value: dict[str, float] = {}
     lane_value: dict[str, float] = {}
+    stock_value = sum(o[1] for o in others)
     for o in others:
         value, sector, lane = o[1], o[2], (o[3] if len(o) > 3 else "value")
         if sector:
@@ -226,6 +227,10 @@ def plan(decisions: list[Decision], cash: float, sizing: dict,
             if d.sector:
                 sector_value[d.sector] = sector_value.get(d.sector, 0.0) + left
             lane_value[d.lane] = lane_value.get(d.lane, 0.0) + left
+            stock_value += left
+    stock_share = sizing.get("max_stock_share", 1.0)
+    stock_cap = stock_share * total_value
+    stock_now = stock_value / total_value if total_value > 0 else 0.0
     sector_cap = sizing.get("max_sector_weight", 1.0) * total_value
     lane_caps = sizing.get("lane_caps", {})
     lane_factors = sizing.get("lane_size_factor", {})
@@ -263,7 +268,8 @@ def plan(decisions: list[Decision], cash: float, sizing: dict,
         sector_room = sector_cap - sector_value.get(d.sector, 0.0) if d.sector else float("inf")
         lane_room = lane_caps[d.lane] * total_value - lane_value.get(d.lane, 0.0) \
             if d.lane != "value" and d.lane in lane_caps else float("inf")
-        room = min(sector_room, lane_room)
+        stock_room = stock_cap - stock_value
+        room = min(sector_room, lane_room, stock_room)
         amount = round(min(wanted, available, max(room, 0.0)), 2)
         capped = room < min(wanted, available)
         if d.unsizable:
@@ -274,7 +280,9 @@ def plan(decisions: list[Decision], cash: float, sizing: dict,
                 a.amount = amount
                 available -= amount
             continue
-        if capped and lane_room <= sector_room:
+        if capped and stock_room <= min(sector_room, lane_room):
+            limit = f"stocks at the {stock_share:.0%} cap of the account"
+        elif capped and lane_room <= sector_room:
             limit = f"{d.lane} lane at its {lane_caps[d.lane]:.0%} cap"
         elif capped:
             limit = f"{d.sector} at the {sizing.get('max_sector_weight', 1.0):.0%} sector cap"
@@ -293,6 +301,7 @@ def plan(decisions: list[Decision], cash: float, sizing: dict,
         if d.sector:
             sector_value[d.sector] = sector_value.get(d.sector, 0.0) + amount
         lane_value[d.lane] = lane_value.get(d.lane, 0.0) + amount
+        stock_value += amount
         if capped:
             a.reason += f"; reduced, {limit}"
         if a.action == "KEEP":
@@ -316,6 +325,8 @@ def plan(decisions: list[Decision], cash: float, sizing: dict,
         "parked": parked,
         "parking": move,
         "target_weight": weight,
+        "stock_share": stock_now,
+        "stock_cap": stock_share,
         "cash_after": cash_after,
         # Holdings not on this list that sit above the cap: nothing trims them here, so say so.
         "over_cap": [(t, round(v / total_value, 4)) for t, v, *_ in others

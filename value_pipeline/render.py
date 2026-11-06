@@ -63,6 +63,8 @@ def actions_markdown(date: str, actions: list[Action], summary: dict, *, reports
                      f"vs SPY {_pct(comparison['spy_return'])} (same cash flows; {_money(comparison['invested'])} invested)")
     lines.append(f"- Target weight per stock: {summary['target_weight']:.0%}; cash left after these actions: "
                  f"{_money(summary['cash_after'])}")
+    if summary.get("stock_cap", 1.0) < 1.0:
+        lines.append(f"- Stocks: {summary['stock_share']:.0%} of the account (cap {summary['stock_cap']:.0%})")
     if fund and fund["value"] > 0:
         share = fund["value"] / summary["total_value"] if summary["total_value"] else 0.0
         lines.append(f"- Index fund ({fund['ticker']}): {_money(fund['value'])} ({share:.0%} of the portfolio)")
