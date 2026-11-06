@@ -19,6 +19,7 @@ from stockstats import wrap
 from tradingagents.dataflows.date_window import is_historical
 from tradingagents.dataflows.errors import NoMarketDataError
 from tradingagents.dataflows.symbols import crypto_base, normalize_symbol
+from tradingagents.dataflows.vendors.yahoo.common import price_text
 from tradingagents.dataflows.vendors.yahoo.fundamentals import next_earnings_date
 from tradingagents.dataflows.vendors.yahoo.ohlcv import load_ohlcv
 
@@ -62,7 +63,7 @@ def _fmt(value) -> str:
     if isinstance(value, (int,)):
         return str(value)
     if isinstance(value, float):
-        return f"{value:.2f}"
+        return price_text(value)
     return str(value)
 
 
