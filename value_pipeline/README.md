@@ -94,6 +94,13 @@ Use `--data-dir PATH` before the command (or `VALUE_PIPELINE_DATA`) to keep data
 | `omxh25` | Finland | OMX_Helsinki_25 | `.HE` |
 | `obx` | Norway | OBX_Index | `.OL` |
 | `tsxcomp` | Canada | S&P/TSX_Composite_Index | `.TO` |
+| `sto` | Sweden | Nasdaq Nordic API (`market=STO`) | `.ST` |
+| `cph` | Denmark | Nasdaq Nordic API (`market=CPH`) | `.CO` |
+| `hel` | Finland | Nasdaq Nordic API (`market=HEL`) | `.HE` |
+| `ose` | Norway | List_of_companies_listed_on_the_Oslo_Stock_Exchange | `.OL` |
+| `sp600` | US | List_of_S&P_600_companies | |
+
+  The last five are the small-company markets. `sto`, `cph` and `hel` hold every main-market share of Nasdaq Stockholm, Copenhagen and Helsinki, read from the Nasdaq Nordic JSON API (`api.nasdaq.com/api/nordic/screener/shares`); a company listed in several share classes (`ERIC A`, `ERIC B`) keeps the class with the higher turnover that day. `ose` is the Wikipedia list of Oslo-listed companies, `sp600` the S&P SmallCap 600. A failed fetch keeps the market's rows from `data/universe.csv`. First North and Iceland are not covered.
 
 - **Currency**: each statement and price is converted to dollars at that day's FX, and the dollar figures drive the ranking, the filters, market cap and EV. Price, per-share values and the entry price stay in the stock's quote unit (`GBp` pence for London, `EUR`, `USD`, ...); screen rows carry `market`, `country`, `quote_currency` and `fx_quote`, and a review's note and the stock page name the quote currency. Prices refresh every `screen.price_days` (1) days; statements are cached `screen.cache_days` (7).
 - **Metrics**, from Yahoo annual statements (cached per ticker for 7 days in `data/cache/`):

@@ -19,7 +19,7 @@ DEFAULTS: dict = {
         "indexes": [
             "sp500", "sp400", "ftse100", "ftse250", "dax", "mdax", "cac40", "cacnext20", "aex", "amx",
             "bel20", "psi", "iseq20", "ftsemib", "smi", "smim", "atx", "ibex35", "omxs30",
-            "omxc25", "omxh25", "obx", "tsxcomp",
+            "omxc25", "omxh25", "obx", "tsxcomp", "sto", "cph", "hel", "ose", "sp600",
         ],
         "exclude_sectors": ["Financials", "Real Estate", "Utilities"],
     },

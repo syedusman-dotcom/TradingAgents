@@ -51,9 +51,13 @@ class Market:
     suffix: str = ""                # Yahoo exchange suffix, e.g. ".L"
     gics_column: str | None = None  # only the S&P lists carry a GICS sector worth keeping
     tickers: tuple[tuple[str, str], ...] = ()   # (code, name) when no Wikipedia page has them
+    api: str | None = None          # Nasdaq Nordic market code ("STO", "CPH", "HEL") when the list is an API
 
 
 _WIKI = "https://en.wikipedia.org/wiki/"
+NASDAQ_NORDIC = ("https://api.nasdaq.com/api/nordic/screener/shares"
+                 "?category=MAIN_MARKET&tableonly=false&market={code}")
+NASDAQ_HEADERS = {"User-Agent": "Mozilla/5.0", "Accept": "application/json, text/plain, */*"}
 
 
 def _market(key: str, country: str, page: str, suffix: str = "", *extra: str,
@@ -97,6 +101,11 @@ MARKETS: dict[str, Market] = {m.key: m for m in (
     _market("obx", "Norway", "OBX_Index", ".OL"),
     _market("tsxcomp", "Canada", "S%26P/TSX_Composite_Index", ".TO",
             "List_of_companies_listed_on_the_S%26P/TSX_Composite_Index"),
+    Market("sto", "Sweden", (), ".ST", api="STO"),
+    Market("cph", "Denmark", (), ".CO", api="CPH"),
+    Market("hel", "Finland", (), ".HE", api="HEL"),
+    _market("ose", "Norway", "List_of_companies_listed_on_the_Oslo_Stock_Exchange", ".OL"),
+    _market("sp600", "US", "List_of_S%26P_600_companies", gics="GICS Sector"),
 )}
 
 TICKER_COLUMNS = ("ticker", "symbol", "code", "ticker symbol", "mnem code")
@@ -121,6 +130,39 @@ def name_key(name: str) -> str:
     return " ".join(w for w in words if w not in _DROPPED_WORDS)
 
 
+def share_class_key(symbol: str) -> str:
+    """A Nasdaq Nordic symbol without its share class: ``ACRI B`` and ``ACRI A`` give ``ACRI``."""
+    return re.sub(r"\s+[A-Z]{1,4}$", "", symbol.strip())
+
+
+def _turnover(value) -> float:
+    try:
+        return float(str(value).replace(",", ""))
+    except ValueError:
+        return 0.0
+
+
+def _fetch_api(market: Market) -> pd.DataFrame:
+    """A Nasdaq Nordic market's main-market shares; of a company's share classes the busiest stays."""
+    response = requests.get(NASDAQ_NORDIC.format(code=market.api), headers=NASDAQ_HEADERS, timeout=30)
+    response.raise_for_status()
+    rows = response.json()["data"]["instrumentListing"]["rows"]
+    if not isinstance(rows, list):
+        raise ValueError(f"{market.key}: no rows in the Nasdaq Nordic response")
+    best: dict[str, dict] = {}
+    for row in rows:
+        key = share_class_key(row["symbol"])
+        if key not in best or _turnover(row.get("turnover")) > _turnover(best[key].get("turnover")):
+            best[key] = row
+    frame = pd.DataFrame({
+        "ticker": [normalise_code(r["symbol"], market) for r in best.values()],
+        "name": [r.get("fullName") or r["symbol"] for r in best.values()],
+        "sector": [r.get("sector") or None for r in best.values()],
+    })
+    frame["market"], frame["country"] = market.key, market.country
+    return frame
+
+
 def _column(table: pd.DataFrame, wanted: tuple[str, ...]):
     for col in table.columns:
         label = " ".join(map(str, col)) if isinstance(col, tuple) else str(col)
@@ -141,6 +183,8 @@ def fetch_market(market: Market) -> pd.DataFrame:
         frame["ticker"] = [normalise_code(t, market) for t in frame["ticker"]]
         frame["sector"], frame["market"], frame["country"] = None, market.key, market.country
         return frame[cols]
+    if market.api:
+        return _fetch_api(market)
     for page in market.pages:
         response = requests.get(page, headers=HEADERS, timeout=30)
         response.raise_for_status()

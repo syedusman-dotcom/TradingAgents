@@ -27,6 +27,12 @@ universe:
     - omxh25   # Finland
     - obx   # Norway
     - tsxcomp   # Canada
+    # Small companies: each has its own size floor (see filters.small_markets).
+    - sto   # Sweden, every Nasdaq Stockholm main-market share
+    - cph   # Denmark, every Nasdaq Copenhagen main-market share
+    - hel   # Finland, every Nasdaq Helsinki main-market share
+    - ose   # Norway, the Oslo exchange
+    - sp600   # US, S&P SmallCap 600
   # The screen's metrics (EBIT/EV, ROIC, Z-Score) don't describe these businesses.
   exclude_sectors: [Financials, Real Estate, Utilities]
 

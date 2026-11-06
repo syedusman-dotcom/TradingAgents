@@ -8,6 +8,7 @@ from datetime import date
 
 import pandas as pd
 import pytest
+import requests
 
 from value_pipeline import config, market_data
 from value_pipeline.config import Paths
@@ -153,16 +154,147 @@ def test_markets_table_matches_the_spec():
         "mdax": ".DE", "cac40": ".PA", "cacnext20": ".PA", "aex": ".AS", "amx": ".AS",
         "bel20": ".BR", "psi": ".LS", "iseq20": ".IR", "ftsemib": ".MI", "smi": ".SW",
         "smim": ".SW", "atx": ".VI", "ibex35": ".MC", "omxs30": ".ST", "omxc25": ".CO",
-        "omxh25": ".HE", "obx": ".OL", "tsxcomp": ".TO",
+        "omxh25": ".HE", "obx": ".OL", "tsxcomp": ".TO", "sto": ".ST", "cph": ".CO",
+        "hel": ".HE", "ose": ".OL", "sp600": "",
     }
     assert "nikkei225" not in market_data.MARKETS and "kospi" not in market_data.MARKETS
     gics = {k for k, m in market_data.MARKETS.items() if m.gics_column}
-    assert gics == {"sp500", "sp400"}
+    assert gics == {"sp500", "sp400", "sp600"}
 
 
 @pytest.mark.unit
 def test_default_indexes_are_every_nordnet_market():
     assert set(config.DEFAULTS["universe"]["indexes"]) == set(market_data.MARKETS)
+
+
+@pytest.mark.unit
+def test_default_indexes_end_with_the_five_small_company_markets():
+    assert config.DEFAULTS["universe"]["indexes"][-5:] == ["sto", "cph", "hel", "ose", "sp600"]
+    assert list(market_data.MARKETS)[-5:] == ["sto", "cph", "hel", "ose", "sp600"]
+    assert [market_data.MARKETS[k].api for k in ("sto", "cph", "hel")] == ["STO", "CPH", "HEL"]
+    assert market_data.MARKETS["omxs30"].api is None
+
+
+class FakeApiResponse:
+    def __init__(self, payload=None, status=200, text=None):
+        self.payload, self.status, self.text = payload, status, text
+
+    def raise_for_status(self):
+        if self.status >= 400:
+            raise requests.HTTPError(f"{self.status}")
+
+    def json(self):
+        if self.text is not None:
+            return json.loads(self.text)
+        return self.payload
+
+
+def api_payload(rows):
+    return {"data": {"instrumentListing": {"rows": rows}}}
+
+
+def api_row(symbol, name=None, turnover="1,000", sector="Industrials"):
+    return {"symbol": symbol, "fullName": name or symbol, "sector": sector, "turnover": turnover}
+
+
+def sto_rows():
+    return [
+        api_row("ERIC B", "Ericsson B", "5,000,000", "Telecommunications"),
+        api_row("ERIC A", "Ericsson A", "40,000", "Telecommunications"),
+        api_row("AAK", "AAK", "17,633,939", "Consumer Staples"),
+    ] + [api_row(f"S{i}", f"S Company {i}") for i in range(10)]
+
+
+@pytest.mark.unit
+def test_api_market_gives_tickers_and_keeps_the_busier_share_class(monkeypatch):
+    calls = []
+
+    def get(url, **kwargs):
+        calls.append((url, kwargs))
+        return FakeApiResponse(api_payload(sto_rows()))
+    monkeypatch.setattr(market_data.requests, "get", get)
+    df = market_data.fetch_market(market_data.MARKETS["sto"])
+    assert "ERIC-B.ST" in set(df["ticker"]) and "AAK.ST" in set(df["ticker"])
+    assert "ERIC-A.ST" not in set(df["ticker"])
+    assert set(df["market"]) == {"sto"} and set(df["country"]) == {"Sweden"}
+    eric = df[df["ticker"] == "ERIC-B.ST"].iloc[0]
+    assert eric["name"] == "Ericsson B" and eric["sector"] == "Telecommunications"
+    url, kwargs = calls[0]
+    assert url == market_data.NASDAQ_NORDIC.format(code="STO")
+    assert kwargs["headers"] == market_data.NASDAQ_HEADERS
+
+
+@pytest.mark.unit
+def test_blank_or_unparsable_turnover_counts_as_zero(monkeypatch):
+    rows = [api_row("ACRI A", turnover=""), api_row("ACRI B", turnover="12"),
+            api_row("SAND A", turnover="1,000"), api_row("SAND B", turnover="n/a"),
+            api_row("OTHER A", turnover=None), api_row("OTHER B", turnover="")]
+    rows += [api_row(f"S{i}") for i in range(10)]
+    monkeypatch.setattr(market_data.requests, "get",
+                        lambda url, **k: FakeApiResponse(api_payload(rows)))
+    tickers = set(market_data.fetch_market(market_data.MARKETS["sto"])["ticker"])
+    assert "ACRI-B.ST" in tickers and "ACRI-A.ST" not in tickers
+    assert "SAND-A.ST" in tickers and "SAND-B.ST" not in tickers
+    assert len({t for t in tickers if t.startswith("OTHER")}) == 1
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("response", [
+    FakeApiResponse(text="<html>blocked</html>"),
+    FakeApiResponse({"data": {"instrumentListing": {}}}),
+    FakeApiResponse({"data": None}),
+    FakeApiResponse({}, status=400),
+])
+def test_a_bad_api_response_raises(monkeypatch, response):
+    monkeypatch.setattr(market_data.requests, "get", lambda url, **k: response)
+    with pytest.raises(Exception):  # noqa: B017 - any failure must reach universe's cache fallback
+        market_data.fetch_market(market_data.MARKETS["hel"])
+
+
+@pytest.mark.unit
+def test_share_class_key():
+    assert market_data.share_class_key("ACRI B") == "ACRI"
+    assert market_data.share_class_key("ALVO SDB") == "ALVO"
+    assert market_data.share_class_key("NOKIA") == "NOKIA"
+    assert market_data.share_class_key("NOVO B") == "NOVO"
+    assert market_data.share_class_key("ABC Lower") == "ABC Lower"
+    assert market_data.share_class_key("ABC TOOLONG") == "ABC TOOLONG"
+
+
+@pytest.mark.unit
+def test_oslo_table_strips_the_exchange_prefix(tmp_path, monkeypatch):
+    html = members_table([("OSE: ABG", "ABG Sundal Collier")] + many(10, "O"),
+                         head=("Ticker", "Company"))
+    serve(monkeypatch, {"Oslo_Stock_Exchange": html})
+    df = market_data.fetch_market(market_data.MARKETS["ose"])
+    assert df["ticker"].iloc[0] == "ABG.OL"
+    assert set(df["country"]) == {"Norway"}
+
+
+@pytest.mark.unit
+def test_sp600_keeps_its_gics_sector(monkeypatch):
+    rows = "".join(f"<tr><td>{a}</td><td>{b}</td><td>Health Care</td></tr>"
+                   for a, b in many(11))
+    html = ("<table><tr><th>Symbol</th><th>Security</th><th>GICS Sector</th></tr>"
+            f"{rows}</table>")
+    serve(monkeypatch, {"S%26P_600": html})
+    df = market_data.fetch_market(market_data.MARKETS["sp600"])
+    assert set(df["sector"]) == {"Health Care"} and set(df["country"]) == {"US"}
+
+
+@pytest.mark.unit
+def test_universe_keeps_the_index_row_when_an_api_market_lists_the_same_company(tmp_path, monkeypatch):
+    index = members_table([("ERIC-B", "Ericsson B")] + many(10, "I"))
+    rows = [api_row("ERIC B", "Ericsson B")] + [api_row(f"S{i}", f"S Company {i}") for i in range(10)]
+
+    def get(url, **kwargs):
+        if "api.nasdaq.com" in url:
+            return FakeApiResponse(api_payload(rows))
+        return FakeResponse(index)
+    monkeypatch.setattr(market_data.requests, "get", get)
+    df = market_data.universe(Paths(tmp_path), ["omxs30", "sto"])
+    eric = df[df["name"] == "Ericsson B"]
+    assert list(eric["market"]) == ["omxs30"]
 
 
 @pytest.mark.unit
