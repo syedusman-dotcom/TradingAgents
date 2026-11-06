@@ -85,3 +85,7 @@ Started 2026-11-07 00:12 CET. Ruling: R2 researchers run on opus with a 35-call 
 Started 2026-11-07 00:20 CET. Cause found: `yahoo/value_metrics.py::get_value_metrics` drops the price whenever `info["currency"] != info["financialCurrency"]` (except pence/pounds), so the worksheet has no formula value for CAD/USD, SEK/EUR, CHF/USD names. Fix: convert at the cross rate, render per-share values in the quote unit as the pence case does.
 
 ## R1 — report writer running (a641729c75aae58b2, opus); second round done: `european_momentum.md`, `swedish_investment_companies.md`.
+
+## F6 — Google News RSS fallback (running: implementer a63613793f47589d9 on sonnet; brief `weekend/f6-brief.md`)
+Started 2026-11-07 00:30 CET. Ruling: three implementers (S3, F1, F6) work in the same tree on disjoint files, told to `git add` by name; a conflict costs one re-run.
+F4 (committee thesis truncation: `parse.thesis_summary` limit 300 feeds results.json) and F5/F8 (screen accounting scores into the pipeline note) are queued after these land to avoid touching `review.py` twice.
