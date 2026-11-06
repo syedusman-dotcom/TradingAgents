@@ -44,6 +44,13 @@ filters:
   min_interest_coverage: 4
   min_roic_worst_year: 0.08     # ROIC at least 8% in every year: stable quality, not one good year
   max_dilution_per_year: 0.03   # share count may grow at most 3% a year
+  small_markets:                # USD size floor per market in place of min_market_cap; these markets also face min_daily_value
+    sto: 250000000
+    cph: 250000000
+    hel: 250000000
+    ose: 250000000
+    sp600: 250000000
+  min_daily_value: 250000       # USD traded a day (average volume x price) a small_markets row needs
   # max_accruals_ratio: 0.10    # (net income - operating cash flow) / average assets; off unless set
   # max_beneish_m: -1.78        # Beneish M-score above this is the likely-manipulator band; off unless set
 

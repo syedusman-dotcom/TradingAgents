@@ -350,6 +350,7 @@ def fundamentals(ticker: str, paths: Paths, cache_days: int = 7, price_days: int
         "enterprise_value": info.get("enterpriseValue"),
         "price": info.get("currentPrice") or info.get("regularMarketPrice") or (series[-1] if series else None),
         "shares": info.get("sharesOutstanding"),
+        "average_volume": info.get("averageVolume"),
         "currency": info.get("currency"),
         "financial_currency": info.get("financialCurrency"),
         "sector": info.get("sector"),

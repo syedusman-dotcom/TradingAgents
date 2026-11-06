@@ -44,7 +44,7 @@ from tradingagents.agents.decision_math import (
 from tradingagents.dataflows.files import replace_file
 from tradingagents.dataflows.value_metrics import EQUITY_PREMIUM, MIN_DISCOUNT_RATE
 from value_pipeline import market_data, metrics, screener
-from value_pipeline.config import Paths
+from value_pipeline.config import DEFAULTS, Paths
 from value_pipeline.pit_statements import (
     facts_for,
     quarters_as_of,
@@ -242,12 +242,13 @@ def _traded_near(hist, day: str) -> bool:
 
 
 def snapshot(ticker: str, as_of: str, store: dict, hist: pd.DataFrame, rate: float, cfg: dict,
-             sector: str | None = None) -> tuple[dict, tuple] | None:
+             sector: str | None = None, market: str | None = None) -> tuple[dict, tuple] | None:
     """The screen's row for ``ticker`` as it would have read on ``as_of``, from the facts filed
     and the closes dated on or before it, plus the PM's record verdict (``pm_record_ok``);
     with the ``(years, price, market_cap, shares)`` that ``screener.apply_sector_targets``
     takes. None with fewer than two fiscal years, no close in the ``WITHIN_DAYS`` up to
-    ``as_of``, or ``DataUnavailable``."""
+    ``as_of``, or ``DataUnavailable``. The row carries ``market``, so a small-company market's size
+    floor applies; its trading-value floor does not (there is no volume history)."""
     years = years_as_of(store, as_of,
                         split_factor=lambda filed: split_factor_after(hist, filed))[:SCREEN_YEARS]
     if len(years) < 2:
@@ -272,7 +273,8 @@ def snapshot(ticker: str, as_of: str, store: dict, hist: pd.DataFrame, rate: flo
     except market_data.DataUnavailable as exc:
         log.info("skip %s on %s: %s", ticker, as_of, exc)
         return None
-    reasons = screener.failed_filters(row, cfg["filters"])
+    row["market"] = market
+    reasons = screener.failed_filters(row, cfg["filters"], check_liquidity=False)
     row["sector"] = sector
     row["fail_reasons"] = "; ".join(reasons)
     row["passes_filters"] = not reasons
@@ -782,18 +784,19 @@ def _joined_after(added: dict[str, str], cohorts: list[str]) -> dict[str, int]:
 # --- run -----------------------------------------------------------------------------------
 
 def _universe(paths: Paths, cfg: dict, tickers: list[str] | None, universe_fn) -> list[tuple]:
-    """``(ticker, sector)`` for today's members less the excluded sectors, narrowed to
-    ``tickers`` when given."""
+    """``(ticker, sector, market)`` for today's members less the excluded sectors, narrowed to
+    ``tickers`` when given; the market is None when the frame has no ``market`` column."""
     uni = universe_fn(paths, cfg["universe"]["indexes"])
     uni = uni[~uni["sector"].isin(cfg["universe"]["exclude_sectors"])]
     if tickers:
         wanted = {t.upper() for t in tickers}
         uni = uni[uni["ticker"].isin(wanted)]
-    return [(t, s if isinstance(s, str) else None) for t, s in zip(uni["ticker"], uni["sector"],
-                                                                   strict=True)]
+    markets = uni["market"] if "market" in uni else [None] * len(uni)
+    return [(t, s if isinstance(s, str) else None, m if isinstance(m, str) else None)
+            for t, s, m in zip(uni["ticker"], uni["sector"], markets, strict=True)]
 
 
-def _ticker_rows(ticker: str, sector, store: dict, hist, cohorts: list[str], rates: dict,
+def _ticker_rows(ticker: str, sector, market, store: dict, hist, cohorts: list[str], rates: dict,
                  added: dict, cfg: dict) -> tuple[dict[str, tuple[dict, tuple]], dict[str, str]]:
     """The ticker's snapshot per cohort it belonged to (not joined the S&P 500 after it), and
     per cohort whose snapshot raised, the error (logged): one odd cohort keeps the others."""
@@ -802,7 +805,8 @@ def _ticker_rows(ticker: str, sector, store: dict, hist, cohorts: list[str], rat
         if added.get(ticker, "") > cohort:
             continue
         try:
-            snap = snapshot(ticker, cohort, store, hist, rates[cohort], cfg, sector)
+            extra = {"market": market} if market else {}
+            snap = snapshot(ticker, cohort, store, hist, rates[cohort], cfg, sector, **extra)
         except Exception as exc:  # noqa: BLE001 - one bad cohort must not stop the ticker
             log.warning("skip %s at %s: %s", ticker, cohort, exc)
             errors[cohort] = type(exc).__name__
@@ -931,7 +935,7 @@ def run(paths: Paths, cfg: dict, today: date | None = None, tickers: list[str] |
     hists: dict[str, pd.DataFrame] = {}
     skipped: dict[str, str] = {}
     with_data = 0
-    for i, (ticker, sector) in enumerate(members, start=1):
+    for i, (ticker, sector, market) in enumerate(members, start=1):
         if progress:
             progress(i, len(members), ticker)
         try:
@@ -939,7 +943,7 @@ def run(paths: Paths, cfg: dict, today: date | None = None, tickers: list[str] |
             if store is None or hist is None:
                 skipped[ticker] = "no EDGAR statements" if store is None else "no price history"
                 continue
-            snaps, errors = _ticker_rows(ticker, sector, store["facts"], hist, cohorts, rates,
+            snaps, errors = _ticker_rows(ticker, sector, market, store["facts"], hist, cohorts, rates,
                                          added, cfg)
         except Exception as exc:  # noqa: BLE001 - one bad ticker must not stop the run
             log.warning("skip %s: %s", ticker, exc)
@@ -1042,6 +1046,14 @@ def _is_default(indexes: list[str]) -> bool:
     return set(indexes) == set(DEFAULT_INDEXES)
 
 
+def _small_market_limits(result: dict) -> list[str]:
+    """The limit line for a run that includes a small-company market (empty otherwise)."""
+    if not set(_indexes(result)) & set(DEFAULTS["filters"]["small_markets"]):
+        return []
+    return ["The trading-value floor cannot be applied to past dates (no volume history), so "
+            "small companies are filtered on size only."]
+
+
 def _tested(result: dict) -> list[str]:
     cohorts, surv = result["cohorts"], result["survivorship"]
     span = f"{cohorts[0]} to {cohorts[-1]}" if cohorts else "none (no hold has ended)"
@@ -1061,7 +1073,7 @@ def _tested(result: dict) -> list[str]:
             "metrics see the newest four fiscal years known then, as the live screen does. "
             "Sectors are today's (EDGAR has none), a mild look-ahead. Index lists: "
             f"{', '.join(_indexes(result))}. " + survivorship, "",
-            OVERLAP, ""]
+            OVERLAP, "", *_small_market_limits(result)]
 
 
 def verdict(result: dict) -> str:

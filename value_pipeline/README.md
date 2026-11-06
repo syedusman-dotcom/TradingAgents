@@ -113,6 +113,7 @@ Use `--data-dir PATH` before the command (or `VALUE_PIPELINE_DATA`) to keep data
   - Formula value (`value_base`, `value_low`, `value_high`), its margin of safety (`mos_formula`) and the growth today's price implies (`implied_growth`). These are the same figures the agents see; see `VALUE_INVESTING.md`.
   - Accounting checks (accruals ratio, cash conversion, receivables vs revenue, Beneish M-score, and their flags) and the 7-year expected return with its rank (`expected_return`, `er_rank`); see below.
 - **Hard filters** (`config.yaml`): market cap > $2B, F-Score ≥ 6, Altman Z > 1.8, positive FCF, interest coverage > 4, ROIC ≥ 8% in every year (stable quality), share count growing ≤ 3% a year (no heavy dilution).
+  - **Small-company markets** (`filters.small_markets`, default `sto`, `cph`, `hel`, `ose` and `sp600` at $250M each): a row of a listed market uses that dollar floor in place of the $2B market cap, and also needs an average daily traded value (Yahoo's `averageVolume` times the dollar price, the `daily_value` column) of at least `filters.min_daily_value` ($250,000); a missing value fails with reason `liquidity`. Every other market is filtered as above.
 - **Rank**: Magic Formula on the multi-year averages (rank by average earnings yield + rank by average ROIC, lower is better), ties broken by FCF yield. Averages keep a cyclical peak from ranking as a bargain, and ROIC is capped at 100% so asset-light outliers can't take the top on one ratio. FREEFALL stocks are kept out of the top list and shown as "watch: falling knives".
 - Tickers with missing data are skipped and listed with the reason in `screen_<date>_skipped.csv`.
 
@@ -354,7 +355,7 @@ Overweight price bars), `compounder_record` (hint and record bars, no price bar)
 weight, dividends reinvested, and compared with SPY and with the equal-weight universe of that
 cohort. Quarterly cohorts with one-year holds overlap, so the cohorts are not independent samples:
 count them as a finer look at the same years, not as separate trials. No agent is called, nothing
-trades and no bar is changed. The backtest covers the S&P 500 and 400 only: non-US companies have no point-in-time filings (EDGAR), so the UK and European markets are screened live but not replayed.
+trades and no bar is changed. The backtest covers the S&P 500 and 400 only: non-US companies have no point-in-time filings (EDGAR), so the UK and European markets are screened live but not replayed. The trading-value floor cannot be applied to past dates (no volume history), so small companies (`filters.small_markets`) are filtered on size only in the backtest; the report says so when such a market is in the run.
 
 ### Buy-bar candidates
 

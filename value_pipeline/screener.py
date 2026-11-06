@@ -156,15 +156,23 @@ def apply_sector_targets(rows: list[dict], inputs: dict[str, tuple]) -> None:
         with_target(r, *inputs[r["ticker"]], targets[r.get("sector")])
 
 
-def failed_filters(row: dict, filters: dict) -> list[str]:
-    """The hard filters a row fails; a missing value fails its filter."""
+def failed_filters(row: dict, filters: dict, check_liquidity: bool = True) -> list[str]:
+    """The hard filters a row fails; a missing value fails its filter. A row of a market in
+    ``filters["small_markets"]`` uses that market's size floor in place of ``min_market_cap`` and,
+    when ``check_liquidity``, needs a ``daily_value`` (dollars a day) of at least
+    ``min_daily_value``; every other row is filtered as before."""
     def below(key, floor):
         v = row.get(key)
         return v is None or v <= floor
 
+    small_floor = (filters.get("small_markets") or {}).get(row.get("market"))
     reasons = []
-    if below("market_cap", filters["min_market_cap"]):
+    if below("market_cap", filters["min_market_cap"] if small_floor is None else small_floor):
         reasons.append("market cap")
+    if small_floor is not None and check_liquidity:
+        value = row.get("daily_value")
+        if value is None or value < filters["min_daily_value"]:
+            reasons.append("liquidity")
     if row.get("fscore") is None or row["fscore"] < filters["min_fscore"]:
         reasons.append("F-Score")
     if below("altman_z", filters["min_altman_z"]):
@@ -471,6 +479,9 @@ def run(paths: Paths, cfg: dict, owned: set[str], today: str | None = None) -> d
         inputs[rec.ticker] = (data["years"], data.get("price"), row["market_cap"], row["shares"])
         quoted[rec.ticker] = data
         row.update(name=rec.name, sector=sector, index=rec.index, market=rec.market, country=rec.country)
+        volume, dollars = data.get("average_volume"), data.get("price")
+        row["daily_value"] = (volume * dollars if isinstance(volume, (int, float))
+                              and isinstance(dollars, (int, float)) else None)
         row["fail_reasons"] = failed_filters(row, cfg["filters"])
         rows.append(row)
 

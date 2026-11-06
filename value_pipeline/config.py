@@ -31,6 +31,8 @@ DEFAULTS: dict = {
         "min_interest_coverage": 4,
         "min_roic_worst_year": 0.08,
         "max_dilution_per_year": 0.03,
+        "small_markets": {"sto": 2.5e8, "cph": 2.5e8, "hel": 2.5e8, "ose": 2.5e8, "sp600": 2.5e8},
+        "min_daily_value": 250000,
     },
     "screen": {"top_n": 10, "cache_days": 7, "price_days": 1, "throttle_seconds": 0.3, "normalize_years": 5, "roic_cap": 1.0},
     "review": {
@@ -118,7 +120,7 @@ def _merge(base: dict, override: dict) -> dict:
 
 # Numbers that disable a safeguard at zero: the cost cap would never block, sizes would be nothing.
 _POSITIVE = {"cost_per_run", "max_cost_per_review", "max_position_weight", "max_sector_weight", "min_holdings",
-             "max_reviews", "big_move", "positions", "check_positions", "equity"}
+             "max_reviews", "min_daily_value", "big_move", "positions", "check_positions", "equity"}
 
 
 def validate_config(cfg: dict) -> None:
@@ -142,6 +144,7 @@ def validate_config(cfg: dict) -> None:
                     raise ValueError(f"{section}.{key} must be a finite number of zero or more, not {value!r}")
                 if key in _POSITIVE and value <= 0:
                     raise ValueError(f"{section}.{key} must be more than zero, not {value!r}")
+    _validate_small_markets(cfg["filters"]["small_markets"])
     _validate_cohort_days(cfg["backtest"]["cohort_days"])
     for country in cfg["review"]["candidate_countries"]:
         if not isinstance(country, str) or not country.strip():
@@ -149,6 +152,18 @@ def validate_config(cfg: dict) -> None:
     share = cfg["parking"]["share"]
     if not 0 <= share <= 1:
         raise ValueError(f"parking.share must be between 0 and 1 (a share of the idle money), not {share!r}")
+
+
+def _validate_small_markets(floors: dict) -> None:
+    """Each key a known market, each floor a positive finite number of dollars."""
+    from . import market_data  # not at the top: market_data imports this module
+
+    known = market_data.MARKETS
+    for key, floor in floors.items():
+        if key not in known:
+            raise ValueError(f"filters.small_markets names an unknown market {key!r}")
+        if isinstance(floor, bool) or not isinstance(floor, (int, float)) or not math.isfinite(floor) or floor <= 0:
+            raise ValueError(f"filters.small_markets.{key} must be a positive number of dollars, not {floor!r}")
 
 
 def _validate_cohort_days(days: list) -> None:
