@@ -154,23 +154,25 @@ def fiscal_average_closes(history: pd.DataFrame, fiscal_year_ends: list[str]) ->
 TARGET_KEYS = ("target_mean", "target_median", "target_high", "target_low")
 
 
-def _consensus_in(price, factor: float, symbol: str) -> dict:
-    """Yahoo's consensus for ``symbol`` with its price targets in the worksheet's unit: divided by
-    ``factor`` (a pence quote, scaled back by ``_to_quote_unit``), or left out when there is no
-    price (the quote's currency differs from the statements'). ``{}`` when it fails."""
+def _consensus_in(price, factor: float, symbol: str, cross: float = 1.0) -> dict:
+    """Yahoo's consensus for ``symbol`` with its price targets (quote unit) in the worksheet's
+    unit, as the price is: divided by ``factor`` (a pence quote) and multiplied by ``cross`` (a
+    quote currency other than the statements'), both undone by ``_to_quote_unit``; left out when
+    there is no price (no exchange rate). ``{}`` when it fails."""
     try:
         c = dict(consensus(symbol) or {})
     except Exception:  # noqa: BLE001 - the worksheet stands without it
         return {}
     for key in TARGET_KEYS:
         if key in c:
-            c[key] = c[key] / factor if price is not None and c[key] is not None else None
+            c[key] = c[key] / factor * cross if price is not None and c[key] is not None else None
     return c
 
 
 def _to_quote_unit(metrics: dict, factor: float) -> dict:
-    """``metrics`` with every per-share price multiplied by ``factor`` (100 for pence); ratios,
-    totals in money and share counts are left alone. Returns a copy."""
+    """``metrics`` with every per-share price multiplied by ``factor``, quote units per statement
+    unit (100 for pence, 1 / rate for another currency); ratios, totals in money and share counts
+    are left alone. Returns a copy."""
     import copy
 
     m = copy.deepcopy(metrics)
@@ -228,12 +230,23 @@ def get_value_metrics(
     price = info.get("currentPrice") or info.get("regularMarketPrice")
     # A London listing is quoted in pence and reports in pounds: compute in the major unit,
     # then show per-share values in the quote unit the user sees at the broker.
-    minor = quote in MINOR_UNITS and MINOR_UNITS[quote] == reported
-    factor = 100.0 if minor else 1.0
-    if minor and price is not None:
-        price = price / factor
+    # A quote in another currency (Celestica: CAD quote, USD statements) is converted the same
+    # way at today's rate: ``cross`` statement units per quote unit (the major unit for pence).
+    major = MINOR_UNITS.get(quote, quote)
+    minor = quote in MINOR_UNITS and major == reported
+    factor = 100.0 if quote in MINOR_UNITS else 1.0
+    cross, converted = 1.0, False
+    if quote and reported and major != reported:
+        quote_usd, reported_usd = usd_rate(quote), usd_rate(reported)
+        if quote_usd and reported_usd:
+            cross, converted = quote_usd / reported_usd, True
+    if (minor or converted) and price is not None:
+        price = price / factor * cross
+    market_cap = info.get("marketCap")
+    if converted and market_cap is not None:
+        market_cap = market_cap * cross   # Yahoo's market cap is in the quote's major unit
     yahoo_shares = info.get("sharesOutstanding")
-    shares = share_count(info.get("marketCap"), price, years[0].get("shares"), yahoo_shares)
+    shares = share_count(market_cap, price, years[0].get("shares"), yahoo_shares)
     note = ""
     if yahoo_shares and shares and abs(yahoo_shares / shares - 1) > 0.10:
         note = (f"\n\nYahoo's sharesOutstanding ({yahoo_shares / 1e6:,.0f}M) counts one share class; the per-share "
@@ -241,31 +254,34 @@ def get_value_metrics(
     if minor:
         note += (f"\n\nPer-share values in {quote} ({_MINOR_NAMES.get(quote, 'minor unit')}), the quote unit; "
                  f"statements in {reported}.")
+    elif converted:
+        note += (f"\n\nPer-share values in {quote}, the quote unit, converted from {reported} statements at "
+                 f"{cross:.4f} {reported} per {major} (today's rate); money figures in {reported} millions.")
     elif quote in MINOR_UNITS or (quote and reported and quote != reported):
-        # Per-share values would mix currencies (an ADR quoted in USD reporting in
-        # TWD): keep the ratios, drop the price.
+        # No exchange rate, so per-share values would mix currencies (an ADR quoted in
+        # USD reporting in TWD): keep the ratios, drop the price.
         price = None
         note = (f"\n\nThe quote is in {quote} but the statements are in {reported}, so price-based "
                 "figures and the formula valuation are left out rather than mixed.")
     rate = current_discount_rate()
     avg_prices = {}  # fail-open: the report renders without average prices
-    if price is not None:  # None means the quote currency differs; its averages would mix currencies
+    if price is not None:  # None means no rate for the quote currency; its averages would mix currencies
         try:
             # Unadjusted closes: the prices actually paid, as the buyback comparison needs.
             history = yf_retry(lambda: t.history(period="10y", auto_adjust=False))
             fyes = [y["fiscal_year_end"] for y in years]
-            avg_prices = {k: v / factor for k, v in fiscal_average_closes(history, fyes).items()}
+            avg_prices = {k: v / factor * cross for k, v in fiscal_average_closes(history, fyes).items()}
         except Exception:
             avg_prices = {}
     revenue_usd = None  # the growth base rates are in dollars; revenue arrives in the reporting currency
     fx = usd_rate(reported or quote)
     if fx and years[0].get("revenue") is not None:
         revenue_usd = years[0]["revenue"] * fx
-    metrics = company_metrics(years, price, info.get("marketCap") if price else None, shares,
+    metrics = company_metrics(years, price, market_cap if price else None, shares,
                               rate=rate["rate"], treasury_10y=rate["treasury_10y"], avg_prices=avg_prices,
                               revenue_usd=revenue_usd, quarters=quarters,
                               revenue_history=sec_revenue_history(canonical, reported),
-                              consensus=_consensus_in(price, factor, canonical))
-    if minor:
-        metrics = _to_quote_unit(metrics, factor)
+                              consensus=_consensus_in(price, factor, canonical, cross))
+    if minor or converted:
+        metrics = _to_quote_unit(metrics, factor / cross)
     return render_report(canonical, as_of_date or "today", metrics, currency=reported or quote) + note

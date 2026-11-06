@@ -96,9 +96,11 @@ def test_vendor_drops_price_figures_when_currencies_differ(monkeypatch):
 
     monkeypatch.setattr(yahoo_vm.yf, "Ticker", lambda *a: FakeTicker())
     monkeypatch.setattr(yahoo_vm, "is_historical", lambda d: False)
+    monkeypatch.setattr(yahoo_vm, "usd_rate", lambda c: 1.0 if c == "USD" else None)  # no TWD rate
     report = yahoo_vm.get_value_metrics("TSM", "2026-10-11")
     assert "quote is in USD but the statements are in TWD" in report
     assert "Price: not available" in report and "## By fiscal year" in report
+    assert "base (3% growth)" not in report and "converted from" not in report
 
 
 SAMPLE_10K = """
@@ -537,6 +539,89 @@ def test_vendor_presents_a_pence_quote_in_pence_against_pound_statements(monkeyp
     assert f"margin of safety at base {mos:.1%}" in report
     assert "Per-share values in GBp (pence), the quote unit; statements in GBP." in report
     assert "Price 886.00" in report and "left out rather than mixed" not in report
+
+
+def _cad_ticker():
+    """Celestica's shape: quoted in CAD, reporting in USD."""
+    col = [pd.Timestamp("2025-12-31"), pd.Timestamp("2024-12-31"), pd.Timestamp("2023-12-31")]
+
+    def frame(rows):
+        return pd.DataFrame(dict.fromkeys(col, rows))
+
+    history = pd.DataFrame({"Close": [90.0, 110.0]}, index=pd.to_datetime(["2025-03-31", "2025-09-30"]))
+
+    class FakeTicker:
+        info = {"currency": "CAD", "financialCurrency": "USD", "currentPrice": 100.0,
+                "marketCap": 1e10, "sharesOutstanding": 1e8}
+        income_stmt = frame({"Total Revenue": 1e10, "EBIT": 1.2e9, "Net Income": 9e8, "Gross Profit": 1.5e9})
+        balance_sheet = frame({"Total Assets": 8e9, "Current Assets": 5e9, "Current Liabilities": 3e9,
+                               "Stockholders Equity": 2e9, "Total Debt": 7e8,
+                               "Cash And Cash Equivalents": 4e8, "Ordinary Shares Number": 1e8})
+        cashflow = frame({"Free Cash Flow": 8e8, "Operating Cash Flow": 1e9, "Repurchase Of Capital Stock": -3e8})
+
+        def history(self, **kw):
+            return history
+
+    FakeTicker.balance_sheet.loc["Ordinary Shares Number", col[1:]] = 1.04e8   # retired 4M in 2025
+    return FakeTicker
+
+
+def _patch_vendor(monkeypatch, fake, rates):
+    monkeypatch.setattr(yahoo_vm.yf, "Ticker", lambda *a: fake())
+    monkeypatch.setattr(yahoo_vm, "is_historical", lambda d: False)
+    monkeypatch.setattr(yahoo_vm, "current_discount_rate", lambda: {"rate": 0.09, "treasury_10y": None})
+    monkeypatch.setattr(yahoo_vm, "usd_rate", lambda c: rates.get(c))
+    monkeypatch.setattr(yahoo_vm, "sec_revenue_history", lambda *a: None)
+
+
+@pytest.mark.unit
+def test_vendor_values_a_cad_quote_against_usd_statements_in_cad(monkeypatch):
+    from tradingagents.agents.decision_math import worksheet_base
+
+    fake = _cad_ticker()
+    _patch_vendor(monkeypatch, fake, {"CAD": 0.72, "USD": 1.0})
+    monkeypatch.setattr(yahoo_vm, "consensus", lambda s: {**CONSENSUS, "target_median": 120.0})
+    report = yahoo_vm.get_value_metrics("CLS.TO", "2026-11-07")
+
+    years = yahoo_vm.statement_years(fake.income_stmt, fake.balance_sheet, fake.cashflow)
+    usd = vm.company_metrics(years, 72.0, 7.2e9, 1e8, rate=0.09, avg_prices={"2025-12-31": 72.0})
+    base = worksheet_base(report)
+    assert base == pytest.approx(usd["valuation"]["base"] / 0.72, rel=1e-3)     # USD value in CAD
+    assert f"margin of safety at base {(base - 100) / base:.1%}" in report
+    assert "Price 100.00" in report and "- Price today 100.00" in report
+    assert ("Per-share values in CAD, the quote unit, converted from USD statements at 0.7200 USD "
+            "per CAD (today's rate); money figures in USD millions.") in report
+    assert "left out rather than mixed" not in report
+    row = next(line for line in report.splitlines() if line.startswith("| 2025-12-31 |")
+               and line.rstrip().endswith("| 100.00 |"))                     # avg close, CAD
+    buyback = usd["capital_allocation"]["per_year"][0]["buyback_price"]
+    assert buyback is not None and f"{buyback / 0.72:,.2f}" in row              # buyback price, CAD
+    assert "- Consensus price target median 120.00" in report                 # CAD in, CAD out
+    assert "Money in millions USD" in report and "Market cap 7,200" in report  # money stays USD
+
+
+@pytest.mark.unit
+def test_vendor_keeps_a_usd_quote_against_usd_statements_unconverted(monkeypatch):
+    class Same(_cad_ticker()):
+        info = {**_cad_ticker().info, "currency": "USD"}
+
+    _patch_vendor(monkeypatch, Same, {"USD": 1.0})
+    monkeypatch.setattr(yahoo_vm, "consensus", lambda s: {})
+    report = yahoo_vm.get_value_metrics("CLS", "2026-11-07")
+    years = yahoo_vm.statement_years(Same.income_stmt, Same.balance_sheet, Same.cashflow)
+    usd = vm.company_metrics(years, 100.0, 1e10, 1e8, rate=0.09, avg_prices={"2025-12-31": 100.0})
+    assert f"base (3% growth) {usd['valuation']['base']:,.2f}" in report
+    assert "converted from" not in report and "left out rather than mixed" not in report
+
+
+@pytest.mark.unit
+def test_vendor_leaves_out_the_value_when_the_quote_currency_has_no_rate(monkeypatch):
+    _patch_vendor(monkeypatch, _cad_ticker(), {"USD": 1.0})
+    monkeypatch.setattr(yahoo_vm, "consensus", lambda s: {})
+    report = yahoo_vm.get_value_metrics("CLS.TO", "2026-11-07")
+    assert ("The quote is in CAD but the statements are in USD, so price-based figures and the "
+            "formula valuation are left out rather than mixed.") in report
+    assert "Price: not available" in report and "base (3% growth)" not in report
 
 
 @pytest.mark.unit
@@ -1202,6 +1287,7 @@ def test_vendor_leaves_out_consensus_targets_when_currencies_differ(monkeypatch)
     monkeypatch.setattr(yahoo_vm.yf, "Ticker", lambda *a: FakeTicker())
     monkeypatch.setattr(yahoo_vm, "is_historical", lambda d: False)
     monkeypatch.setattr(yahoo_vm, "consensus", lambda s: dict(CONSENSUS))
+    monkeypatch.setattr(yahoo_vm, "usd_rate", lambda c: 1.0 if c == "USD" else None)  # no TWD rate
     report = yahoo_vm.get_value_metrics("TSM", "2026-10-11")
     assert "- Consensus price target median n/a" in report
     assert "- Consensus revenue growth next year 6.2%" in report
