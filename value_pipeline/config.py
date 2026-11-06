@@ -45,6 +45,7 @@ DEFAULTS: dict = {
         "candidate_cooldown_days": 0,
         "min_run_rate": 0.8,
         "candidate_countries": [],
+        "candidate_markets": [],
     },
     "watch": {"buy_margin_of_safety": 0.30, "max_rating_age_days": 120},
     "daily": {"enabled": True, "scope": "holdings", "max_reviews": 3, "cooldown_days": 5, "big_move": 0.15,
@@ -149,9 +150,22 @@ def validate_config(cfg: dict) -> None:
     for country in cfg["review"]["candidate_countries"]:
         if not isinstance(country, str) or not country.strip():
             raise ValueError(f"review.candidate_countries entries must be country names, not {country!r}")
+    _validate_candidate_markets(cfg["review"]["candidate_markets"])
     share = cfg["parking"]["share"]
     if not 0 <= share <= 1:
         raise ValueError(f"parking.share must be between 0 and 1 (a share of the idle money), not {share!r}")
+
+
+def _validate_candidate_markets(markets) -> None:
+    """A list of known market keys."""
+    from . import market_data  # not at the top: market_data imports this module
+
+    if not isinstance(markets, list):
+        raise ValueError(f"review.candidate_markets must be a list of market keys, not {markets!r}")
+    for key in markets:
+        if not isinstance(key, str) or key not in market_data.MARKETS:
+            raise ValueError(f"review.candidate_markets entries must be market keys "
+                             f"({', '.join(market_data.MARKETS)}), not {key!r}")
 
 
 def _validate_small_markets(floors: dict) -> None:

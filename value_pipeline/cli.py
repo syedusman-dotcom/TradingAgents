@@ -200,6 +200,8 @@ def cmd_backtest(args, paths: Paths, cfg) -> None:
     md, csv = backtest.write(paths, result, result["generated"])
     console.print(Markdown(backtest.verdict(result)))
     console.print(Markdown(backtest.candidates(result)))
+    if section := backtest.small_company(result):
+        console.print(Markdown(section))
     console.print(f"\nSaved {md} and {csv}")
 
 

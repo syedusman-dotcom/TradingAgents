@@ -684,6 +684,28 @@ def matched_baseline(one_year: dict, baseline: dict | None) -> float | None:
                  if by_cohort.get(c) is not None)
 
 
+def _base_conditions(one_year: dict, three_year: dict | None) -> dict:
+    """Conditions 1 to 4 of the pass rule, read by ``bar_verdict`` and ``small_cap_verdict``:
+    ``held`` maps each condition number to whether it holds, beside the numbers they read."""
+    cohorts = one_year["cohorts_min5"]
+    years = one_year.get("years_min5", 0)
+    beat = one_year["beat_universe_min5"]
+    excess_universe = one_year["mean_excess_universe_min5"]
+    excess_spy = one_year["mean_excess_spy_min5"]
+    three = three_year if three_year and three_year["cohorts_min5"] >= 1 else None
+    excess_3y = None if three_year is None else three_year["mean_excess_universe_min5"]
+    held = {
+        1: cohorts >= 20 and years >= 7,
+        2: cohorts > 0 and beat * 5 >= cohorts * 3,       # at least 60%, without float rounding
+        3: _at_least(excess_universe, 0.02) and _at_least(excess_spy, 0.0),
+        4: three is not None and _at_least(excess_3y, 0.0),
+    }
+    return {"held": held, "cohorts": cohorts, "years": years, "beat": beat,
+            "beat_share": beat / cohorts if cohorts else 0,
+            "mean_excess_universe": excess_universe, "mean_excess_spy": excess_spy,
+            "mean_excess_universe_3y": excess_3y}
+
+
 def bar_verdict(one_year: dict, three_year: dict | None, baseline_matched: float | None,
                 rule: str = "") -> dict:
     """The pass rule, fixed before any run (amended 2026-11-05, still before any run). Over the
@@ -695,22 +717,14 @@ def bar_verdict(one_year: dict, three_year: dict | None, baseline_matched: float
     ``magic_formula`` on the same cohorts (``baseline_matched``, from ``matched_baseline``). A
     missing mean fails its condition. ``failed`` lists the conditions that failed; ``rule``
     names the rule in the sentence."""
-    cohorts = one_year["cohorts_min5"]
-    years = one_year.get("years_min5", 0)
-    beat = one_year["beat_universe_min5"]
-    beat_share = beat / cohorts if cohorts else 0
-    excess_universe = one_year["mean_excess_universe_min5"]
-    excess_spy = one_year["mean_excess_spy_min5"]
-    three = three_year if three_year and three_year["cohorts_min5"] >= 1 else None
-    excess_3y = None if three_year is None else three_year["mean_excess_universe_min5"]
-    held = {
-        1: cohorts >= 20 and years >= 7,
-        2: cohorts > 0 and beat * 5 >= cohorts * 3,       # at least 60%, without float rounding
-        3: _at_least(excess_universe, 0.02) and _at_least(excess_spy, 0.0),
-        4: three is not None and _at_least(excess_3y, 0.0),
-        5: (excess_universe is not None and baseline_matched is not None
-            and excess_universe > baseline_matched),
-    }
+    base = _base_conditions(one_year, three_year)
+    excess_universe = base["mean_excess_universe"]
+    held = {**base["held"],
+            5: (excess_universe is not None and baseline_matched is not None
+                and excess_universe > baseline_matched)}
+    cohorts, years, beat = base["cohorts"], base["years"], base["beat"]
+    excess_spy, excess_3y = base["mean_excess_spy"], base["mean_excess_universe_3y"]
+    beat_share = base["beat_share"]
     failed = [n for n, ok in held.items() if not ok]
     supports = not failed
     sentence = (f"{rule + ': ' if rule else ''}{cohorts} cohorts with five or more picks in "
@@ -727,6 +741,29 @@ def bar_verdict(one_year: dict, three_year: dict | None, baseline_matched: float
             "years": years, "beat": beat, "beat_share": beat_share,
             "mean_excess_universe": excess_universe, "mean_excess_spy": excess_spy,
             "mean_excess_universe_3y": excess_3y, "baseline": baseline_matched,
+            "year_mean": one_year.get("year_mean_excess_universe"),
+            "year_se": one_year.get("year_se_excess_universe")}
+
+
+def small_cap_verdict(one_year: dict, three_year: dict | None, rule: str) -> dict:
+    """The small-company pass rule, fixed before any run: conditions 1 to 4 of ``bar_verdict``
+    (condition 5, beating the plain screen, does not apply to the plain screen itself). Supports
+    adding ``sp600`` to ``review.candidate_markets`` when all four hold; a missing mean fails its
+    condition. ``rule`` names the rule in the sentence."""
+    base = _base_conditions(one_year, three_year)
+    failed = [n for n, ok in base["held"].items() if not ok]
+    sentence = (f"{rule}: {base['cohorts']} cohorts with five or more picks in {base['years']} "
+                f"calendar years; beat the universe in {base['beat']} of {base['cohorts']}; mean "
+                f"one-year excess {_points_text(base['mean_excess_universe'])} points over the "
+                f"universe and {_points_text(base['mean_excess_spy'])} over SPY; three-year "
+                f"{_points_text(base['mean_excess_universe_3y'])}: ")
+    if failed:
+        sentence += ("does not support adding sp600 to review.candidate_markets. Failed: "
+                     + "; ".join(f"({n}) {FAILED_TEXT[n]}" for n in failed) + ".")
+    else:
+        sentence += "supports adding sp600 to review.candidate_markets."
+    return {"supports": not failed, "sentence": sentence, "failed": failed,
+            **{k: v for k, v in base.items() if k != "held"},
             "year_mean": one_year.get("year_mean_excess_universe"),
             "year_se": one_year.get("year_se_excess_universe")}
 
@@ -1134,6 +1171,32 @@ def candidates(result: dict) -> str:
     return "\n".join(_candidates(result))
 
 
+SMALL_COMPANY_LIMITS = ("Limits: today's S&P 600 members only, and no join dates: companies that "
+                        "failed or were taken over are missing (which flatters the screen and the "
+                        "universe alike), and those that grew into the S&P 400 or 500 are missing "
+                        "too (the reverse). The liquidity check is skipped.")
+
+
+def small_company(result: dict) -> str:
+    """The ``## Small-company verdict`` section for a run over ``sp600`` alone (empty for any
+    other lists): the pass rule, ``magic_formula``'s sentence, then ``value``'s for information."""
+    if _indexes(result) != ["sp600"]:
+        return ""
+    lines = ["## Small-company verdict", "",
+             "Pass rule, fixed before any run: over the one-year hold, counting cohorts with at "
+             "least five picks, the `magic_formula` rule (the screen's top 30, which is what "
+             "becomes a candidate) supports adding `sp600` to `review.candidate_markets` only if "
+             "(1) it has at least 20 such cohorts in at least 7 different calendar years, (2) it "
+             "beat the equal-weight universe in at least 60% of them, (3) it averaged at least +2 "
+             "points over the universe and at least 0 over SPY, and (4) it averaged at least 0 "
+             "over the universe across the three-year hold.", ""]
+    for name, note in (("magic_formula", ""), ("value", " (for information)")):
+        by_hold = result["summary"].get(name) or {}
+        v = small_cap_verdict(by_hold.get(1) or _NO_SUMMARY, by_hold.get(3), name)
+        lines.append(f"- {v['sentence']}{note}")
+    return "\n".join(lines + ["", SMALL_COMPANY_LIMITS, ""])
+
+
 def _by_cohort(result: dict) -> list[str]:
     lines = ["## By cohort", ""]
     for name, by_hold in result["summary"].items():
@@ -1211,6 +1274,11 @@ def _coverage(result: dict) -> list[str]:
     return lines + [""]
 
 
+def _small_section(result: dict) -> list[str]:
+    section = small_company(result)
+    return [section] if section else []
+
+
 def markdown(result: dict) -> str:
     """The report: what was tested, the verdict, the buy-bar candidates, each rule by cohort, the sensitivity, the bar
     that bound and the coverage."""
@@ -1220,7 +1288,7 @@ def markdown(result: dict) -> str:
     lines = ["# Lane-rule backtest", "", f"Generated {result['generated']}. Nothing trades; "
              "no agent was called.", "",
              f"{cover}: non-US companies have no point-in-time filings.", ""]
-    lines += _tested(result) + [verdict(result)] + _candidates(result) + _by_cohort(result) + _sensitivity(result)
+    lines += _tested(result) + [verdict(result)] + _small_section(result) + _candidates(result) + _by_cohort(result) + _sensitivity(result)
     lines += _bound(result) + _coverage(result)
     return "\n".join(lines)
 

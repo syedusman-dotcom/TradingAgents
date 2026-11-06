@@ -71,6 +71,10 @@ review:
   # beats the index, and value has paid in Europe since 2021. Compounder candidates, holdings,
   # lanes.tickers and --tickers ignore this list. [] means every country.
   candidate_countries: [Sweden, Norway, Denmark, Finland, Germany, France, Netherlands, Switzerland, Italy, Spain, Ireland, Portugal, Austria, Belgium, UK]
+  # Market keys whose Magic Formula and dislocation candidates are allowed whatever their
+  # country, on top of candidate_countries. Add sp600 (US small caps) only if `backtest
+  # --indexes sp600` prints a small-company verdict that supports it.
+  candidate_markets: []
   analysts: [market, news, fundamentals]
   # Financial statements for the agents. yfinance: ~5 years with every line (debt,
   # interest, PP&E, buybacks, dividends). sec_edgar: ~20 years of top-line rows only.

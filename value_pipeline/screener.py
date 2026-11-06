@@ -232,7 +232,8 @@ def latest_screen(paths: Paths) -> Path | None:
 
 def top_candidates(paths: Paths, owned: set[str], n: int, compounders: int = 0,
                    dislocations: int = 0, inflections: int = 0, min_run_rate: float = 0.0,
-                   countries: list[str] | None = None) -> list[dict]:
+                   countries: list[str] | None = None,
+                   markets: list[str] | None = None) -> list[dict]:
     """The best-ranked, not-owned, not-FREEFALL tickers from the latest screen, then up to
     ``compounders`` compounder-hinted ones (best compounder return first: yield + earned growth +
     reversion at most 0), then up to ``dislocations`` dislocation-hinted ones (best expected
@@ -243,11 +244,13 @@ def top_candidates(paths: Paths, owned: set[str], n: int, compounders: int = 0,
     times its five-year average gives its place to the next name (a missing ratio passes; the
     hinted lanes ignore the filter; 0 turns it off). With ``countries`` the Magic Formula and
     dislocation picks come only from those countries (the screen's ``country`` column, matched
-    without regard to case; rank order is kept); the compounder and inflection picks ignore it."""
+    without regard to case; rank order is kept); the compounder and inflection picks ignore it.
+    With ``markets`` too, a row whose ``market`` is listed also qualifies, whatever its country
+    (an empty ``countries`` still means every country)."""
     df = _eligible(paths, owned)
     if df is None:
         return []
-    in_list = _in_countries(df, countries)
+    in_list = _in_countries(df, countries, markets)
     picks = _ranked(df[in_list], min_run_rate).head(n)
     for hint, count in (("compounder", compounders), ("dislocation", dislocations),
                         ("inflection", inflections)):
@@ -292,12 +295,18 @@ def _names(countries) -> set[str]:
     return {c.casefold() for c in normalise_countries(countries)}
 
 
-def _in_countries(df: pd.DataFrame, countries: list[str] | None) -> pd.Series:
-    """True for the rows in ``countries`` (all rows without a list or without a ``country`` column)."""
+def _in_countries(df: pd.DataFrame, countries: list[str] | None,
+                  markets: list[str] | None = None) -> pd.Series:
+    """True for the rows in ``countries`` or whose ``market`` is in ``markets`` (all rows without
+    a country list or without a ``country`` column)."""
     names = _names(countries)
     if not names or "country" not in df:
         return pd.Series(True, index=df.index)
-    return df["country"].map(lambda c: isinstance(c, str) and c.strip().casefold() in names).astype(bool)
+    keep = df["country"].map(lambda c: isinstance(c, str) and c.strip().casefold() in names).astype(bool)
+    listed = set(normalise_countries(markets))
+    if listed and "market" in df:
+        keep = keep | df["market"].isin(listed)
+    return keep
 
 
 def missing_countries(paths: Paths, countries: list[str] | None) -> list[str]:
@@ -314,13 +323,14 @@ def missing_countries(paths: Paths, countries: list[str] | None) -> list[str]:
 
 
 def run_rate_skips(paths: Paths, owned: set[str], n: int, min_run_rate: float,
-                   countries: list[str] | None = None) -> list[dict]:
+                   countries: list[str] | None = None,
+                   markets: list[str] | None = None) -> list[dict]:
     """The Magic Formula names ``top_candidates`` left out for a low run rate, in rank order:
     ``ticker`` and ``ttm_vs_5y_ebit``, only those ranked above the last pick."""
     df = _eligible(paths, owned)
     if df is None or min_run_rate <= 0 or "ttm_vs_5y_ebit" not in df:
         return []
-    df = df[_in_countries(df, countries)]
+    df = df[_in_countries(df, countries, markets)]
     picks = _ranked(df, min_run_rate).head(n)
     if picks.empty:
         return []

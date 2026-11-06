@@ -1564,3 +1564,75 @@ def test_write_suffixes_a_non_default_universe_and_the_page_keeps_the_default(tm
     backtest.write(paths, {**result, "indexes": ["sp500"]}, "2026-11-06")
     latest = backtest.latest_report(paths)
     assert latest == ("2026-11-05", default[0].read_text(encoding="utf-8"))
+
+
+# --- the small-company verdict ---------------------------------------------------------------
+
+def _small_failed(one=None, three=_THREE) -> list[int]:
+    v = backtest.small_cap_verdict(_one() if one is None else one, three, "magic_formula")
+    assert v["supports"] is (v["failed"] == [])
+    return v["failed"]
+
+
+@pytest.mark.unit
+def test_small_cap_verdict_passes_and_each_condition_fails_alone():
+    assert _small_failed() == []
+    assert _small_failed(_one(cohorts_min5=20, years_min5=7, beat_universe_min5=12)) == []
+    assert _small_failed(_one(cohorts_min5=19, beat_universe_min5=19)) == [1]
+    assert _small_failed(_one(years_min5=6)) == [1]
+    assert _small_failed(_one(beat_universe_min5=17)) == [2]
+    assert _small_failed(_one(mean_excess_universe_min5=0.0199)) == [3]
+    assert _small_failed(_one(mean_excess_spy_min5=-0.0001)) == [3]
+    assert _small_failed(_one(mean_excess_spy_min5=None)) == [3]
+    assert _small_failed(three={**_THREE, "mean_excess_universe_min5": -0.0001}) == [4]
+    assert _small_failed(three={**_THREE, "mean_excess_universe_min5": None}) == [4]
+    assert _small_failed(three=None) == [4]
+    assert _small_failed(three={"cohorts_min5": 0, "mean_excess_universe_min5": None}) == [4]
+
+
+@pytest.mark.unit
+def test_small_cap_verdict_shares_bar_verdicts_conditions():
+    for one, three in ((_one(), _THREE), (_one(years_min5=3), None),
+                       (_one(mean_excess_spy_min5=-0.01), _THREE)):
+        small = backtest.small_cap_verdict(one, three, "magic_formula")["failed"]
+        bar = backtest.bar_verdict(one, three, 0.0, "magic_formula")["failed"]
+        assert small == [n for n in bar if n != 5]
+
+
+@pytest.mark.unit
+def test_small_cap_verdict_sentences():
+    yes = backtest.small_cap_verdict(_one(), _THREE, "magic_formula")
+    assert yes["sentence"] == (
+        "magic_formula: 30 cohorts with five or more picks in 8 calendar years; beat the universe "
+        "in 20 of 30; mean one-year excess +3.00 points over the universe and +1.00 over SPY; "
+        "three-year +1.00: supports adding sp600 to review.candidate_markets.")
+    no = backtest.small_cap_verdict(_one(cohorts_min5=19, beat_universe_min5=19), None, "value")
+    assert no["failed"] == [1, 4]
+    assert no["sentence"] == (
+        "value: 19 cohorts with five or more picks in 8 calendar years; beat the universe in 19 "
+        "of 19; mean one-year excess +3.00 points over the universe and +1.00 over SPY; "
+        "three-year n/a: does not support adding sp600 to review.candidate_markets. Failed: "
+        "(1) fewer than 20 cohorts in 7 calendar years; (4) three-year mean excess under 0.")
+
+
+def _sp600_result() -> dict:
+    result = _fake_result()
+    result["indexes"] = ["sp600"]
+    return result
+
+
+@pytest.mark.unit
+def test_the_report_prints_the_small_company_section_for_an_sp600_run_only():
+    text = backtest.markdown(_sp600_result())
+    heads = [line for line in text.splitlines() if line.startswith("## ")]
+    assert heads[:3] == ["## What was tested", "## Verdict", "## Small-company verdict"]
+    section = backtest.small_company(_sp600_result())
+    assert section in text
+    assert "magic_formula: " in section and "for information" in section
+    assert "value: " in section and "review.candidate_markets" in section
+    assert "no join dates" in section and "today's S&P 600 members only" in section
+    for default in (_fake_result(), {**_fake_result(), "indexes": ["sp500", "sp400"]},
+                    {**_fake_result(), "indexes": ["sp500"]},
+                    {**_fake_result(), "indexes": ["sp600", "sp400"]}):
+        assert "Small-company verdict" not in backtest.markdown(default)
+        assert backtest.small_company(default) == ""

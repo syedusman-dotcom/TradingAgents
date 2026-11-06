@@ -223,3 +223,108 @@ def test_validate_config_still_rejects_a_bare_string_and_odd_entries():
         cfg["review"]["candidate_countries"] = bad
         with pytest.raises(ValueError, match=r"review\.candidate_countries"):
             validate_config(cfg)
+
+
+# --- candidate_markets -----------------------------------------------------------------------
+
+# (ticker, country, market, mf_position, hints)
+MARKET_ROWS = [
+    ("US1", "US", "sp500", 1, ""), ("SMC", "US", "sp600", 2, ""), ("SE1", "Sweden", "sto", 3, ""),
+    ("SMD", "US", "sp600", None, "dislocation"), ("USD", "US", "sp500", None, "dislocation"),
+]
+
+
+def _market_screen(paths):
+    df = pd.DataFrame([{"ticker": t, "country": c, "market": m, "mf_position": pos, "trend": "BASING",
+                        "lane_hint": h, "hints": h, "ttm_vs_5y_ebit": 1.0, "expected_return": 0.1}
+                       for t, c, m, pos, h in MARKET_ROWS])
+    paths.screens.mkdir(parents=True, exist_ok=True)
+    df.to_csv(paths.screens / "screen_2026-11-06.csv", index=False)
+
+
+def test_a_listed_market_admits_its_rows_whatever_the_country(tmp_path):
+    paths = Paths(tmp_path)
+    _market_screen(paths)
+    assert _t(top_candidates(paths, set(), 5, countries=["Sweden"])) == ["SE1"]
+    assert _t(top_candidates(paths, set(), 5, countries=["Sweden"], markets=["sp600"])) == ["SMC", "SE1"]
+    assert _t(top_candidates(paths, set(), 5, countries=["Sweden"], markets=[])) == ["SE1"]
+
+
+def test_an_unlisted_us_market_stays_out(tmp_path):
+    paths = Paths(tmp_path)
+    _market_screen(paths)
+    assert "US1" not in _t(top_candidates(paths, set(), 5, countries=["Sweden"], markets=["sp600"]))
+
+
+def test_empty_countries_with_markets_still_allows_every_country(tmp_path):
+    paths = Paths(tmp_path)
+    _market_screen(paths)
+    assert _t(top_candidates(paths, set(), 3, countries=[], markets=["sp600"])) == ["US1", "SMC", "SE1"]
+
+
+def test_dislocation_candidates_obey_the_markets_and_compounders_ignore_them(tmp_path):
+    paths = Paths(tmp_path)
+    _market_screen(paths)
+    got = _t(top_candidates(paths, set(), 0, dislocations=5, countries=["Sweden"], markets=["sp600"]))
+    assert got == ["SMD"]
+    assert _t(top_candidates(paths, set(), 0, dislocations=5, countries=["Sweden"])) == []
+
+
+def test_run_rate_skips_agree_on_the_markets(tmp_path):
+    paths = Paths(tmp_path)
+    df = pd.DataFrame([
+        {"ticker": "A", "country": "US", "market": "sp600", "mf_position": 1, "trend": "BASING",
+         "ttm_vs_5y_ebit": 0.3},
+        {"ticker": "B", "country": "US", "market": "sp500", "mf_position": 2, "trend": "BASING",
+         "ttm_vs_5y_ebit": 0.3},
+        {"ticker": "C", "country": "Sweden", "market": "sto", "mf_position": 3, "trend": "BASING",
+         "ttm_vs_5y_ebit": 1.0}])
+    paths.screens.mkdir(parents=True, exist_ok=True)
+    df.to_csv(paths.screens / "screen_2026-11-06.csv", index=False)
+    assert _t(run_rate_skips(paths, set(), 1, 0.8, ["Sweden"])) == []
+    assert _t(run_rate_skips(paths, set(), 1, 0.8, ["Sweden"], markets=["sp600"])) == ["A"]
+
+
+def test_validate_config_checks_the_markets():
+    cfg = copy.deepcopy(DEFAULTS)
+    assert cfg["review"]["candidate_markets"] == []
+    for good in ([], ["sp600"], ["sp600", "sto"]):
+        cfg["review"]["candidate_markets"] = good
+        validate_config(cfg)
+    for bad in (["sp601"], "sp600", [3], ["sp600", ""]):
+        cfg["review"]["candidate_markets"] = bad
+        with pytest.raises(ValueError, match=r"review\.candidate_markets"):
+            validate_config(cfg)
+    assert load_config()["review"]["candidate_markets"] == []
+
+
+def test_preview_carries_the_markets(tmp_path):
+    paths = Paths(tmp_path)
+    _portfolio(paths)
+    _market_screen(paths)
+    cfg = _cfg(["Sweden"])
+    cfg["review"]["candidate_markets"] = ["sp600"]
+    plan = review.preview(paths, cfg)
+    assert plan["candidate_markets"] == ["sp600"]
+    assert {"SMC", "SE1"} <= set(plan["tickers"]) and "US1" not in plan["tickers"]
+    assert review.preview(paths, _cfg(["Sweden"]))["candidate_markets"] == []
+    assert review.preview(paths, cfg, only=["AAA"])["candidate_markets"] == []
+
+
+@pytest.mark.parametrize("markets, line", [
+    (["sp600"], "Value candidates from: Sweden; markets: sp600 (review.candidate_countries, "
+                "review.candidate_markets); compounder candidates from every market."),
+    ([], "Value candidates from: Sweden (review.candidate_countries); "
+         "compounder candidates from every market.")])
+def test_dry_run_prints_the_markets(tmp_path, capsys, monkeypatch, markets, line):
+    paths = Paths(tmp_path)
+    _portfolio(paths)
+    _market_screen(paths)
+    monkeypatch.setattr(market_data, "latest_price", lambda t: 50.0)
+    monkeypatch.setattr(market_data, "quote_fx", lambda t: ("USD", 1.0))
+    monkeypatch.setattr(market_data, "closes_between", lambda *a, **k: pd.Series(dtype=float))
+    monkeypatch.setattr(review, "_screen_rows", lambda paths: {})
+    cfg = _cfg(["Sweden"])
+    cfg["review"]["candidate_markets"] = markets
+    review.run(paths, cfg, yes=True, dry_run=True, today="2026-11-06")
+    assert line in capsys.readouterr().out

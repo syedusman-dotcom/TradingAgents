@@ -5,7 +5,7 @@
 <p>Estimated cost: <b>${{ "{:,.2f}".format(0 if dry_run else plan.estimate) }}</b>
   <span class="muted">(${{ "{:,.2f}".format(plan.cost_per_run) }}/run, limit ${{ "{:,.2f}".format(plan.limit) }})</span></p>
 {% if plan.dropped %}<p class="muted">{{ plan.dropped }} candidate(s) left out to stay under the cap; raise it in <a href="/settings">Settings</a> to include them.</p>{% endif %}
-{% if plan.candidate_countries %}<p class="muted">Value candidates from: {{ plan.candidate_countries | join(", ") }} (review.candidate_countries); compounder candidates from every market.</p>{% endif %}
+{% if plan.candidate_countries %}<p class="muted">Value candidates from: {{ plan.candidate_countries | join(", ") }}{% if plan.candidate_markets %}; markets: {{ plan.candidate_markets | join(", ") }} (review.candidate_countries, review.candidate_markets){% else %} (review.candidate_countries){% endif %}; compounder candidates from every market.</p>{% endif %}
 {% if plan.missing_countries %}<p class="muted">No screen rows from: {{ plan.missing_countries | join(", ") }} (check the spelling in review.candidate_countries).</p>{% endif %}
 {% if not plan.tickers %}
 <p class="error">Nothing to review: no holdings and no screen candidates. Run a screen first.</p>
