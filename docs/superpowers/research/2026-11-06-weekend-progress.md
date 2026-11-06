@@ -125,3 +125,5 @@ Report `~/Desktop/ValueTrading/reports/Reliable LLM equity analysis.md` (sent to
 Ruling: items (1), (2) and (10) are buildable this weekend with pre-fixed scoring rules and no bar change; (4) and (5) are prompt/graph changes to the agents and go to D1 as recommendations with a measurement plan, not applied blind. Cost if wrong: a cheap improvement delayed.
 
 ### S3 rerun: the live Wikipedia page lost its changes table (the first run found 0 leavers); `removed_dates` now reads the pinned 2025-12-23 revision (commit on main); rerun started 01:12 CET (task bw36oj1a8).
+
+## F7 — Nordic releases and insiders as vendors (running: implementer af17fcc611e8be8e9 on opus; brief `weekend/f7-brief.md`). Started 2026-11-07 01:20 CET.
