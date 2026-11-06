@@ -826,26 +826,41 @@ CHANGES_URL = "https://en.wikipedia.org/w/index.php?title=List_of_S%26P_500_comp
 
 
 def removed_dates(fetch: Callable[[str], str] | None = None) -> dict[str, dict]:
-    """Ticker (Yahoo's spelling) -> ``{"left": ISO date, "reason": text}`` for every ticker in
-    the ``Removed`` column of the changes table at ``CHANGES_URL`` (a pinned page revision), the
-    latest date when a name was removed more than once; rows without a readable date or a
-    removed ticker are left out, and ``{}`` (logged) when the page or table cannot be read."""
+    """Ticker (Yahoo's spelling) -> ``{"left", "reason", "name", "intervals"}`` for every ticker in
+    the ``Removed`` column of the changes table at ``CHANGES_URL`` (a pinned page revision):
+    ``left`` (ISO), ``reason`` and ``name`` (the ``Security`` cell) are the latest removal's, and
+    ``intervals`` holds ``[added, removed)`` per removal, ``added`` the ticker's most recent entry in
+    the ``Added`` column before that removal (None when the table has none, before the first
+    cohort), oldest first. Rows without a readable date are left out, and ``{}`` (logged) when the
+    page or table cannot be read."""
     try:
         table = pd.read_html(StringIO((fetch or _wiki_html)(CHANGES_URL)))[1]
         top = table.columns.get_level_values(0)
         day = table.loc[:, top.isin(("Date", "Effective Date"))].iloc[:, 0]
-        ticker = table["Removed"]["Ticker"]
+        removed, security = table["Removed"]["Ticker"], table["Removed"]["Security"]
+        joined = table["Added"]["Ticker"]
         reason = table.loc[:, top == "Reason"].iloc[:, 0]
-        left = pd.to_datetime(day.astype(str), errors="coerce")
+        when = pd.to_datetime(day.astype(str), errors="coerce")
+
+        def symbol(cell) -> str:
+            return "" if pd.isna(cell) else str(cell).strip().replace(".", "-")
+
+        adds: dict[str, list[str]] = {}
+        for t, d in zip(joined, when, strict=True):
+            if symbol(t) and pd.notna(d):
+                adds.setdefault(symbol(t), []).append(d.date().isoformat())
         out: dict[str, dict] = {}
-        for t, d, why in zip(ticker, left, reason, strict=True):
-            if pd.isna(t) or pd.isna(d) or not str(t).strip():
-                continue
-            name = str(t).strip().replace(".", "-")
-            if name not in out or d.date().isoformat() > out[name]["left"]:
-                out[name] = {"left": d.date().isoformat(),
-                             "reason": "" if pd.isna(why) else str(why)}
-        return out
+        for t, d, sec, why in sorted(
+                ((symbol(t), d, sec, why) for t, d, sec, why in zip(removed, when, security, reason,
+                                                                   strict=True)
+                 if symbol(t) and pd.notna(d)), key=lambda r: r[1]):
+            left = d.date().isoformat()
+            start = max((a for a in adds.get(t, []) if a < left), default=None)
+            entry = out.setdefault(t, {"intervals": []})
+            entry.update(left=left, reason="" if pd.isna(why) else str(why),
+                         name="" if pd.isna(sec) else str(sec).strip())
+            entry["intervals"].append([start, left])
+        return {t: {k: e[k] for k in ("left", "reason", "name", "intervals")} for t, e in out.items()}
     except Exception as exc:  # noqa: BLE001 - the leavers are optional; callers fail open
         log.warning("no S&P 500 leave dates: %s", exc)
         return {}
@@ -884,15 +899,26 @@ def _universe(paths: Paths, cfg: dict, tickers: list[str] | None, universe_fn) -
             for t, s, m in zip(uni["ticker"], uni["sector"], markets, strict=True)]
 
 
+def _member_on(ticker: str, cohort: str, added: dict, left: dict | None = None) -> bool:
+    """Whether the ticker was an S&P 500 member on the cohort date: not joined after it and, for a
+    ``left`` entry from ``removed_dates``, inside one of its ``[added, removed)`` intervals (an
+    entry without intervals: any time before its leave date)."""
+    if added.get(ticker, "") > cohort:
+        return False
+    if not left:
+        return True
+    intervals = left.get("intervals") or [[None, left["left"]]]
+    return any((start is None or start <= cohort) and cohort < end for start, end in intervals)
+
+
 def _ticker_rows(ticker: str, sector, market, store: dict, hist, cohorts: list[str], rates: dict,
                  added: dict, cfg: dict, left: dict | None = None,
                  ) -> tuple[dict[str, tuple[dict, tuple]], dict[str, str]]:
-    """The ticker's snapshot per cohort it belonged to (not joined the S&P 500 after it and, for
-    a ``left`` entry from ``removed_dates``, not gone from it by then), and per cohort whose
+    """The ticker's snapshot per cohort it belonged to (``_member_on``), and per cohort whose
     snapshot raised, the error (logged): one odd cohort keeps the others."""
     out, errors = {}, {}
     for cohort in cohorts:
-        if added.get(ticker, "") > cohort or (left and left["left"] <= cohort):
+        if not _member_on(ticker, cohort, added, left):
             continue
         try:
             extra = {"market": market} if market else {}
@@ -907,11 +933,14 @@ def _ticker_rows(ticker: str, sector, market, store: dict, hist, cohorts: list[s
 
 
 def _load(ticker: str, paths: Paths, cfg: dict, fetch: bool, refresh: bool,
-          stale: tuple[str | None, str | None] = (None, None)):
+          stale: tuple[str | None, str | None] = (None, None), need_name: bool = False):
     """The ticker's fact store and price history (either None when missing); ``stale`` is the
-    ``stale_before`` of the facts and of the prices. Throttles after a Yahoo fetch."""
+    ``stale_before`` of the facts and of the prices. ``need_name`` (a leaver) refetches a cached
+    store kept before stores carried the EDGAR entity name. Throttles after a Yahoo fetch."""
     facts_stale, prices_stale = stale
     store = facts_for(ticker, paths, fetch=fetch, refresh=refresh, stale_before=facts_stale)
+    if need_name and fetch and store is not None and "name" not in store:
+        store = facts_for(ticker, paths, fetch=True, refresh=True)
     path = _price_path(ticker, paths)
     yahoo = fetch and _needs_fetch(_read_prices(path) if path.exists() else None, refresh,
                                    prices_stale)
@@ -956,10 +985,14 @@ def _join_dates(paths: Paths, fetch: bool, added_fn) -> dict[str, str]:
                          lambda: (added_fn or added_dates)(), "join-date")
 
 
+# v2: the entries carry the Security name and the membership intervals; an older cache has neither.
+LEAVE_DATES_CACHE = "removed_dates_v2.json"
+
+
 def _leave_dates(paths: Paths, fetch: bool, removed_fn) -> dict[str, dict]:
-    """The S&P 500 leave dates and reasons, cached at ``cache/backtest/removed_dates.json`` like
-    the join dates."""
-    return _cached_dates(paths.cache / "backtest" / "removed_dates.json", fetch,
+    """The S&P 500 leave dates and reasons, cached at ``cache/backtest/removed_dates_v2.json``
+    like the join dates."""
+    return _cached_dates(paths.cache / "backtest" / LEAVE_DATES_CACHE, fetch,
                          lambda: (removed_fn or removed_dates)(), "leave-date")
 
 
@@ -1014,13 +1047,37 @@ def _bar_verdicts(summary: dict) -> dict:
 
 
 def _leavers(paths: Paths, fetch: bool, removed_fn, members: list[tuple], added: dict,
-             tickers: list[str] | None) -> dict[str, dict]:
-    """The names that left the S&P 500 and are not members today: not in ``members``, and not
-    rejoined (a join date after the leave date keeps today's row), narrowed to ``tickers``."""
+             tickers: list[str] | None, cohorts: list[str]) -> dict[str, dict]:
+    """The names that left the S&P 500 after the first cohort and are not members today: not in
+    ``members``, and not rejoined (a join date after the leave date keeps today's row), narrowed
+    to ``tickers``. No leave dates at all (no cache and no fetch, or an empty fetch) raises
+    ``RuntimeError``: a "leavers" run without them would only look survivorship-corrected."""
+    removed = _leave_dates(paths, fetch, removed_fn)
+    if not removed:
+        raise RuntimeError(
+            "--leavers: no S&P 500 leave dates (the changes table could not be read and nothing "
+            "is cached); run with fetching on, or without --leavers")
     held = {t for t, _, _ in members}
     wanted = {t.upper() for t in tickers} if tickers else None
-    return {t: v for t, v in _leave_dates(paths, fetch, removed_fn).items()
-            if t not in held and added.get(t, "") <= v["left"] and (wanted is None or t in wanted)}
+    first = cohorts[0] if cohorts else ""
+    return {t: v for t, v in removed.items()
+            if t not in held and added.get(t, "") <= v["left"] and v["left"] > first
+            and (wanted is None or t in wanted)}
+
+
+def _first_word(name: str) -> str:
+    words = [w for w in re.findall(r"[a-z0-9]+", (name or "").lower()) if w != "the"]
+    return words[0] if words else ""
+
+
+def _reused(entry: dict, store: dict, hist: pd.DataFrame) -> bool:
+    """Whether a leaver's ticker now resolves to another issuer: the EDGAR entity name kept in the
+    fact store does not share the removed security's first word (or is not kept), or the price
+    history starts on or after the leave date."""
+    edgar, removed = _first_word(store.get("name") or ""), _first_word(entry.get("name") or "")
+    if not edgar or not removed or edgar != removed:
+        return True
+    return hist.empty or hist["date"].iloc[0] >= pd.Timestamp(entry["left"])
 
 
 def run(paths: Paths, cfg: dict, today: date | None = None, tickers: list[str] | None = None,
@@ -1043,7 +1100,7 @@ def run(paths: Paths, cfg: dict, today: date | None = None, tickers: list[str] |
     members = _universe(paths, cfg, tickers, universe_fn or _read_universe)
     # Join dates are the S&P 500's: a run without that index has none.
     added = _join_dates(paths, fetch, added_fn) if "sp500" in cfg["universe"]["indexes"] else {}
-    gone = _leavers(paths, fetch, removed_fn, members, added, tickers) \
+    gone = _leavers(paths, fetch, removed_fn, members, added, tickers, cohorts) \
         if leavers and "sp500" in cfg["universe"]["indexes"] else None
     members += [(t, None, "sp500_left") for t in gone or {}]
     stale = _stale_before(cohorts, holds, today)
@@ -1062,7 +1119,8 @@ def run(paths: Paths, cfg: dict, today: date | None = None, tickers: list[str] |
         if progress:
             progress(i, len(members), ticker)
         try:
-            store, hist = _load(ticker, paths, cfg, fetch, refresh, stale)
+            store, hist = _load(ticker, paths, cfg, fetch, refresh, stale,
+                                need_name=bool(gone) and ticker in gone)
             if store is None or hist is None:
                 skipped[ticker] = "no EDGAR statements" if store is None else "no price history"
                 if gone and ticker in gone:
@@ -1071,6 +1129,11 @@ def run(paths: Paths, cfg: dict, today: date | None = None, tickers: list[str] |
                     gone_reasons[reason] = gone_reasons.get(reason, 0) + 1
                 continue
             if gone and ticker in gone:
+                if _reused(gone[ticker], store, hist):
+                    skipped[ticker] = "ticker reused"
+                    counts["no_facts"] += 1
+                    gone_reasons["ticker reused"] = gone_reasons.get("ticker reused", 0) + 1
+                    continue
                 counts["included"] += 1
             snaps, errors = _ticker_rows(ticker, sector, market, store["facts"], hist, cohorts, rates,
                                          added, cfg, left=(gone or {}).get(ticker))
@@ -1081,8 +1144,7 @@ def run(paths: Paths, cfg: dict, today: date | None = None, tickers: list[str] |
         if errors:
             cohort, name = next(iter(errors.items()))
             skipped[ticker] = f"snapshot error ({name}) at {cohort}"
-            left = (gone or {}).get(ticker, {}).get("left", "9999")
-            attempted = sum(added.get(ticker, "") <= c < left for c in cohorts)
+            attempted = sum(_member_on(ticker, c, added, (gone or {}).get(ticker)) for c in cohorts)
             if len(errors) == attempted:
                 continue                  # every cohort raised: skipped, not counted
         with_data += 1
@@ -1195,7 +1257,8 @@ def _leavers_sentence(leavers: dict) -> str:
             "as members until their leave date; "
             f"{missing} could not be (no EDGAR facts: {leavers['no_facts']}; no price history: "
             f"{leavers['no_prices']}){mostly}. Leavers carry no sector, so the sector "
-            "exclusions did not apply to them.")
+            "exclusions did not apply to them. Removals after 2025-12-22 are not in the table, so "
+            "names that left since are still missing.")
 
 
 def _tested(result: dict) -> list[str]:

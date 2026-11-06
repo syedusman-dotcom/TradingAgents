@@ -75,6 +75,31 @@ def test_pick_outcome_runs_a_year_from_the_fill():
     assert out["excess_fill"] == pytest.approx(110 / 88 - 1 - 0.10)
 
 
+def test_pick_outcome_ending_early_is_unmeasured():
+    hist = _hist(_dip_on(5, 88, 110), days=300)          # the year from the fill runs past the data
+    out = pullback.pick_outcome(hist, _hist(_flat_then(110)), {"start_date": START}, 0.10)
+    assert out["filled"] is True and out["excess_fill"] is None
+    spy_short = pullback.pick_outcome(_hist(_dip_on(5, 88, 110)), _hist(_flat_then(110), days=300),
+                                      {"start_date": START}, 0.10)
+    assert spy_short["excess_fill"] is None
+
+
+def test_run_measures_against_the_configured_benchmark(tmp_path, monkeypatch):
+    paths = Paths(tmp_path)
+    other = tmp_path / "elsewhere"
+    _write_picks(other, "mine_picks.csv", ["2020-03-31,AAA,compounder,100,1,2020-01-01,2021-01-01,0.1,0.05,0.05"])
+    histories = {"AAA": _hist(_dip_on(5, 88, 110)), "VOO": _hist(_flat_then(110))}
+    asked = []
+
+    def fake(t, p, fetch=True, **kw):
+        asked.append(t)
+        return histories.get(t)
+
+    monkeypatch.setattr(backtest, "price_history", fake)
+    _, result = pullback.run(paths, other / "mine_picks.csv", benchmark="VOO")
+    assert asked[0] == "VOO" and result["compounder"][0.10]["n"] == 1
+
+
 def test_pick_outcome_unfilled_carries_none():
     out = pullback.pick_outcome(_hist(_flat_then(110)), _hist(_flat_then(110)),
                                 {"start_date": START}, 0.10)
@@ -191,6 +216,8 @@ def test_run_uses_the_newest_picks_and_ignores_sp500(tmp_path, monkeypatch):
     _write_picks(folder, "backtest_2026-10-20_picks.csv", [row, row.replace("AAA", "BBB")])
     _write_picks(folder, "backtest_2026-11-01_sp500_picks.csv", [row])
     _write_picks(folder, "backtest_2026-11-02_sp600_picks.csv", [row])
+    _write_picks(folder, "backtest_2026-11-03_leavers_picks.csv", [row])
+    _write_picks(folder, "backtest_2026-11-04_sp400_picks.csv", [row])
     histories = {"AAA": _hist(_dip_on(5, 88, 110)), "BBB": _hist(lambda i: 100),
                  "SPY": _hist(_flat_then(110))}
     asked = []

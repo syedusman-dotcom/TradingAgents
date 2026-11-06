@@ -197,8 +197,11 @@ def cmd_backtest(args, paths: Paths, cfg) -> None:
         if i % 50 == 0 or i == n:
             console.print(f"{i}/{n} tickers ({ticker})")
 
-    result = backtest.run(paths, cfg, tickers=tickers, refresh=args.refresh,
-                          fetch=not args.no_fetch, progress=progress, leavers=args.leavers)
+    try:
+        result = backtest.run(paths, cfg, tickers=tickers, refresh=args.refresh,
+                              fetch=not args.no_fetch, progress=progress, leavers=args.leavers)
+    except RuntimeError as exc:      # --leavers without any leave dates
+        raise SystemExit(str(exc)) from exc
     md, csv = backtest.write(paths, result, result["generated"])
     console.print(Markdown(backtest.verdict(result)))
     console.print(Markdown(backtest.candidates(result)))
@@ -249,7 +252,7 @@ def cmd_momentum_backtest(args, paths: Paths, cfg) -> None:
 
 
 def cmd_pullback_backtest(args, paths: Paths, cfg) -> None:
-    out, result = pullback.run(paths, args.picks)
+    out, result = pullback.run(paths, args.picks, benchmark=cfg["backtest"]["benchmark"])
     console.print(pullback.verdict(result)["sentence"])
     console.print(f"\nSaved {out}", soft_wrap=True)
 

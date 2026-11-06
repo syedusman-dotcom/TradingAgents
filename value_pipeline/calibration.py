@@ -290,7 +290,8 @@ def brier_view(rs: list[dict], scores: dict) -> list[dict]:
         if b:
             text = b["reading"]
         else:
-            n = max(sum(1 for r in rs if r.get(f"h{h}") and r.get(leg) is not None
+            # Both legs need the rows, so the shorter one is how far along the reading is.
+            n = min(sum(1 for r in rs if r.get(f"h{h}") and r.get(leg) is not None
                         and r.get(f"{leg}_probability") is not None) for leg in ("bear", "bull"))
             text = f"not yet readable ({n} of {MIN_BRIER_ROWS} at {h} days)"
         view.append({"label": label, "text": text})

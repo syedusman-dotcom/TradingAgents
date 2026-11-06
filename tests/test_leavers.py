@@ -49,9 +49,25 @@ def test_removed_dates_reads_the_changes_table():
         return CHANGES_HTML
 
     assert backtest.removed_dates(fetch) == {
-        "OLD": {"left": "2026-10-01", "reason": "Market capitalization change."},
-        "BRK-B": {"left": "2024-09-23", "reason": "Acquired by Someone Else."}}
+        "OLD": {"left": "2026-10-01", "reason": "Market capitalization change.", "name": "OLD Inc",
+                "intervals": [[None, "2015-06-30"], [None, "2026-10-01"]]},
+        "BRK-B": {"left": "2024-09-23", "reason": "Acquired by Someone Else.", "name": "BRK.B Inc",
+                  "intervals": [[None, "2024-09-23"]]}}
     assert urls == [backtest.CHANGES_URL]
+
+
+def test_removed_dates_give_each_removal_its_most_recent_add():
+    html = _changes_html([
+        ("May 1, 2023", "", "TWICE", "Second removal."),
+        ("March 19, 2018", "TWICE", "", "Rejoined."),
+        ("June 30, 2015", "", "TWICE", "First removal."),
+        ("April 2, 2012", "TWICE", "", "First add."),
+        ("March 5, 2018", "LATE", "", "Joined."),
+        ("July 1, 2021", "", "LATE", "Left."),
+    ])
+    out = backtest.removed_dates(lambda url: html)
+    assert out["TWICE"]["intervals"] == [["2012-04-02", "2015-06-30"], ["2018-03-19", "2023-05-01"]]
+    assert out["LATE"]["intervals"] == [["2018-03-05", "2021-07-01"]]
 
 
 def test_removed_dates_reads_the_pinned_revision_and_either_date_header():
@@ -61,7 +77,8 @@ def test_removed_dates_reads_the_pinned_revision_and_either_date_header():
         seen.append(url)
         return _changes_html([("May 5, 2020", "A", "GONE", "Acquired.")], date_header="Date")
 
-    assert backtest.removed_dates(fetch) == {"GONE": {"left": "2020-05-05", "reason": "Acquired."}}
+    assert backtest.removed_dates(fetch) == {"GONE": {"left": "2020-05-05", "reason": "Acquired.",
+                                                      "name": "GONE Inc", "intervals": [[None, "2020-05-05"]]}}
     assert seen == [backtest.CHANGES_URL]
 
 
@@ -76,7 +93,7 @@ def test_removed_dates_is_empty_when_the_page_cannot_be_read():
 
 def test_leave_dates_cache(tmp_path):
     paths = Paths(tmp_path / "data")
-    cache = paths.cache / "backtest" / "removed_dates.json"
+    cache = paths.cache / "backtest" / backtest.LEAVE_DATES_CACHE
     left = {"OLD": {"left": "2024-01-02", "reason": "acquired"}}
     assert backtest._leave_dates(paths, False, lambda: pytest.fail("no fetch")) == {}
     assert backtest._leave_dates(paths, True, lambda: left) == left
@@ -98,12 +115,45 @@ def test_ticker_rows_skip_cohorts_on_or_after_the_leave_date():
     assert list(kept) == cohorts
 
 
+def test_ticker_rows_keep_a_leaver_to_its_membership_intervals():
+    cohorts = ["2022-06-30", "2023-06-30", "2024-06-30"]
+    rates = dict.fromkeys(cohorts, 0.09)
+    args = ("OLD", None, None, _e2e_store(), _e2e_hist(), cohorts, rates, {}, _bt_cfg())
+    # Joined in 2023 and left in 2024: not a member in 2022, before it joined.
+    joined = {"left": "2024-01-01", "reason": "x", "intervals": [["2023-01-01", "2024-01-01"]]}
+    assert list(backtest._ticker_rows(*args, left=joined)[0]) == ["2023-06-30"]
+    # Left in 2022, back in 2024 and left again: the gap between is not membership.
+    gap = {"left": "2025-01-01", "reason": "x",
+           "intervals": [[None, "2022-12-01"], ["2024-03-01", "2025-01-01"]]}
+    assert list(backtest._ticker_rows(*args, left=gap)[0]) == ["2022-06-30", "2024-06-30"]
+
+
+def test_leavers_gone_before_the_first_cohort_are_not_loaded(tmp_path):
+    paths = Paths(tmp_path / "data")
+    removed = {"EARLY": {"left": "2001-03-01", "reason": "x"}, "LATER": {"left": "2023-01-10", "reason": "y"}}
+    gone = backtest._leavers(paths, True, lambda: removed, [], {}, None, ["2015-06-30", "2016-06-30"])
+    assert list(gone) == ["LATER"]
+
+
 LONG = "Acquired by A Very Large Company Incorporated Today."
-REMOVED = {"LEFT": {"left": "2023-01-10", "reason": "Merged."},
-           "GONE": {"left": "2023-01-10", "reason": LONG},
-           "LOST": {"left": "2023-01-10", "reason": "Bankruptcy."},
-           "AAA": {"left": "2023-01-10", "reason": "Left and rejoined."},
-           "BACK": {"left": "2022-12-01", "reason": "Left and rejoined."}}
+
+
+def _gone(left, reason, name):
+    return {"left": left, "reason": reason, "name": name, "intervals": [[None, left]]}
+
+
+REMOVED = {"LEFT": _gone("2023-01-10", "Merged.", "Left Industries Inc."),
+           "GONE": _gone("2023-01-10", LONG, "Gone Co"),
+           "LOST": _gone("2023-01-10", "Bankruptcy.", "Lost Corp"),
+           "AAA": _gone("2023-01-10", "Left and rejoined.", "A Inc"),
+           "BACK": _gone("2022-12-01", "Left and rejoined.", "Back Inc")}
+
+
+def _name_store(paths, ticker, name):
+    """Give a cached fact store the EDGAR entity name ``facts_for`` keeps."""
+    path = paths.cache / "backtest" / "facts" / f"{ticker}.json"
+    store = json.loads(path.read_text(encoding="utf-8"))
+    path.write_text(json.dumps({**store, "name": name}), encoding="utf-8")
 
 
 def _setup(tmp_path, monkeypatch):
@@ -115,10 +165,12 @@ def _setup(tmp_path, monkeypatch):
         _write_caches(paths, t, _e2e_store(), _e2e_hist())
     _write_caches(paths, "GONE", hist=_e2e_hist())
     _write_caches(paths, "LOST", store=_e2e_store())
+    for t, name in (("LEFT", "LEFT INDUSTRIES INC"), ("BACK", "Back Inc"), ("LOST", "Lost Corp")):
+        _name_store(paths, t, name)
     cache = paths.cache / "backtest"
     (cache / "added_dates.json").write_text(
         json.dumps({**_e2e_added(), "BACK": "2023-03-01"}), encoding="utf-8")
-    (cache / "removed_dates.json").write_text(json.dumps(REMOVED), encoding="utf-8")
+    (cache / backtest.LEAVE_DATES_CACHE).write_text(json.dumps(REMOVED), encoding="utf-8")
     monkeypatch.setattr(backtest, "added_dates", _no_wiki)
     monkeypatch.setattr(backtest, "removed_dates", _no_wiki)
     monkeypatch.setattr(backtest.market_data, "throttle", lambda s: pytest.fail("no Yahoo fetch"))
@@ -148,6 +200,49 @@ def test_run_adds_leavers_until_their_leave_date(tmp_path, monkeypatch):
     assert "BACK" not in result["skipped"] and "LEFT" not in result["skipped"]
 
 
+def test_a_leaver_whose_ticker_now_names_another_issuer_is_not_replayed(tmp_path, monkeypatch):
+    paths, cfg = _setup(tmp_path, monkeypatch)
+    _name_store(paths, "LEFT", "Newco Holdings Inc")        # the symbol was reused
+    result = _run(paths, cfg, leavers=True)
+    assert result["leavers"]["included"] == 0 and result["leavers"]["no_facts"] == 2
+    assert result["leavers"]["reasons"]["ticker reused"] == 1
+    assert result["skipped"]["LEFT"] == "ticker reused"
+    assert result["rows_per_cohort"] == {"2022-06-30": 1, "2023-06-30": 2}
+
+
+def test_a_leaver_whose_prices_start_after_it_left_is_not_replayed(tmp_path, monkeypatch):
+    paths, cfg = _setup(tmp_path, monkeypatch)
+    hist = _e2e_hist()
+    _write_caches(paths, "LEFT", hist=hist[hist["date"] > "2023-02-01"].reset_index(drop=True))
+    result = _run(paths, cfg, leavers=True)
+    assert result["skipped"]["LEFT"] == "ticker reused" and result["leavers"]["included"] == 0
+
+
+def test_leavers_without_any_leave_dates_raise(tmp_path, monkeypatch):
+    paths, cfg = _setup(tmp_path, monkeypatch)
+    (paths.cache / "backtest" / backtest.LEAVE_DATES_CACHE).unlink()
+    with pytest.raises(RuntimeError, match="leave dates"):
+        _run(paths, cfg, leavers=True)
+    monkeypatch.setattr(backtest, "removed_dates", lambda fetch=None: {})     # an empty fetch
+    monkeypatch.setattr(backtest, "_join_dates", lambda *a: _e2e_added())
+    with pytest.raises(RuntimeError, match="leave dates"):
+        backtest.run(paths, cfg, today=date(2024, 10, 24), fetch=True, universe_fn=_e2e_universe,
+                     leavers=True, removed_fn=lambda: {}, tickers=["NONE"])
+
+
+def test_the_cli_reports_missing_leave_dates_and_exits_non_zero(tmp_path, monkeypatch, capsys):
+    from value_pipeline import cli
+
+    def no_dates(*a, **kw):
+        raise RuntimeError("--leavers: no S&P 500 leave dates")
+
+    monkeypatch.setattr(cli.backtest, "run", no_dates)
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["--data-dir", str(tmp_path / "data"), "backtest", "--leavers", "--no-fetch"])
+    assert exc.value.code not in (0, None)
+    assert "no S&P 500 leave dates" in str(exc.value.code) + capsys.readouterr().out
+
+
 def test_leavers_need_the_sp500_in_the_lists(tmp_path, monkeypatch):
     paths, cfg = _setup(tmp_path, monkeypatch)
     cfg["universe"]["indexes"] = ["sp400"]
@@ -162,7 +257,8 @@ def test_the_report_names_the_leavers_and_the_file_says_so(tmp_path, monkeypatch
     assert ("Leavers: 1 names that left the S&P 500 since 2013 were added as members until "
             "their leave date; 2 could not be (no EDGAR facts: 1; no price history: 1), mostly "
             f"{LONG.lower()[:40]}, bankruptcy. Leavers carry no sector, so the sector "
-            "exclusions did not apply to them.") in tested
+            "exclusions did not apply to them. Removals after 2025-12-22 are not in the table, so "
+            "names that left since are still missing.") in tested
     md, csv = backtest.write(paths, result, "2026-11-07")
     assert md.name == "backtest_2026-11-07_leavers.md"
     assert csv.name == "backtest_2026-11-07_leavers_picks.csv"
@@ -171,3 +267,20 @@ def test_the_report_names_the_leavers_and_the_file_says_so(tmp_path, monkeypatch
     plain = _fake_result()
     assert "Leavers:" not in backtest.markdown(plain)
     assert backtest.write(paths, plain, "2026-11-08")[0].name == "backtest_2026-11-08.md"
+
+
+def test_a_leavers_store_without_the_edgar_name_is_refetched(tmp_path, monkeypatch):
+    calls = []
+
+    def facts(ticker, paths, fetch=True, refresh=False, stale_before=None):
+        calls.append(refresh)
+        return {"facts": {}, **({"name": "Left Inc"} if refresh else {})}
+
+    monkeypatch.setattr(backtest, "facts_for", facts)
+    monkeypatch.setattr(backtest, "price_history", lambda *a, **k: None)
+    monkeypatch.setattr(backtest.market_data, "throttle", lambda s: None)
+    store, _ = backtest._load("LEFT", Paths(tmp_path / "data"), _bt_cfg(), False, False, need_name=True)
+    assert calls == [False] and "name" not in store            # no fetch: the cache as it is
+    calls.clear()
+    store, _ = backtest._load("LEFT", Paths(tmp_path / "data"), _bt_cfg(), True, False, need_name=True)
+    assert calls == [False, True] and store["name"] == "Left Inc"

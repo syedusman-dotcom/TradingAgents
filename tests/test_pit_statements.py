@@ -320,6 +320,7 @@ def test_facts_for_caches_and_fails_open(tmp_path, monkeypatch):
     assert calls == []
     got = pit.facts_for("SYN", paths)
     assert got["cik"] == "0000000001" and got["fetched_at"]
+    assert got["name"] == "Synthetic"          # EDGAR's entity name: a leaver's ticker is checked on it
     assert got["facts"] == _store()
     assert calls == ["https://data.sec.gov/api/xbrl/companyfacts/CIK0000000001.json"]
     path = paths.cache / "backtest" / "facts" / "SYN.json"

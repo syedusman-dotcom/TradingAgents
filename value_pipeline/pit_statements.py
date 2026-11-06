@@ -149,7 +149,8 @@ def _throttle() -> None:
 
 def facts_for(ticker: str, paths: Paths, fetch: bool = True, refresh: bool = False,
               stale_before: str | None = None) -> dict | None:
-    """``{"cik", "fetched_at", "facts"}`` for the ticker, cached under
+    """``{"cik", "name", "fetched_at", "facts"}`` for the ticker (``name``: EDGAR's entity name),
+    cached under
     ``paths.cache/backtest/facts``; fetched when absent, on ``refresh``, or when the cache was
     fetched before ``stale_before`` (an ISO date: the newest cohort date, so a later cohort
     sees the filings made since), never with ``fetch=False``. A failed refetch keeps the
@@ -179,8 +180,8 @@ def facts_for(ticker: str, paths: Paths, fetch: bool = True, refresh: bool = Fal
     if not isinstance(raw, dict):
         log.warning("%s: EDGAR companyfacts unreadable (%s)", ticker, type(raw).__name__)
         return cached
-    store = {"cik": cik, "fetched_at": datetime.now().isoformat(timespec="seconds"),
-             "facts": extract(raw)}
+    store = {"cik": cik, "name": raw.get("entityName"),
+             "fetched_at": datetime.now().isoformat(timespec="seconds"), "facts": extract(raw)}
     path.parent.mkdir(parents=True, exist_ok=True)
     replace_file(path, lambda temp: Path(temp).write_text(json.dumps(store), encoding="utf-8"))
     return store

@@ -297,6 +297,16 @@ def test_score_carries_brier_and_markdown_shows_the_readings():
 
 
 @pytest.mark.unit
+def test_brier_view_counts_the_shorter_leg():
+    # 35 rows with a bear probability, 20 of them with a bull one: the bull leg is the one short.
+    rs = [_brier_row(0.3, False, 0.2 if i < 20 else None, False) for i in range(35)]
+    s = calibration.score(rs)
+    assert s["brier"]["365"] is None
+    view = {v["label"]: v["text"] for v in calibration.brier_view(rs, s)}
+    assert view["365 days"] == "not yet readable (20 of 30 at 365 days)"
+
+
+@pytest.mark.unit
 def test_page_shows_the_brier_reading(tmp_path):
     paths = _reviews(tmp_path)
     (paths.cache / "prices").mkdir(parents=True)

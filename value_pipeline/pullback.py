@@ -12,6 +12,7 @@ afterwards. Nothing trades and no agent is called.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from datetime import date, timedelta
 from pathlib import Path
@@ -57,7 +58,8 @@ def fill(hist, start: str, dip: float, window_days: int = WINDOW_DAYS) -> tuple[
 
 def pick_outcome(hist, spy_hist, pick: dict, dip: float) -> dict:
     """``{"filled", "fill_date", "ret_fill", "spy_fill", "excess_fill"}``: the one-year total
-    return from the fill date, and SPY's over the same window. Unfilled picks carry None."""
+    return from the fill date, and SPY's over the same window. Unfilled picks carry None; a year
+    either history does not reach (``ended_early``) leaves ``excess_fill`` None, unmeasured."""
     hit = fill(hist, pick["start_date"], dip)
     if hit is None:
         return {"filled": False, "fill_date": None, "ret_fill": None, "spy_fill": None,
@@ -68,7 +70,8 @@ def pick_outcome(hist, spy_hist, pick: dict, dip: float) -> dict:
     spy = backtest.total_return(spy_hist, day, end)
     ret = own["ret"] if own else None
     bench = spy["ret"] if spy else None
-    excess = None if ret is None or bench is None else ret - bench
+    short = bool((own or {}).get("ended_early") or (spy or {}).get("ended_early"))
+    excess = None if ret is None or bench is None or short else ret - bench
     return {"filled": True, "fill_date": day, "ret_fill": ret, "spy_fill": bench,
             "excess_fill": excess}
 
@@ -234,8 +237,9 @@ def report(result: dict, verdict: dict, picks_path) -> str:
 
 def _newest_picks(paths: Paths) -> Path:
     folder = paths.reports / "backtest"
+    # The default lists only: a ``_sp500``, ``_leavers`` or any other suffixed run is another universe.
     found = sorted(p for p in folder.glob("backtest_*_picks.csv")
-                   if "_sp500" not in p.name and "_sp600" not in p.name)
+                   if re.fullmatch(r"backtest_\d{4}-\d{2}-\d{2}_picks\.csv", p.name))
     if not found:
         raise FileNotFoundError(f"no backtest_*_picks.csv under {folder}; run `backtest` first")
     return found[-1]
@@ -246,13 +250,14 @@ def _read_picks(path: Path) -> list[dict]:
     return frame.astype(object).where(frame.notna(), None).to_dict("records")
 
 
-def run(paths: Paths, picks_path: Path | None = None) -> tuple[Path, dict]:
+def run(paths: Paths, picks_path: Path | None = None, benchmark: str = "SPY") -> tuple[Path, dict]:
     """Study the newest default-universe picks CSV (or ``picks_path``) from the cached price
-    histories, write ``pullback_<date>.md`` next to it and return its path and the result."""
+    histories against ``benchmark`` (the backtest's, ``backtest.benchmark``), write
+    ``pullback_<date>.md`` next to it and return its path and the result."""
     picks_path = Path(picks_path) if picks_path else _newest_picks(paths)
-    spy = backtest.price_history("SPY", paths, fetch=False)
+    spy = backtest.price_history(benchmark, paths, fetch=False)
     if spy is None:
-        raise ValueError("no cached SPY price history; run `backtest` first")
+        raise ValueError(f"no cached {benchmark} price history; run `backtest` first")
     cache: dict[str, pd.DataFrame | None] = {}
 
     def hist_for(ticker: str):
