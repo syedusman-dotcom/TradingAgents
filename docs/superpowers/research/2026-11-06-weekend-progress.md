@@ -178,3 +178,17 @@ The goal is the most money over the coming years, measured against SPY on 2027-1
 4. **Next agent round: go.** Built behind a config flag, A/B measured by Brier against the unchanged graph (D1 §6). Spec and plan follow in this ledger.
 
 Ruling: the sizing changes went live before the Saturday 09:00 review; they touch `actions` only, not the agents, so the data-route check on that review is unaffected.
+
+## A2 — The independent agent round (decision 4 of 2026-11-07)
+
+Status: `running` (spec written 09:00; builder check, plan, SDD build in `.worktrees/agent-round`, branch `agent-round`).
+
+Spec: `docs/superpowers/specs/2026-11-07-agent-round-design.md`. Two arms (`current`, `independent`), assignment per ticker and date by hash under `review.agent_round: ab`, arm recorded in every result row; the independent arm adds a price-blind valuer (one structured call, price-free input), independent bull/bear openings with an adverse evidence pack for the bear, a randomised judge order for the Research Manager and the Portfolio Manager, independent risk views, and a base-rate scenario rule. Both arms get the exact base-rate table and a kill-criterion check for holdings.
+
+**Adoption rule (fixed before any data):** with ≥ 30 resolved decisions per arm at 180 days (early read) or 365 days (verdict): adopt `independent` if both its bear and bull Brier skills are ≥ the current arm's and its median missing-data count is not higher; retire it if both skills are lower by ≥ 0.05; otherwise continue. Read by Claude in a Saturday review once the count is reached; recorded here before any config change.
+
+Ruling: the worksheet's base-rate cohorts were approximations "read off the charts" of the Base Rate Book; the book's Exhibit 4 (ten-year real sales CAGR by base-year sales, 1950–2015) is now in hand and replaces them in both arms. Effect on the compounder lane: the earned-growth cap falls from 7% to 5% for most companies above $700M of sales and rises to 10% for $325–700M; direction conservative (fewer false Buys); classified as a data correction from the source, not a bar change. Cost if wrong: a compounder Buy with 5–7% earned growth is missed until the first review of the live record.
+
+Ruling: the independent arm goes live in the scheduled reviews from Monday 2026-11-09 with no agent run this weekend, because the end-to-end scripted-model test covers the new graph path and the quota rule for the weekend stands. Cost if wrong: one broken Monday review, visible in ACTIONS and fixable before Saturday.
+
+Correction (09:05, from the builder check): the cap claim above was wrong. With the exact table and the old "highest tabulated rate reached by 25%" rule, the > $50B cohort would get a 0% cap and the < $325M cohort 15%. The spec now defines the cap as the 75th percentile interpolated within the 5-point bands: the caps move by at most two points from the old table except below $325M of sales (16.8%, rare under the screen's size floors). It is a data correction, neither conservative nor loosening on balance. Also from the check: per-arm Brier counts only rows that carry an arm (no pre-2026-11-09 rows); the blind valuer shows no buyback cash (cash per share retired reveals the price) and is skipped for ADRs or missing cross rates; the agents' `Position` model carries kill criteria; the risk routing is forced to one turn each in the independent arm.
