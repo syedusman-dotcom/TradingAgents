@@ -11,9 +11,11 @@ free-text generation and the rating is read from that text.
 from __future__ import annotations
 
 from tradingagents.agents.context import (
+    arm_of,
     get_instrument_context_from_state,
     get_language_instruction,
     get_portfolio_context_from_state,
+    judge_order,
 )
 from tradingagents.agents.decision_math import (
     consensus_excerpt,
@@ -38,6 +40,17 @@ def create_portfolio_manager(llm):
 
         history = state["risk_debate_state"]["history"]
         risk_debate_state = state["risk_debate_state"]
+        if arm_of(state) == "independent":
+            # Three independent statements, each under its own heading, in a seeded order.
+            order = judge_order(state["company_of_interest"], state.get("trade_date", ""), "risk")
+            views = "\n\n".join(
+                f"**{name.capitalize()} view**\n"
+                f"{(risk_debate_state.get(f'{name}_history') or '').strip() or '(not filed)'}"
+                for name in order
+            )
+            risk_section = f"**Risk views**\n\n{views}"
+        else:
+            risk_section = f"**Risk Analysts Debate History:**\n{history}"
         research_plan = state["investment_plan"]
         trader_plan = state["trader_investment_plan"]
 
@@ -94,8 +107,7 @@ def create_portfolio_manager(llm):
 - Research Manager's investment plan: **{research_plan}**
 - Trader's transaction proposal: **{trader_plan}**
 {lessons_line}
-**Risk Analysts Debate History:**
-{history}
+{risk_section}
 {premortem_block}{worksheet_block}
 ---
 

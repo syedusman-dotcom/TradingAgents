@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from tradingagents.agents.context import get_instrument_context_from_state, get_language_instruction
+from tradingagents.agents.context import (
+    arm_of,
+    get_instrument_context_from_state,
+    get_language_instruction,
+    judge_order,
+)
 from tradingagents.agents.schemas import ResearchPlan, render_research_plan
 from tradingagents.agents.structured import (
     NO_EXTERNAL_TOOLS,
@@ -19,6 +24,18 @@ def create_research_manager(llm):
         history = state["investment_debate_state"].get("history", "")
 
         investment_debate_state = state["investment_debate_state"]
+
+        # The independent arm reads the two openings as separate cases, in a seeded order.
+        order = None
+        if arm_of(state) == "independent":
+            order = judge_order(state["company_of_interest"], state.get("trade_date", ""), "research")
+            debate_section = "\n\n".join(
+                f"**The {side.capitalize()} case**\n"
+                f"{(investment_debate_state.get(f'{side}_history') or '').strip() or '(not filed)'}"
+                for side in order
+            )
+        else:
+            debate_section = f"**Debate History:**\n{history}"
 
         prompt = f"""As the Research Manager and debate facilitator, your role is to critically evaluate this round of debate and deliver a clear, actionable investment plan for the trader.
 
@@ -43,8 +60,7 @@ Think in a 1-3 year horizon. Conflicting arguments alone are not a reason to Hol
 
 ---
 
-**Debate History:**
-{history}
+{debate_section}
 
 ## Output
 
@@ -72,9 +88,12 @@ Write these sections, in this order, starting with the recommendation on its own
             "count": investment_debate_state["count"],
         }
 
-        return {
+        update = {
             "investment_debate_state": new_investment_debate_state,
             "investment_plan": investment_plan,
         }
+        if order is not None:
+            update["judge_order"] = f"{order[0]}-first"
+        return update
 
     return research_manager_node

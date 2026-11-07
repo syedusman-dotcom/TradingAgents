@@ -109,3 +109,34 @@ def test_risk_passes_real_opponent_arguments():
     assert "trim risk" in captured["prompt"]
     assert "hold steady" in captured["prompt"]
     assert "has not spoken yet" not in captured["prompt"]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "factory,opponent",
+    [(create_bull_researcher, "bear"), (create_bear_researcher, "bull")],
+)
+def test_independent_researcher_opens_even_after_the_other_spoke(factory, opponent):
+    # The independent arm never passes the other side's text: it always opens.
+    captured = {}
+    state = {**_investment_state(f"{opponent.capitalize()} Analyst: a real point"),
+             "agent_round": "independent"}
+    kwargs = {"pack_fn": lambda t, d: "pack"} if factory is create_bear_researcher else {}
+    factory(_capturing_llm(captured), **kwargs)(state)
+    assert "has not spoken yet" in captured["prompt"]
+    assert "a real point" not in captured["prompt"]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "factory", [create_aggressive_debator, create_conservative_debator, create_neutral_debator]
+)
+def test_independent_risk_analyst_always_opens(factory):
+    captured = {}
+    state = _risk_state(
+        current_aggressive_response="Aggressive Analyst: go big",
+        current_conservative_response="Conservative Analyst: trim risk",
+        current_neutral_response="Neutral Analyst: hold steady",
+    )
+    factory(_capturing_llm(captured))({**state, "agent_round": "independent"})
+    assert captured["prompt"].count("has not spoken yet") == 2

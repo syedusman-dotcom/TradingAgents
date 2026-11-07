@@ -1,20 +1,54 @@
 from tradingagents.agents.context import (
+    arm_of,
     get_instrument_context_from_state,
     get_language_instruction,
     opponent_argument_or_opening,
     report_or_absent,
 )
+from tradingagents.agents.researchers.adverse import adverse_pack
 
 
-def create_bear_researcher(llm):
+def create_bear_researcher(llm, pack_fn=adverse_pack):
+    """The Value-Trap Hunter. ``pack_fn(ticker, date)`` fetches its adverse evidence pack in the
+    independent arm; the current arm never calls it."""
+
     def bear_node(state) -> dict:
         investment_debate_state = state["investment_debate_state"]
         history = investment_debate_state.get("history", "")
         bear_history = investment_debate_state.get("bear_history", "")
 
+        # The independent arm opens from the reports and its own evidence pack, without the
+        # debate history or the bull's text.
+        independent = arm_of(state) == "independent"
         current_response = opponent_argument_or_opening(
-            investment_debate_state.get("current_response", ""), "bull analyst"
+            "" if independent else investment_debate_state.get("current_response", ""),
+            "bull analyst",
         )
+        if independent:
+            counterpoints = (
+                "- Bull Counterpoints: You will not see the Bull's case; name the strongest "
+                "points a value bull would make and test each against the data.\n"
+                "- Independence: Write your own opening case; a judge reads it side by side with "
+                "a Bull case written without yours."
+            )
+            pack = pack_fn(state["company_of_interest"], state.get("trade_date", ""))
+            debate_lines = (
+                f"{pack}\n"
+                "The adverse evidence pack above is your own evidence: the bull has not seen it. "
+                "Cite from it by section, or say plainly that it holds nothing adverse.\n"
+                f"Last bull argument: {current_response}"
+            )
+        else:
+            counterpoints = (
+                "- Bull Counterpoints: Rebut the Bull point by point with data.\n"
+                "- Engagement: Present your argument in a conversational style, directly engaging "
+                "with the bull analyst's points and debating effectively rather than simply "
+                "listing facts."
+            )
+            debate_lines = (
+                f"Conversation history of the debate: {history}\n"
+                f"Last bull argument: {current_response}"
+            )
         market_research_report = report_or_absent(state["market_report"], "market")
         sentiment_report = report_or_absent(state["sentiment_report"], "sentiment")
         news_report = report_or_absent(state["news_report"], "news")
@@ -38,8 +72,7 @@ Key points to test:
 - Accounting: Red flags in the financial statements.
 - Valuation: An intrinsic value estimate that relies on optimistic assumptions.
 - Trend: A FREEFALL or DOWNTREND that may signal bad news not yet in the numbers.
-- Bull Counterpoints: Rebut the Bull point by point with data.
-- Engagement: Present your argument in a conversational style, directly engaging with the bull analyst's points and debating effectively rather than simply listing facts.
+{counterpoints}
 
 Resources available:
 
@@ -48,8 +81,7 @@ Market research report: {market_research_report}
 Social media sentiment report: {sentiment_report}
 Latest world affairs news: {news_report}
 {fundamentals_label}: {fundamentals_report}
-Conversation history of the debate: {history}
-Last bull argument: {current_response}
+{debate_lines}
 Use this information to deliver a compelling bear argument, refute the bull's claims, and engage in a dynamic debate that demonstrates the risks and weaknesses of investing in the {target_label}.
 """ + get_language_instruction()
 

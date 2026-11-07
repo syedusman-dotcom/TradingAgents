@@ -141,7 +141,9 @@ def test_the_arm_reaches_the_final_state(tmp_path, monkeypatch, offline):
     assert state["agent_round"] == "independent"
     # A past-dated run has no blind inputs (the statements are not dated by filing).
     assert state["blind_valuation"].startswith("skipped: ")
-    assert state["base_rates"] == state["judge_order"] == ""
+    assert state["base_rates"] == ""
+    # The Research Manager read the two openings in a seeded order and recorded it.
+    assert state["judge_order"] in {"bull-first", "bear-first"}
 
 
 @pytest.mark.unit
@@ -448,6 +450,28 @@ def test_risk_round_ends_at_the_premortem_then_the_portfolio_manager(tmp_path, m
     assert "this position has lost 40%" in premortem_prompt
     logged = next(tmp_path.glob("results/NVDA/TradingAgentsStrategy_logs/*.json")).read_text()
     assert '"premortem": "Pre-mortem: ' in logged
+
+
+@pytest.mark.unit
+def test_the_independent_arm_hears_each_side_once_and_terminates(tmp_path, monkeypatch, offline):
+    model = TimedModel()
+    graph = _graph(tmp_path, monkeypatch, model, max_debate_rounds=2, max_risk_discuss_rounds=2)
+
+    state, _ = graph.propagate("NVDA", TRADE_DATE, agent_round="independent")
+
+    steps = [c[0] for c in model.seen]
+    debate = [s for s in steps if s in {"Bull Researcher", "Bear Researcher", "Aggressive Analyst",
+                                        "Conservative Analyst", "Neutral Analyst"}]
+    assert debate == ["Bull Researcher", "Bear Researcher", "Aggressive Analyst",
+                      "Conservative Analyst", "Neutral Analyst"]
+    assert steps[-2:] == ["Pre-mortem", "Portfolio Manager"]
+    bear_prompt = next(c[1] for c in model.seen if c[0] == "Bear Researcher")
+    assert "**Adverse evidence pack**" in bear_prompt and "get_news data" in bear_prompt
+    assert "Bull Analyst:" not in bear_prompt
+    pm_prompt = next(c[1] for c in model.seen if c[0] == "Portfolio Manager")
+    assert "**Risk views**" in pm_prompt
+    assert state["judge_order"] in {"bull-first", "bear-first"}
+    assert state["final_rating"]
 
 
 @pytest.mark.unit

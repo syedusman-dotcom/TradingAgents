@@ -81,6 +81,19 @@ def test_research_manager_prompt_states_constraint():
             "bars.") in " ".join(_prompt_text(captured["prompt"]).split())
     assert ("Underweight/Sell: Good business, Good management or Cheap clearly fails, the stock is above "
             "intrinsic value") in " ".join(_prompt_text(captured["prompt"]).split())
+    assert "**Debate History:**\nh" in _prompt_text(captured["prompt"])
+
+    update = create_research_manager(llm)({
+        "company_of_interest": "NVDA", "agent_round": "independent",
+        "investment_debate_state": {
+            "history": "h", "bull_history": "b", "bear_history": "r",
+            "current_response": "", "count": 2,
+        },
+    })
+    independent = _prompt_text(captured["prompt"])
+    assert NO_EXTERNAL_TOOLS in independent and "Debate History" not in independent
+    assert "**The Bull case**\nb" in independent and "**The Bear case**\nr" in independent
+    assert update["judge_order"] in {"bull-first", "bear-first"}
 
 
 @pytest.mark.unit
@@ -110,6 +123,17 @@ def test_portfolio_manager_prompt_states_constraint():
     })
     assert NO_EXTERNAL_TOOLS in _prompt_text(captured["prompt"])
     assert KILL_CHECK_PARAGRAPH in _prompt_text(captured["prompt"])
+    assert "**Risk Analysts Debate History:**\nh" in _prompt_text(captured["prompt"])
+
+    create_portfolio_manager(llm)({
+        "company_of_interest": "NVDA", "agent_round": "independent",
+        "risk_debate_state": risk,
+        "investment_plan": "plan",
+        "trader_investment_plan": "trader plan",
+    })
+    independent = _prompt_text(captured["prompt"])
+    assert NO_EXTERNAL_TOOLS in independent and KILL_CHECK_PARAGRAPH in independent
+    assert "**Risk views**" in independent and independent.count(" view**\n") == 3
 
 
 KILL_CHECK_PARAGRAPH = (

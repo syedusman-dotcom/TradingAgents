@@ -2,7 +2,8 @@
 
 import functools
 import logging
-from collections.abc import Mapping
+import random
+from collections.abc import Mapping, Sequence
 from datetime import date
 from typing import Any
 
@@ -195,6 +196,25 @@ def build_instrument_context(
 def arm_of(state: Mapping[str, Any]) -> str:
     """The review arm of this run: ``independent`` or (also when the field is missing) ``current``."""
     return state.get("agent_round") or "current"
+
+
+def shuffled(items: Sequence[str], seed: str) -> list[str]:
+    """``items`` in an order drawn from ``seed``: the same seed always gives the same order."""
+    return random.Random(seed).sample(list(items), len(items))
+
+
+def judge_order(ticker: str, date: str, kind: str) -> list[str]:
+    """The order in which a judge reads the independent cases, seeded by ticker and date.
+
+    ``research``: the bull and bear cases (bear first in about half the runs); ``risk``: a
+    shuffle of the three risk views. The independent arm uses it so no side always speaks first.
+    """
+    if kind == "research":
+        bear_first = random.Random(f"{ticker}:{date}:research").random() < 0.5
+        return ["bear", "bull"] if bear_first else ["bull", "bear"]
+    if kind == "risk":
+        return shuffled(["aggressive", "conservative", "neutral"], f"{ticker}:{date}:risk")
+    raise ValueError(f"unknown judge kind: {kind!r}")
 
 
 def get_instrument_context_from_state(state: Mapping[str, Any]) -> str:
