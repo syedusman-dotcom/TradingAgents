@@ -7,6 +7,7 @@ seeded by ticker and date. The current arm keeps today's interleaved debate.
 """
 from __future__ import annotations
 
+import hashlib
 import random
 from unittest.mock import MagicMock
 
@@ -293,22 +294,48 @@ def test_independent_risk_round_ends_after_three_views():
 
 # --- current-arm invariance -------------------------------------------------------
 
-@pytest.mark.unit
-@pytest.mark.parametrize("arm", [None, "current"])
-def test_current_arm_prompts_keep_their_old_anchors(arm):
+def _all_prompts(arm) -> dict[str, str]:
     prompts = {}
     for key, factory in [("bull", create_bull_researcher), ("bear", create_bear_researcher),
                          ("aggressive", create_aggressive_debator),
                          ("conservative", create_conservative_debator),
                          ("neutral", create_neutral_debator)]:
         captured = {}
-        factory(_llm(captured))(_state(arm))
+        kwargs = {"pack_fn": _pack} if factory is create_bear_researcher else {}
+        factory(_llm(captured), **kwargs)(_state(arm))
         prompts[key] = captured["prompt"]
     for key, factory, result in [("rm", create_research_manager, _PLAN),
                                  ("pm", create_portfolio_manager, _DECISION)]:
         captured = {}
         factory(_llm(captured, result))(_state(arm))
         prompts[key] = captured["prompt"]
+    return prompts
+
+
+# sha256 of each current-arm prompt for ``_state("current")``, computed at the commit before the
+# independent arm reached the debate (d2132a9). The current arm must stay byte-for-byte the same.
+_HEAD_PROMPTS = {
+    "bull": "6b763cd0c2ba89d6f00360db9b05650490d7f0e901bfa0c45c40ffb1dfbecf7a",
+    "bear": "90b24c5f8065bfb0b57dd2a8db98ecdf16f8370d4c2fdf2f1d189bb6bc6e6dd3",
+    "aggressive": "282272dde6be126855b154f66db9dcbd9737dc5f919b9a8b5a5877f8d4df08af",
+    "conservative": "cd3fa9f3343d5707f4af987fbb25d75b0f6c130b6703dd0560d0c02490f4a00e",
+    "neutral": "8e03614bdec64c595bcf959a7bea34069c47a831348982d596a1267b1deebe12",
+    "rm": "fdce65759ec07c4b6a0f0e70d75e139034c9f4ab5a7665168aa370fc230aaa89",
+    "pm": "0b2f6422cf159f07b639b6af55838b8af1ac5e92e3364f0cddb4d412bc42ef11",
+}
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("arm", [None, "current"])
+def test_current_arm_prompts_are_byte_for_byte_head(arm):
+    prompts = _all_prompts(arm)
+    assert {k: hashlib.sha256(p.encode()).hexdigest() for k, p in prompts.items()} == _HEAD_PROMPTS
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("arm", [None, "current"])
+def test_current_arm_prompts_keep_their_old_anchors(arm):
+    prompts = _all_prompts(arm)
 
     assert "the moat is widening" in prompts["bear"]
     assert "Conversation history of the debate:" in prompts["bull"]
@@ -316,6 +343,24 @@ def test_current_arm_prompts_keep_their_old_anchors(arm):
     assert "**Risk Analysts Debate History:**" in prompts["pm"]
     for key in ("aggressive", "conservative", "neutral"):
         assert "Here is the current conversation history:" in prompts[key]
+    assert "Rebut the Bear point by point" in prompts["bull"]
+    assert "refute the bull's claims" in prompts["bear"]
+    assert "respond directly to each point" in prompts["aggressive"]
+    assert "Respond directly to their points" in prompts["conservative"]
+    assert "Challenge each of their points" in prompts["neutral"]
     for prompt in prompts.values():
         for new in ("Adverse evidence pack", "The Bull case", "The Bear case", "Risk views"):
             assert new not in prompt
+
+
+@pytest.mark.unit
+def test_independent_speakers_are_not_asked_to_answer_a_case_they_have_not_seen():
+    prompts = _all_prompts("independent")
+    for key in ("bull", "bear", "aggressive", "conservative", "neutral"):
+        prompt = prompts[key].lower()
+        assert "rebut" not in prompt, key
+        assert "respond to the" not in prompt, key
+        assert "refut" not in prompt, key
+        assert "you have not seen the" in prompt, key
+        assert "make your own case from the evidence" in prompt, key
+    assert "adverse evidence pack" in prompts["bear"].split("Independence:")[1].lower()

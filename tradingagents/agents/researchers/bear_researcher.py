@@ -24,12 +24,16 @@ def create_bear_researcher(llm, pack_fn=adverse_pack):
             "" if independent else investment_debate_state.get("current_response", ""),
             "bull analyst",
         )
+        asset_type = state.get("asset_type", "stock")
+        target_label = "stock" if asset_type == "stock" else "asset"
         if independent:
             counterpoints = (
-                "- Bull Counterpoints: You will not see the Bull's case; name the strongest "
-                "points a value bull would make and test each against the data.\n"
-                "- Independence: Write your own opening case; a judge reads it side by side with "
-                "a Bull case written without yours."
+                "- Independence: You have not seen the Bull's case; make your own case from the "
+                "evidence in the reports and from your adverse evidence pack."
+            )
+            closing = (
+                "Use this information to deliver a compelling bear argument that demonstrates "
+                f"the risks and weaknesses of investing in the {target_label}."
             )
             pack = pack_fn(state["company_of_interest"], state.get("trade_date", ""))
             debate_lines = (
@@ -45,6 +49,11 @@ def create_bear_researcher(llm, pack_fn=adverse_pack):
                 "with the bull analyst's points and debating effectively rather than simply "
                 "listing facts."
             )
+            closing = (
+                "Use this information to deliver a compelling bear argument, refute the bull's "
+                "claims, and engage in a dynamic debate that demonstrates the risks and weaknesses "
+                f"of investing in the {target_label}."
+            )
             debate_lines = (
                 f"Conversation history of the debate: {history}\n"
                 f"Last bull argument: {current_response}"
@@ -54,8 +63,6 @@ def create_bear_researcher(llm, pack_fn=adverse_pack):
         news_report = report_or_absent(state["news_report"], "news")
         fundamentals_report = report_or_absent(state["fundamentals_report"], "fundamentals")
         instrument_context = get_instrument_context_from_state(state)
-        asset_type = state.get("asset_type", "stock")
-        target_label = "stock" if asset_type == "stock" else "asset"
         fundamentals_label = (
             "Company fundamentals report"
             if asset_type == "stock"
@@ -82,7 +89,7 @@ Social media sentiment report: {sentiment_report}
 Latest world affairs news: {news_report}
 {fundamentals_label}: {fundamentals_report}
 {debate_lines}
-Use this information to deliver a compelling bear argument, refute the bull's claims, and engage in a dynamic debate that demonstrates the risks and weaknesses of investing in the {target_label}.
+{closing}
 """ + get_language_instruction()
 
         response = llm.invoke(prompt)

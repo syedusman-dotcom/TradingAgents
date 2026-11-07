@@ -21,10 +21,12 @@ def create_bull_researcher(llm):
         )
         if independent:
             counterpoints = (
-                "- Bear Counterpoints: You will not see the Bear's case; name the strongest "
-                "objections a value-trap hunter would raise and answer each with data.\n"
-                "- Independence: Write your own opening case; a judge reads it side by side with "
-                "a Bear case written without yours."
+                "- Independence: You have not seen the Bear's case; make your own case from the "
+                "evidence in the reports."
+            )
+            closing = (
+                "Use this information to deliver a compelling bull argument that demonstrates "
+                "the strengths of the bull position."
             )
             debate_lines = f"Last bear argument: {current_response}"
         else:
@@ -33,6 +35,11 @@ def create_bull_researcher(llm):
                 "- Engagement: Present your argument in a conversational style, engaging directly "
                 "with the bear analyst's points and debating effectively rather than just listing "
                 "data."
+            )
+            closing = (
+                "Use this information to deliver a compelling bull argument, refute the bear's "
+                "concerns, and engage in a dynamic debate that demonstrates the strengths of the "
+                "bull position."
             )
             debate_lines = (
                 f"Conversation history of the debate: {history}\n"
@@ -67,7 +74,7 @@ Social media sentiment report: {sentiment_report}
 Latest world affairs news: {news_report}
 {fundamentals_label}: {fundamentals_report}
 {debate_lines}
-Use this information to deliver a compelling bull argument, refute the bear's concerns, and engage in a dynamic debate that demonstrates the strengths of the bull position.
+{closing}
 """ + get_language_instruction()
 
         response = llm.invoke(prompt)

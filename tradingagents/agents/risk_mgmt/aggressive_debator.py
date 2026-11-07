@@ -35,11 +35,49 @@ def create_aggressive_debator(llm):
         trader_decision = state["trader_investment_plan"]
         history_line = "" if independent else f"Here is the current conversation history: {history} "
 
-        prompt = f"""As the Aggressive Risk Analyst, your role is to actively champion high-reward, high-risk opportunities, emphasizing bold strategies and competitive advantages. Evaluate the plan as part of a long-term value portfolio held for 1-3 years; judge risk mainly as permanent loss of capital (business deterioration, overpaying, leverage), not short-term volatility. When evaluating the trader's decision or plan, focus intently on the potential upside, growth potential, and innovative benefits—even when these come with elevated risk. Use the provided market data and sentiment analysis to strengthen your arguments and challenge the opposing views. Specifically, respond directly to each point made by the conservative and neutral analysts, countering with data-driven rebuttals and persuasive reasoning. Highlight where their caution might miss critical opportunities or where their assumptions may be overly conservative. Here is the trader's decision:
+        # The independent arm has not seen the others' cases, so it is not asked to answer them.
+        stance = (
+            "You have not seen the conservative or neutral analysts' cases; make your"
+            ' own case from the evidence in the reports below.'
+            if independent
+            else (
+                'Use the provided market data and sentiment analysis to strengthen '
+                'your arguments and challenge the opposing views. Specifically, '
+                'respond directly to each point made by the conservative and neutral '
+                'analysts, countering with data-driven rebuttals and persuasive '
+                'reasoning. Highlight where their caution might miss critical '
+                'opportunities or where their assumptions may be overly conservative.'
+            )
+        )
+        task = (
+            "Your task is to create a compelling case for the trader's decision that "
+            'shows why your high-reward perspective offers the best path forward.'
+            if independent
+            else (
+                "Your task is to create a compelling case for the trader's decision "
+                'by questioning and critiquing the conservative and neutral stances '
+                'to demonstrate why your high-reward perspective offers the best path'
+                ' forward.'
+            )
+        )
+        engage = (
+            'Assert the benefits of risk-taking to outpace market norms and show, '
+            'with data, why a high-risk approach is optimal.'
+            if independent
+            else (
+                'Engage actively by addressing any specific concerns raised, refuting'
+                ' the weaknesses in their logic, and asserting the benefits of '
+                'risk-taking to outpace market norms. Maintain a focus on debating '
+                'and persuading, not just presenting data. Challenge each '
+                'counterpoint to underscore why a high-risk approach is optimal.'
+            )
+        )
+
+        prompt = f"""As the Aggressive Risk Analyst, your role is to actively champion high-reward, high-risk opportunities, emphasizing bold strategies and competitive advantages. Evaluate the plan as part of a long-term value portfolio held for 1-3 years; judge risk mainly as permanent loss of capital (business deterioration, overpaying, leverage), not short-term volatility. When evaluating the trader's decision or plan, focus intently on the potential upside, growth potential, and innovative benefits—even when these come with elevated risk. {stance} Here is the trader's decision:
 
 {trader_decision}
 
-Your task is to create a compelling case for the trader's decision by questioning and critiquing the conservative and neutral stances to demonstrate why your high-reward perspective offers the best path forward. Incorporate insights from the following sources into your arguments:
+{task} Incorporate insights from the following sources into your arguments:
 
 {instrument_context}
 {portfolio_context}
@@ -49,7 +87,7 @@ Latest World Affairs Report: {news_report}
 Company Fundamentals Report: {fundamentals_report}
 {history_line}Here are the last arguments from the conservative analyst: {current_conservative_response} Here are the last arguments from the neutral analyst: {current_neutral_response}. If there are no responses from the other viewpoints yet, present your own argument based on the available data.
 
-Engage actively by addressing any specific concerns raised, refuting the weaknesses in their logic, and asserting the benefits of risk-taking to outpace market norms. Maintain a focus on debating and persuading, not just presenting data. Challenge each counterpoint to underscore why a high-risk approach is optimal. Output conversationally as if you are speaking without any special formatting.""" + get_language_instruction()
+{engage} Output conversationally as if you are speaking without any special formatting.""" + get_language_instruction()
 
         response = llm.invoke(prompt)
 
