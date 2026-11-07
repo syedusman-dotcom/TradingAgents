@@ -27,8 +27,45 @@ from tradingagents.agents.decision_math import (
     worksheet_price,
 )
 from tradingagents.agents.rating import parse_rating
-from tradingagents.agents.schemas import PortfolioDecision, render_pm_decision
+from tradingagents.agents.schemas import PortfolioDecision, blind_values, render_pm_decision
 from tradingagents.agents.structured import NO_EXTERNAL_TOOLS, bind_structured, invoke_structured
+
+_SCENARIO_RULE = (
+    "Start the base scenario's growth at the cohort median (add about two points for inflation). "
+    "The bull scenario may not assume a rate that fewer than 10% of the cohort reached unless the "
+    "basis names the reason. The bear scenario's probability may not be below the cohort's share "
+    "that shrank. Name the base rate used in each scenario's basis."
+)
+
+
+def _num(x: float | None) -> str:
+    return f"{x:.2f}" if x is not None else "n/a"
+
+
+def _pct(x: float | None) -> str:
+    return f"{x:.1%}" if x is not None else "n/a"
+
+
+def _blind_block(text: str, base: float | None, price: float | None) -> str:
+    """The price-blind value against the worksheet base and the price, or why there is none."""
+    v = blind_values(text)
+    if v is None:
+        text = (text or "").strip()
+        reason = text.removeprefix("skipped:").strip() if text.startswith("skipped:") else ""
+        return f"No price-blind valuation ({reason or 'not produced'}).\n"
+    return (
+        f"**Price-blind valuation** (made without the price): {_num(v['value'])} per share, "
+        f"range {_num(v['low'])}–{_num(v['high'])}, growth {_pct(v['growth'])}, "
+        f"discount {_pct(v['discount'])}. The worksheet base is {_num(base)}; the price is "
+        f"{_num(price)}. Treat the blind value and the worksheet base as two independent "
+        "estimates: your base scenario value must lie between them or you must say which one "
+        "you reject and why.\n"
+    )
+
+
+def _base_rate_block(text: str) -> str:
+    """The cohort's base rates and the scenario rule; "cohort unknown" without them."""
+    return f"**Base rates**\n{(text or '').strip() or 'cohort unknown'}\n{_SCENARIO_RULE}\n"
 
 
 def create_portfolio_manager(llm):
@@ -87,6 +124,12 @@ def create_portfolio_manager(llm):
         ) + (f"**Record and inflection (the lanes' numbers):**\n{record}\n" if record else "") + (
             f"**Innovation and reinvestment:**\n{innovation}\n" if innovation else "") + (
             f"**Consensus (Yahoo estimates):**\n{consensus}\n" if consensus else "")
+        # The independent arm also reconciles the price-blind value and starts from base rates.
+        independent_blocks = (
+            _blind_block(state.get("blind_valuation", ""), base, price)
+            + _base_rate_block(state.get("base_rates", ""))
+            if arm_of(state) == "independent" else ""
+        )
 
         prompt = f"""As the Portfolio Manager, synthesize the risk analysts' debate and deliver the final trading decision.
 
@@ -108,7 +151,7 @@ def create_portfolio_manager(llm):
 - Trader's transaction proposal: **{trader_plan}**
 {lessons_line}
 {risk_section}
-{premortem_block}{worksheet_block}
+{premortem_block}{worksheet_block}{independent_blocks}
 ---
 
 Ground every conclusion in specific evidence from the analysts. Decide as a disciplined value investor, scoring the company on four tests: Good business, Good management, Still investing, Cheap (margin of safety).

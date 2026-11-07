@@ -268,6 +268,53 @@ def test_current_portfolio_manager_keeps_the_risk_history():
     assert "Risk views" not in captured["prompt"]
 
 
+_SHEET = ("## Valuation worksheet (per share; 5-year averages)\n- Price today 1,886.50\n"
+          "- **Range 60.00 to 95.00, base (3% growth) 1,080.33; margin of safety at base 30%**")
+_BLIND = ("**Value per share**: 1234.50 (range 1000.00–1500.00) in the quote unit\n\n"
+          "**Growth assumed**: 6.0%\n\n**Discount rate**: 9.5%\n\n**Method**: m\n\n"
+          "**Reasoning**: r")
+_RATES = "Base rates (Mauboussin, The Base Rate Book): companies with sales of > $50B ..."
+
+
+def _pm_prompt(arm, **extra) -> str:
+    captured = {}
+    create_portfolio_manager(_llm(captured, _DECISION))(_state(arm, **extra))
+    return captured["prompt"]
+
+
+@pytest.mark.unit
+def test_independent_portfolio_manager_reconciles_the_blind_value_and_the_base_rates():
+    prompt = _pm_prompt("independent", fundamentals_report=_SHEET, blind_valuation=_BLIND,
+                        base_rates=_RATES)
+    assert ("**Price-blind valuation** (made without the price): 1234.50 per share, range "
+            "1000.00–1500.00, growth 6.0%, discount 9.5%. The worksheet base is 1080.33; the "
+            "price is 1886.50.") in prompt
+    assert "must lie between them" in prompt
+    assert prompt.index("**Valuation worksheet") < prompt.index("**Price-blind valuation**")
+    assert "**Base rates**" in prompt and _RATES in prompt
+    assert "Start the base scenario's growth at the cohort median" in prompt
+    assert "Name the base rate used in each scenario's basis." in prompt
+
+
+@pytest.mark.unit
+def test_independent_portfolio_manager_names_a_skipped_blind_valuation():
+    prompt = _pm_prompt("independent", blind_valuation="skipped: ADR", base_rates="")
+    assert "No price-blind valuation (ADR)." in prompt
+    assert "**Price-blind valuation**" not in prompt
+    assert "cohort unknown" in prompt
+    assert "Name the base rate used" in prompt
+    assert "No price-blind valuation (not produced)." in _pm_prompt("independent")
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("arm", [None, "current"])
+def test_current_portfolio_manager_has_no_blind_value_or_base_rates(arm):
+    prompt = _pm_prompt(arm, fundamentals_report=_SHEET, blind_valuation=_BLIND,
+                        base_rates=_RATES)
+    assert "Price-blind" not in prompt
+    assert "Base rates" not in prompt
+
+
 # --- routing --------------------------------------------------------------------
 
 @pytest.mark.unit
