@@ -94,7 +94,8 @@ class Portfolio:
             "cash": self.cash,
             "currency": self.currency,
             "positions": [
-                {"ticker": p.ticker, "quantity": p.shares, "average_price": p.avg_price}
+                {"ticker": p.ticker, "quantity": p.shares, "average_price": p.avg_price,
+                 "kill_criteria": list(p.kill_criteria)}
                 for p in self.positions
             ],
         })

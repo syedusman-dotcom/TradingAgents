@@ -128,6 +128,7 @@ The first screen of a week fetches every ticker (roughly 20-40 minutes); later r
    A Magic Formula candidate whose trailing-twelve-month EBIT is below `review.min_run_rate` (default 0.8) times its five-year average gives its place to the next name down the screen, since the formula values the average and the latest year is running well under it; the review prints the names it left out. A missing ratio passes, the hinted lanes and `review --tickers` ignore the filter, and `0` turns it off.
    `review.candidate_countries` limits the Magic Formula and dislocation candidates to the listed countries (names from the screen's `country` column, matched without regard to case; the shipped list is the fifteen European markets, `[]` means every country). The screen's order is kept, only rows from other countries are dropped. Compounder- and inflection-hinted candidates, holdings, `lanes.tickers`, theme discoveries and `review --tickers` ignore the list, and the review prints any listed country the screen has no rows for, so a misspelling shows.
    `review.candidate_markets` (shipped `[]`) adds markets to that filter: a Magic Formula or dislocation row whose `market` is listed is a candidate whatever its country (an empty `candidate_countries` still means every country). The review's "Value candidates from" line names the markets too. The one candidate for it is `sp600` (US small caps), under a rule fixed before any run: `backtest --indexes sp600` prints a "Small-company verdict" for the `magic_formula` rule that supports adding `sp600` only if, over the one-year hold and cohorts with five or more picks, (1) there are at least 20 such cohorts in at least 7 calendar years, (2) it beat the equal-weight universe in at least 60% of them, (3) it averaged at least +2 points over the universe and at least 0 over SPY, and (4) it averaged at least 0 over the universe across the three-year hold. The `value` rule's numbers print beside it for information, with the survivorship limits (today's members, no join dates). Claude adds `sp600` to `candidate_markets` only if the verdict passes; otherwise nothing changes.
+   `review.agent_round` (shipped `ab`; default `current`) picks the review process: `current` is the original, `independent` the independent arm, `ab` assigns each ticker and date to one of them by `sha256("TICKER:DATE")` (even hash: independent, odd: current), so a resumed run gets the same arm and about half the reviews fall on each. Any other value is rejected. The arm travels to the graph in the state (`agent_round`), never in the graph config. `results.json` rows gain `agent_round`, `missing_data_lines` (how often the decision text says data was not provided, not retrieved, returned nothing, could not be retrieved or was unavailable), `blind_value` and `judge_order` (both `null` until the independent arm fills them). Spec: `docs/superpowers/specs/2026-11-07-agent-round-design.md`.
    With `TRADINGAGENTS_LLM_PROVIDER=claude_code` the agents run on your Claude plan through Claude Code, so the cap is a usage budget rather than a bill; the ACTIONS report then shows the measured tokens and what the run would have cost at API prices. The website runs reviews in its own process: restart it after changing `.env`. Inside Claude Code, `/review HRB` runs one stock and relays the agents as they finish.
 4. Saves each report to `data/reports/YYYY-MM-DD/TICKER/`. A failed run is retried once, then reported.
 5. Turns ratings into actions:
@@ -336,6 +337,18 @@ ratio of the two Brier scores. The reading rule is fixed in advance: with at lea
 days the probabilities are informative when both skill scores are above 0, over-confident when the
 stated mean exceeds the realised frequency by more than 10 points for either leg, uninformative
 otherwise; before 30 rows they are not yet readable.
+
+By review arm: under the Brier scores, the page and `calibration` show one row per
+`review.agent_round` arm present (`current`, `independent`): decisions, the arm's own Brier skill
+scores at 365 and 180 days (only rows carrying that arm count; rows written before arms were
+recorded count in the overall score and in no arm), median margin of safety, median
+`missing_data_lines`, ratings, and the median gap of the blind value and of the agents' value
+from the price. The adoption rule printed under the table is fixed in advance: counting only rows
+that carry an arm, with at least 30 resolved decisions per arm at 180 days (early read) or 365
+days (verdict), the independent arm becomes the default if both its bear and bull skills are at
+or above the current arm's and its median `missing_data_lines` is not higher; it is retired if
+both skills are lower by 0.05 or more; otherwise the A/B continues. Claude makes the reading in
+the Saturday review and records it in the ledger before any config change.
 
 Paper Buys: the Calibration page, `calibration` and each review's `ACTIONS.md` also show
 what a looser Buy rule would have done. A paper Buy is a decision the agents rated Hold or

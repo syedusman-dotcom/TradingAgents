@@ -236,6 +236,95 @@ def _to_quote_unit(metrics: dict, factor: float, year_factors: dict | None = Non
     return m
 
 
+def _annual(t, ticker: str, canonical: str) -> tuple[dict, list[dict]]:
+    """Yahoo's profile and the annual statements as ``statement_years`` dicts, newest first;
+    raises when there are no statements."""
+    info = yf_retry(lambda: t.info) or {}
+    frames = [yf_retry(lambda attr=attr: getattr(t, attr)) for attr in ("income_stmt", "balance_sheet", "cashflow")]
+    years = statement_years(*frames)
+    if not years:
+        raise_for_empty(ticker, canonical, "annual statements")
+    return info, years
+
+
+def _currency_basis(info: dict, years: list[dict]) -> dict:
+    """How the quote relates to the statements: ``major`` (the quote's major unit), ``minor`` (a
+    minor-unit quote of the statement currency), ``factor`` (100 for a minor-unit quote, else 1),
+    ``cross`` (statement units per major quote unit; 1.0 unless ``converted``), ``converted``
+    (another currency, converted at today's rate) and ``same_basis`` (the quote and the statements
+    count the same share). The price and market cap are read only as their ratio, a share count."""
+    quote, reported = info.get("currency"), info.get("financialCurrency")
+    price = info.get("currentPrice") or info.get("regularMarketPrice")
+    # A London listing is quoted in pence and reports in pounds: compute in the major unit,
+    # then show per-share values in the quote unit the user sees at the broker.
+    # A quote in another currency (Celestica: CAD quote, USD statements) is converted the same
+    # way at today's rate: ``cross`` statement units per quote unit (the major unit for pence).
+    major = MINOR_UNITS.get(quote, quote)
+    minor = quote in MINOR_UNITS and major == reported
+    factor = 100.0 if quote in MINOR_UNITS else 1.0
+    cross, converted, same_basis = 1.0, False, True
+    if quote and reported and major != reported:
+        quote_usd, reported_usd = usd_rate(quote), usd_rate(reported)
+        quoted_shares = share_count(info.get("marketCap"), price / factor if price else None)
+        statement_shares = years[0].get("shares")
+        # An ADR's price is per ADR (TSM: 5 ordinary shares), and the history multiples and buyback
+        # price set it against the statements' ordinary count: convert only when the bases agree.
+        # When the bases cannot be compared, a non-dollar quote (CLS.TO, BP.L) is still an
+        # ordinary share; only a dollar quote over foreign statements is the ADR case.
+        same_basis = (abs(quoted_shares / statement_shares - 1) <= SHARE_BASIS_TOLERANCE
+                      if quoted_shares and statement_shares else quote != "USD")
+        if quote_usd and reported_usd and same_basis:
+            cross, converted = quote_usd / reported_usd, True
+    return {"major": major, "minor": minor, "factor": factor, "cross": cross,
+            "converted": converted, "same_basis": same_basis}
+
+
+def _revenue_usd(years: list[dict], currency: str | None) -> float | None:
+    """The latest year's revenue in US dollars at today's rate (the growth base rates are in
+    dollars; revenue arrives in the reporting currency); None without a rate or a revenue."""
+    fx = usd_rate(currency)
+    if fx and years[0].get("revenue") is not None:
+        return years[0]["revenue"] * fx
+    return None
+
+
+def blind_inputs(ticker: str, as_of_date: str | None = None) -> dict:
+    """What the price-blind valuer may see, from the same fetches as ``get_value_metrics``: the
+    company's name and sector, the annual statements (``years``), the statement currency
+    (``reported``) and quote code, ``cross`` (statement units per major quote unit: today's rate
+    when converted, 1.0 when the quote is the statement currency or its minor unit, None when the
+    two differ and cannot be converted), ``factor`` (100 for a minor-unit quote), ``same_basis``,
+    the statements' share count, the latest revenue in dollars and today's discount rate.
+
+    The price and market cap never enter the result; they are read only as their ratio, the quoted
+    share count ``same_basis`` compares with the statements'. Raises ValueError for a past date:
+    the statements are not dated by filing, as in ``get_value_metrics``.
+
+    Limit: ``same_basis`` compares share counts only when the quote and statement currencies
+    differ, so an ADR quoted in its statement currency (e.g. a USD ADS of two shares) passes."""
+    canonical = normalize_symbol(ticker)
+    if is_historical(as_of_date):
+        raise ValueError(f"no price-blind inputs for the past date {as_of_date}: the statements "
+                         "are not dated by filing")
+    info, years = _annual(yf.Ticker(canonical), ticker, canonical)
+    quote, reported = info.get("currency"), info.get("financialCurrency")
+    basis = _currency_basis(info, years)
+    comparable = not (quote and reported) or basis["major"] == reported or basis["converted"]
+    return {
+        "name": info.get("longName") or info.get("shortName") or canonical,
+        "sector": info.get("sector"),
+        "years": years,
+        "reported": reported or quote,
+        "quote": quote,
+        "cross": basis["cross"] if comparable else None,
+        "factor": basis["factor"],
+        "same_basis": basis["same_basis"],
+        "statement_shares": years[0].get("shares"),
+        "revenue_usd": _revenue_usd(years, reported or quote),
+        "discount_rate": current_discount_rate()["rate"],
+    }
+
+
 def get_value_metrics(
     ticker: Annotated[str, "ticker symbol of the company"],
     as_of_date: Annotated[str, "analysis date in YYYY-MM-DD format"] = None,
@@ -249,35 +338,14 @@ def get_value_metrics(
                 "see information from after its date. Use the statement tools instead.")
 
     t = yf.Ticker(canonical)
-    info = yf_retry(lambda: t.info) or {}
-    frames = [yf_retry(lambda attr=attr: getattr(t, attr)) for attr in ("income_stmt", "balance_sheet", "cashflow")]
-    years = statement_years(*frames)
-    if not years:
-        raise_for_empty(ticker, canonical, "annual statements")
+    info, years = _annual(t, ticker, canonical)
     quarters = quarterly_statements(t)
 
     quote, reported = info.get("currency"), info.get("financialCurrency")
     price = info.get("currentPrice") or info.get("regularMarketPrice")
-    # A London listing is quoted in pence and reports in pounds: compute in the major unit,
-    # then show per-share values in the quote unit the user sees at the broker.
-    # A quote in another currency (Celestica: CAD quote, USD statements) is converted the same
-    # way at today's rate: ``cross`` statement units per quote unit (the major unit for pence).
-    major = MINOR_UNITS.get(quote, quote)
-    minor = quote in MINOR_UNITS and major == reported
-    factor = 100.0 if quote in MINOR_UNITS else 1.0
-    cross, converted = 1.0, False
-    if quote and reported and major != reported:
-        quote_usd, reported_usd = usd_rate(quote), usd_rate(reported)
-        quoted_shares = share_count(info.get("marketCap"), price / factor if price else None)
-        statement_shares = years[0].get("shares")
-        # An ADR's price is per ADR (TSM: 5 ordinary shares), and the history multiples and buyback
-        # price set it against the statements' ordinary count: convert only when the bases agree.
-        # When the bases cannot be compared, a non-dollar quote (CLS.TO, BP.L) is still an
-        # ordinary share; only a dollar quote over foreign statements is the ADR case.
-        same_basis = (abs(quoted_shares / statement_shares - 1) <= SHARE_BASIS_TOLERANCE
-                      if quoted_shares and statement_shares else quote != "USD")
-        if quote_usd and reported_usd and same_basis:
-            cross, converted = quote_usd / reported_usd, True
+    basis = _currency_basis(info, years)
+    major, minor, factor = basis["major"], basis["minor"], basis["factor"]
+    cross, converted = basis["cross"], basis["converted"]
     if (minor or converted) and price is not None:
         price = price / factor * cross
     market_cap = info.get("marketCap")
@@ -319,10 +387,7 @@ def get_value_metrics(
             avg_prices = {k: v / factor * year_cross.get(k, cross) for k, v in closes.items()}
         except Exception:
             avg_prices = {}
-    revenue_usd = None  # the growth base rates are in dollars; revenue arrives in the reporting currency
-    fx = usd_rate(reported or quote)
-    if fx and years[0].get("revenue") is not None:
-        revenue_usd = years[0]["revenue"] * fx
+    revenue_usd = _revenue_usd(years, reported or quote)
     metrics = company_metrics(years, price, market_cap if price else None, shares,
                               rate=rate["rate"], treasury_10y=rate["treasury_10y"], avg_prices=avg_prices,
                               revenue_usd=revenue_usd, quarters=quarters,

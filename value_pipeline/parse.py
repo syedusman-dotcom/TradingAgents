@@ -47,6 +47,15 @@ def intrinsic_value(decision: str) -> float | None:
     return (_dollar_amount(base.group(1)) if base else None) or _dollar_amount(window)
 
 
+def blind_value(text: str) -> float | None:
+    """The price-blind value per share (quote unit) from the Blind Valuer's first line; None when
+    the valuer was skipped or did not run."""
+    from tradingagents.agents.schemas import blind_values
+
+    values = blind_values((text or "").strip().split("\n", 1)[0])
+    return values["value"] if values else None
+
+
 def margin_of_safety(decision: str) -> float | None:
     """'Margin of safety: 32%' as 0.32.
 
@@ -95,6 +104,16 @@ def red_flags(decision: str) -> list[str]:
 def kill_criteria(decision: str) -> list[str]:
     """The numbered Kill Criteria."""
     return [m.group(1).strip() for m in re.finditer(r"^\s*\d+[.)]\s+(.+)$", section(decision, "Kill Criteria"), re.M)]
+
+
+_KILL_CHECK = re.compile(
+    r"^\s*\d+[.)]\s+(.+?)\s+[—–-]\s+(not met|met|unknown)\b\s*(?::\s*(.*))?$", re.M | re.I)
+
+
+def kill_criteria_check(decision: str) -> list[dict]:
+    """The Kill Criteria Check lines, [{"criterion", "status", "note"}]; [] when absent."""
+    return [{"criterion": m.group(1).strip(), "status": m.group(2).lower(), "note": (m.group(3) or "").strip()}
+            for m in _KILL_CHECK.finditer(section(decision, "Kill Criteria Check"))]
 
 
 _CHECKS = {"good business": "good_business", "good management": "good_management",

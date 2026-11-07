@@ -80,3 +80,16 @@ def test_debate_path_map_covers_full_router_range():
     }
     assert returns <= set(DEBATE_PATH_MAP)
     assert "Research Manager" in returns  # terminal reachable
+
+
+@pytest.mark.unit
+def test_the_independent_arm_ends_each_debate_after_one_turn_per_speaker():
+    # One turn each, whatever the round settings: the path maps still hold the terminals.
+    logic = ConditionalLogic(max_debate_rounds=2, max_risk_discuss_rounds=2)
+    risk = {"agent_round": "independent", **_state("Neutral", count=3)}
+    debate = {"agent_round": "independent", **_debate_state("Bear", count=2)}
+    assert logic.should_continue_risk_analysis(risk) == "Pre-mortem"
+    assert logic.should_continue_debate(debate) == "Research Manager"
+    assert "Pre-mortem" in RISK_ANALYSIS_PATH_MAP and "Research Manager" in DEBATE_PATH_MAP
+    assert logic.should_continue_risk_analysis(_state("Neutral", count=3)) == "Aggressive Analyst"
+    assert logic.should_continue_debate(_debate_state("Bear", count=2)) == "Bull Researcher"

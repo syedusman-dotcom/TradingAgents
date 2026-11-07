@@ -243,6 +243,7 @@ def create_app(paths: Paths, *, config_path: Path = CONFIG_PATH, price_fn=market
         return render(request, "calibration.html", rows=rs, scores=scores,
                       paper_view=calibration.paper_view(scores["paper"]),
                       brier_view=calibration.brier_view(rs, scores),
+                      arm_view=calibration.arm_view(rs, scores),
                       has_horizons=calibration.has_horizons(rs), horizons=calibration.HORIZONS)
 
     @app.get("/backtest", response_class=HTMLResponse)

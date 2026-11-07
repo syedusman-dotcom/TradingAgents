@@ -72,6 +72,9 @@ def decision_checks(decision: PortfolioDecision, formula_value: float | None,
     if decision.rating.value != "Sell" and len(decision.kill_criteria) < MIN_KILL_CRITERIA:
         problems.append(f"Only {len(decision.kill_criteria)} kill criteria: give 3 to 6 verifiable "
                         "facts that would prove the thesis wrong.")
+    if decision.rating.value in ("Buy", "Overweight", "Hold"):
+        problems += [f"Kill criterion met without a rebuttal: {c.criterion}"
+                     for c in decision.kill_criteria_check if c.status == "met" and not c.note.strip()]
     if decision.rating.value != "Sell":
         if decision.lane == "compounder":
             problems += _compounder_problems(decision, formula_value, price, worksheet)

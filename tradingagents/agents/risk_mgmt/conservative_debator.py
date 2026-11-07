@@ -1,4 +1,5 @@
 from tradingagents.agents.context import (
+    arm_of,
     get_instrument_context_from_state,
     get_language_instruction,
     get_portfolio_context_from_state,
@@ -13,11 +14,15 @@ def create_conservative_debator(llm):
         history = risk_debate_state.get("history", "")
         conservative_history = risk_debate_state.get("conservative_history", "")
 
+        # The independent arm speaks once, from the reports alone: no history, no other view.
+        independent = arm_of(state) == "independent"
         current_aggressive_response = opponent_argument_or_opening(
-            risk_debate_state.get("current_aggressive_response", ""), "aggressive analyst"
+            "" if independent else risk_debate_state.get("current_aggressive_response", ""),
+            "aggressive analyst",
         )
         current_neutral_response = opponent_argument_or_opening(
-            risk_debate_state.get("current_neutral_response", ""), "neutral analyst"
+            "" if independent else risk_debate_state.get("current_neutral_response", ""),
+            "neutral analyst",
         )
 
         market_research_report = report_or_absent(state["market_report"], "market")
@@ -28,12 +33,43 @@ def create_conservative_debator(llm):
         portfolio_context = get_portfolio_context_from_state(state)
 
         trader_decision = state["trader_investment_plan"]
+        history_line = "" if independent else f"Here is the current conversation history: {history} "
+
+        # The independent arm has not seen the others' cases, so it is not asked to answer them.
+        task = (
+            "You have not seen the aggressive or neutral analysts' cases; make your "
+            'own case from the evidence, drawing from the following data sources to '
+            'build a convincing case for a low-risk approach adjustment to the '
+            "trader's decision:"
+            if independent
+            else (
+                'Your task is to actively counter the arguments of the Aggressive and'
+                ' Neutral Analysts, highlighting where their views may overlook '
+                'potential threats or fail to prioritize sustainability. Respond '
+                'directly to their points, drawing from the following data sources to'
+                ' build a convincing case for a low-risk approach adjustment to the '
+                "trader's decision:"
+            )
+        )
+        engage = (
+            'Emphasize the potential downsides and show why a conservative stance is '
+            "ultimately the safest path for the firm's assets."
+            if independent
+            else (
+                'Engage by questioning their optimism and emphasizing the potential '
+                'downsides they may have overlooked. Address each of their '
+                'counterpoints to showcase why a conservative stance is ultimately '
+                "the safest path for the firm's assets. Focus on debating and "
+                'critiquing their arguments to demonstrate the strength of a low-risk'
+                ' strategy over their approaches.'
+            )
+        )
 
         prompt = f"""As the Conservative Risk Analyst, your primary objective is to protect assets, minimize volatility, and ensure steady, reliable growth. Evaluate the plan as part of a long-term value portfolio held for 1-3 years; judge risk mainly as permanent loss of capital (business deterioration, overpaying, leverage), not short-term volatility. You prioritize stability, security, and risk mitigation, carefully assessing potential losses, economic downturns, and market volatility. When evaluating the trader's decision or plan, critically examine high-risk elements, pointing out where the decision may expose the firm to undue risk and where more cautious alternatives could secure long-term gains. Here is the trader's decision:
 
 {trader_decision}
 
-Your task is to actively counter the arguments of the Aggressive and Neutral Analysts, highlighting where their views may overlook potential threats or fail to prioritize sustainability. Respond directly to their points, drawing from the following data sources to build a convincing case for a low-risk approach adjustment to the trader's decision:
+{task}
 
 {instrument_context}
 {portfolio_context}
@@ -41,9 +77,9 @@ Market Research Report: {market_research_report}
 Social Media Sentiment Report: {sentiment_report}
 Latest World Affairs Report: {news_report}
 Company Fundamentals Report: {fundamentals_report}
-Here is the current conversation history: {history} Here is the last response from the aggressive analyst: {current_aggressive_response} Here is the last response from the neutral analyst: {current_neutral_response}. If there are no responses from the other viewpoints yet, present your own argument based on the available data.
+{history_line}Here is the last response from the aggressive analyst: {current_aggressive_response} Here is the last response from the neutral analyst: {current_neutral_response}. If there are no responses from the other viewpoints yet, present your own argument based on the available data.
 
-Engage by questioning their optimism and emphasizing the potential downsides they may have overlooked. Address each of their counterpoints to showcase why a conservative stance is ultimately the safest path for the firm's assets. Focus on debating and critiquing their arguments to demonstrate the strength of a low-risk strategy over their approaches. Output conversationally as if you are speaking without any special formatting.""" + get_language_instruction()
+{engage} Output conversationally as if you are speaking without any special formatting.""" + get_language_instruction()
 
         response = llm.invoke(prompt)
 

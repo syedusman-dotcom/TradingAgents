@@ -19,7 +19,7 @@ from langchain_core.runnables import RunnableLambda
 from pydantic import Field
 
 from tradingagents.agents import context, schemas
-from tradingagents.agents.analysts import sentiment_analyst
+from tradingagents.agents.analysts import blind_valuer, sentiment_analyst
 from tradingagents.dataflows import router
 from tradingagents.dataflows.vendors.yahoo import market as yahoo_market, snapshot
 from tradingagents.default_config import DEFAULT_CONFIG
@@ -41,6 +41,9 @@ STRUCTURED = {
         investment_thesis="Street consensus rating: Buy (28 of 35 analysts)."),
     schemas.SentimentReport: schemas.SentimentReport(
         overall_band=schemas.SentimentBand.NEUTRAL, overall_score=5.0, confidence="low", narrative="n"),
+    schemas.BlindValuation: schemas.BlindValuation(
+        value_per_share=10.0, low=8.0, high=12.0, growth_5y=0.04, discount_rate=0.09,
+        method="m", reasoning="r"),
 }
 
 ARGS = {"symbol": "NVDA", "ticker": "NVDA", "curr_date": TRADE_DATE, "start_date": "2026-01-02",
@@ -126,6 +129,72 @@ def _graph(tmp_path, monkeypatch, model, debug=False, **config):
                memory_log_path=str(tmp_path / "log.md"), **config)
     monkeypatch.setattr(trading_graph, "create_tier_client", lambda config, tier, **k: _Client(model))
     return trading_graph.TradingAgentsGraph(config=cfg, debug=debug)
+
+
+@pytest.mark.unit
+def test_the_arm_reaches_the_final_state(tmp_path, monkeypatch, offline):
+    graph = _graph(tmp_path, monkeypatch, ScriptedModel())
+    state, _ = graph.propagate("NVDA", TRADE_DATE)
+    assert state["agent_round"] == "current"
+    state, _ = _graph(tmp_path / "b", monkeypatch, ScriptedModel()).propagate(
+        "NVDA", TRADE_DATE, agent_round="independent")
+    assert state["agent_round"] == "independent"
+    # A past-dated run has no blind inputs (the statements are not dated by filing).
+    assert state["blind_valuation"].startswith("skipped: ")
+    assert state["base_rates"] == ""
+    # The Research Manager read the two openings in a seeded order and recorded it.
+    assert state["judge_order"] in {"bull-first", "bear-first"}
+
+
+@pytest.mark.unit
+def test_a_blind_valuer_crash_is_a_skip_and_the_review_goes_on(tmp_path, monkeypatch, offline):
+    def boom(t, d):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(blind_valuer, "blind_inputs", boom)
+    state, _ = _graph(tmp_path, monkeypatch, ScriptedModel(structured=True)).propagate(
+        "NVDA", TRADE_DATE, agent_round="independent")
+    assert state["blind_valuation"] == "skipped: RuntimeError: boom"
+    assert state["final_trade_decision"]
+
+    def type_error(inputs):
+        raise TypeError("odd statements")
+
+    inputs = {"name": "NVIDIA", "sector": "Technology", "reported": "USD", "quote": "USD",
+              "cross": 1.0, "factor": 1.0, "same_basis": True, "statement_shares": 1e9,
+              "revenue_usd": 1e11, "discount_rate": 0.09, "years": []}
+    monkeypatch.setattr(blind_valuer, "blind_inputs", lambda t, d: inputs)
+    monkeypatch.setattr(blind_valuer, "blind_fundamentals_text", type_error)
+    state, _ = _graph(tmp_path / "b", monkeypatch, ScriptedModel(structured=True)).propagate(
+        "NVDA", TRADE_DATE, agent_round="independent")
+    assert state["blind_valuation"] == "skipped: TypeError: odd statements"
+    assert state["final_trade_decision"]
+
+
+@pytest.mark.unit
+def test_the_independent_arm_files_a_blind_valuation(tmp_path, monkeypatch, offline):
+    from tradingagents.reporting import write_report_tree
+
+    inputs = {"name": "NVIDIA", "sector": "Technology", "reported": "USD", "quote": "USD",
+              "cross": 1.0, "factor": 1.0, "same_basis": True, "statement_shares": 1e9,
+              "revenue_usd": 1e11, "discount_rate": 0.09,
+              "years": [{"fiscal_year_end": "2025-12-31", "revenue": 1e11, "free_cash_flow": 5e10,
+                         "shares": 1e9}]}
+    monkeypatch.setattr(blind_valuer, "blind_inputs", lambda t, d: inputs)
+    model = ScriptedModel(structured=True)
+    state, _ = _graph(tmp_path, monkeypatch, model).propagate(
+        "NVDA", TRADE_DATE, agent_round="independent")
+    assert state["blind_valuation"].startswith("**Value per share**: 10.00 (range 8.00–12.00)")
+    assert state["base_rates"].startswith("Base rates")
+    write_report_tree(state, "NVDA", tmp_path / "report")
+    saved = (tmp_path / "report" / "1_analysts" / "blind_valuation.md").read_text()
+    assert saved == state["blind_valuation"]
+
+    current, _ = _graph(tmp_path / "c", monkeypatch, ScriptedModel(structured=True)).propagate(
+        "NVDA", TRADE_DATE)
+    assert current["blind_valuation"] == current["base_rates"] == ""
+    write_report_tree(current, "NVDA", tmp_path / "current")
+    assert not (tmp_path / "current" / "1_analysts" / "blind_valuation.md").exists()
 
 
 @pytest.mark.unit
@@ -406,6 +475,28 @@ def test_risk_round_ends_at_the_premortem_then_the_portfolio_manager(tmp_path, m
     assert "this position has lost 40%" in premortem_prompt
     logged = next(tmp_path.glob("results/NVDA/TradingAgentsStrategy_logs/*.json")).read_text()
     assert '"premortem": "Pre-mortem: ' in logged
+
+
+@pytest.mark.unit
+def test_the_independent_arm_hears_each_side_once_and_terminates(tmp_path, monkeypatch, offline):
+    model = TimedModel()
+    graph = _graph(tmp_path, monkeypatch, model, max_debate_rounds=2, max_risk_discuss_rounds=2)
+
+    state, _ = graph.propagate("NVDA", TRADE_DATE, agent_round="independent")
+
+    steps = [c[0] for c in model.seen]
+    debate = [s for s in steps if s in {"Bull Researcher", "Bear Researcher", "Aggressive Analyst",
+                                        "Conservative Analyst", "Neutral Analyst"}]
+    assert debate == ["Bull Researcher", "Bear Researcher", "Aggressive Analyst",
+                      "Conservative Analyst", "Neutral Analyst"]
+    assert steps[-2:] == ["Pre-mortem", "Portfolio Manager"]
+    bear_prompt = next(c[1] for c in model.seen if c[0] == "Bear Researcher")
+    assert "**Adverse evidence pack**" in bear_prompt and "get_news data" in bear_prompt
+    assert "Bull Analyst:" not in bear_prompt
+    pm_prompt = next(c[1] for c in model.seen if c[0] == "Portfolio Manager")
+    assert "**Risk views**" in pm_prompt
+    assert state["judge_order"] in {"bull-first", "bear-first"}
+    assert state["final_rating"]
 
 
 @pytest.mark.unit

@@ -172,7 +172,7 @@ class _Graph:
     def settle_all_pending(self):
         pass
 
-    def propagate(self, ticker, day, portfolio=None):
+    def propagate(self, ticker, day, portfolio=None, agent_round="current"):
         rating = {"HRB": "Buy", "MSFT": "Overweight"}.get(ticker, "Hold")
         return {"final_trade_decision": f"**Rating**: {rating}\n\n**Price Target**: 100"}, rating
 

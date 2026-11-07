@@ -607,7 +607,7 @@ def test_run_agents_records_the_tally_for_the_ticker(tmp_path):
             return {"calls": 3, "tokens_in": 10, "tokens_out": 5, "nominal_cost_usd": 0.5}
 
     class Graph:
-        def propagate(self, ticker, day, portfolio=None):
+        def propagate(self, ticker, day, portfolio=None, agent_round="current"):
             return {"final_trade_decision": "**Rating**: Hold"}, "Hold"
 
         def save_reports(self, state, ticker, save_path, html):
@@ -635,7 +635,7 @@ class _FlakyGraph:
     def __init__(self, fail_times):
         self.fail_times, self.calls = fail_times, 0
 
-    def propagate(self, ticker, day, portfolio=None):
+    def propagate(self, ticker, day, portfolio=None, agent_round="current"):
         self.calls += 1
         if self.calls <= self.fail_times:
             raise RuntimeError("boom")
@@ -652,7 +652,7 @@ def test_run_agents_passes_the_pipeline_note(tmp_path):
     notes = []
 
     class Graph:
-        def propagate(self, ticker, day, portfolio=None, context_note=""):
+        def propagate(self, ticker, day, portfolio=None, context_note="", agent_round="current"):
             notes.append(context_note)
             return {"final_trade_decision": "**Rating**: Hold"}, "Hold"
 
@@ -662,6 +662,43 @@ def test_run_agents_passes_the_pipeline_note(tmp_path):
     review.run_agents(Graph(), "ADBE", "2026-10-23", None, tmp_path, note="lane hint dislocation")
     review.run_agents(Graph(), "ADBE", "2026-10-23", None, tmp_path)
     assert notes == ["lane hint dislocation", ""]
+
+
+@pytest.mark.unit
+def test_run_agents_reads_the_blind_value_from_the_final_state(tmp_path, monkeypatch):
+    from value_pipeline import review
+
+    monkeypatch.setattr(review, "_company_name", lambda t: t)
+    blind = "**Value per share**: 42.50 (range 34.00–51.00) in the quote unit\n\n**Method**: m"
+
+    class Graph:
+        def propagate(self, ticker, day, portfolio=None, agent_round="current"):
+            return {"final_trade_decision": "**Rating**: Hold", "blind_valuation": blind}, "Hold"
+
+        def save_reports(self, state, ticker, save_path, html):
+            pass
+
+    r = review.run_agents(Graph(), "HRB", "2026-11-09", None, tmp_path, arm="independent")
+    assert r.blind_value == 42.5 and r.agent_round == "independent"
+
+
+@pytest.mark.unit
+def test_run_agents_records_the_arm_the_graph_ran(tmp_path, monkeypatch):
+    from value_pipeline import review
+
+    monkeypatch.setattr(review, "_company_name", lambda t: t)
+
+    class Resumed:
+        """A resumed run: the checkpoint's arm, not the one requested."""
+
+        def propagate(self, ticker, day, portfolio=None, agent_round="current"):
+            return {"final_trade_decision": "**Rating**: Hold", "agent_round": "independent"}, "Hold"
+
+        def save_reports(self, state, ticker, save_path, html):
+            pass
+
+    r = review.run_agents(Resumed(), "HRB", "2026-11-09", None, tmp_path, arm="current")
+    assert r.agent_round == "independent"
 
 
 @pytest.mark.unit
@@ -890,7 +927,7 @@ def test_value_gap_flag_prints_the_bridge():
 
 
 @pytest.mark.unit
-def _review_one(tmp_path, monkeypatch, decision, price):
+def _review_one(tmp_path, monkeypatch, decision, price, agent_round=None):
     """A dry-run review of HRB whose agents return ``decision``: the results.json row and the Decision."""
     import json
 
@@ -915,7 +952,12 @@ def _review_one(tmp_path, monkeypatch, decision, price):
         return real_plan(decisions, *args)
 
     monkeypatch.setattr(review, "plan", plan)
-    out = review.run(paths, DEFAULTS, yes=True, dry_run=True, today="2026-10-23", only=["HRB"])
+    cfg = DEFAULTS
+    if agent_round:
+        import copy
+        cfg = copy.deepcopy(DEFAULTS)
+        cfg["review"]["agent_round"] = agent_round
+    out = review.run(paths, cfg, yes=True, dry_run=True, today="2026-10-23", only=["HRB"])
     return json.loads((out.parent / "results.json").read_text())[0], planned["d"][0]
 
 
@@ -929,6 +971,19 @@ def test_results_json_carries_the_checklist_fields(tmp_path, monkeypatch):
     assert row["scenarios"]["expected_value"] == pytest.approx(56.0)
     assert row["value_bridge"][1] == {"reason": "net debt", "amount": -12.33}
     assert row["red_flags"] == []
+    assert row["kill_criteria_check"] == []
+
+
+@pytest.mark.unit
+def test_results_json_carries_the_kill_criteria_check(tmp_path, monkeypatch):
+    from tests.test_decision_math import _decision
+    from tradingagents.agents.schemas import KillCheck
+
+    decision = _decision(kill_criteria_check=[KillCheck(criterion="Dividend cut", status="not met",
+                                                        note="raised in May")])
+    row, _ = _review_one(tmp_path, monkeypatch, decision, 50.0)
+    assert row["kill_criteria_check"] == [{"criterion": "Dividend cut", "status": "not met",
+                                           "note": "raised in May"}]
 
 
 @pytest.mark.unit
@@ -1944,3 +1999,40 @@ def _rendered(decision):
     from tradingagents.agents.schemas import render_pm_decision
 
     return render_pm_decision(decision)
+
+
+@pytest.mark.unit
+def test_arm_for_follows_the_setting_and_ab_splits_evenly():
+    from value_pipeline.review import arm_for
+
+    assert arm_for("AAPL", "2026-11-09", "current") == "current"
+    assert arm_for("AAPL", "2026-11-09", "independent") == "independent"
+    arms = [arm_for(f"T{i}", "2026-11-09", "ab") for i in range(1000)]
+    assert arms == [arm_for(f"T{i}", "2026-11-09", "ab") for i in range(1000)]
+    assert 400 <= arms.count("independent") <= 600
+
+
+@pytest.mark.unit
+def test_missing_data_lines_counts_the_gaps_in_a_decision():
+    from value_pipeline.review import missing_data_lines
+
+    assert missing_data_lines("News not provided. Altman Z not retrieved.") == 2
+    assert missing_data_lines("All good.") == 0
+
+
+@pytest.mark.unit
+def test_missing_data_lines_skips_the_rendered_entry_price_line():
+    from value_pipeline.review import missing_data_lines
+
+    text = "**Rating**: Sell\n\n**Entry Price**: not provided\n\nNews not retrieved."
+    assert missing_data_lines(text) == 1
+
+
+@pytest.mark.unit
+def test_results_row_records_the_arm_and_the_gap_count(tmp_path, monkeypatch):
+    from tests.test_decision_math import _good_decision
+
+    row, _ = _review_one(tmp_path, monkeypatch, _good_decision(), 50.0, agent_round="ab")
+    assert row["agent_round"] in ("current", "independent")
+    assert isinstance(row["missing_data_lines"], int)
+    assert row["blind_value"] is None and row["judge_order"] is None

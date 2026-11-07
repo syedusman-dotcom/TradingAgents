@@ -676,3 +676,125 @@ def test_rows_carry_the_horizons_whose_day_has_passed(tmp_path):
     _paper_review(paths, "2026-01-05", "USD")
     row = calibration.rows(paths, today=date(2026, 4, 20), price_fn=lambda t, d: 10.0)[0]
     assert row["reached"] == [30, 90]
+
+
+# --- per-arm Brier scores and the adoption rule ---------------------------------------------
+
+def _arm_rows():
+    """30 current-arm rows, 30 independent-arm rows and two legacy rows without an arm."""
+    current = [{**r, "agent_round": "current", "rating": "Hold", "margin_of_safety": 0.1,
+                "missing_data_lines": 2, "value": 110.0, "intrinsic_value": 110.0}
+               for r in _brier_rows()]
+    independent = [{**r, "agent_round": "independent", "rating": "Buy" if i < 10 else "Hold",
+                    "margin_of_safety": 0.3, "missing_data_lines": 0, "blind_value": 90.0,
+                    "value": 120.0, "intrinsic_value": 120.0}
+                   for i, r in enumerate(_brier_rows(n_below=3, n_above=12))]
+    legacy = [_brier_row(0.9, True, 0.9, False), _brier_row(0.9, True, 0.9, False)]
+    return current + independent + legacy
+
+
+@pytest.mark.unit
+def test_brier_by_arm_leaves_out_rows_without_one():
+    rs = _arm_rows()
+    assert calibration.brier(rs, 365)["n"] == 62
+    cur = calibration.brier(rs, 365, arm="current")
+    assert cur["n"] == 30
+    assert cur == calibration.brier(_arm_rows()[:30], 365)
+    assert calibration.brier(rs, 365, arm="independent")["n"] == 30
+    assert calibration.brier(rs, 180, arm="current") is None
+
+
+@pytest.mark.unit
+def test_arms_summarise_each_arm_present():
+    rs = _arm_rows()
+    arms = {a["arm"]: a for a in calibration.arms(rs)}
+    assert list(arms) == ["current", "independent"]
+    cur, ind = arms["current"], arms["independent"]
+    assert cur["n"] == 30 and ind["n"] == 30
+    assert cur["brier_365"] == calibration.brier(rs, 365, arm="current")
+    assert cur["brier_180"] is None
+    assert cur["median_mos"] == pytest.approx(0.1) and ind["median_mos"] == pytest.approx(0.3)
+    assert cur["median_missing"] == 2 and ind["median_missing"] == 0
+    assert cur["ratings"] == {"Hold": 30} and ind["ratings"] == {"Buy": 10, "Hold": 20}
+    assert cur["median_blind_gap"] is None
+    assert ind["median_blind_gap"] == pytest.approx(0.1)
+    assert cur["median_value_gap"] == pytest.approx(0.1)
+    assert ind["median_value_gap"] == pytest.approx(0.2)
+    # Legacy rows only: no arm, and nothing raises.
+    assert calibration.arms(_arm_rows()[60:]) == []
+    assert calibration.arms([]) == []
+
+
+@pytest.mark.unit
+def test_score_carries_the_arms_and_the_adoption_rule():
+    rs = _arm_rows()
+    s = calibration.score(rs)
+    assert s["adoption_rule"] == calibration.ADOPTION_RULE
+    assert calibration.ADOPTION_RULE.startswith("Counting only rows that carry an arm")
+    assert calibration.ADOPTION_RULE.endswith("recorded in the ledger before any config change.")
+    assert [a["arm"] for a in s["arms"]] == ["current", "independent"]
+    text = calibration.markdown(rs, s)
+    assert calibration.ARM_TABLE_HEADER in text and calibration.ADOPTION_RULE in text
+    assert "| independent | 30 |" in text
+    # Legacy rows: no arm table rows, the rule still shown.
+    legacy = _arm_rows()[60:]
+    text = calibration.markdown(legacy, calibration.score(legacy))
+    assert "No review has recorded an arm yet." in text and calibration.ADOPTION_RULE in text
+
+
+@pytest.mark.unit
+def test_rows_carry_the_arm_fields_and_legacy_rows_give_none(tmp_path):
+    paths = _reviews(tmp_path)
+    _write(paths, "2025-02-10", [
+        {"ticker": "MSFT", "rating": "Hold", "error": None, "price": 100.0,
+         "intrinsic_value": 120.0, "margin_of_safety": 0.17, "agent_round": "independent",
+         "blind_value": 110.0, "missing_data_lines": 3}])
+    rows = {r["ticker"]: r for r in calibration.rows(paths, today=date(2026, 10, 24),
+                                                       price_fn=_price_fn)}
+    m = rows["MSFT"]
+    assert (m["agent_round"], m["blind_value"], m["missing_data_lines"]) == ("independent", 110.0, 3)
+    assert m["margin_of_safety"] == pytest.approx(0.17)
+    g = rows["G"]
+    assert (g["agent_round"], g["blind_value"], g["missing_data_lines"]) == (None, None, None)
+    assert calibration.arms(list(rows.values()))[0]["arm"] == "independent"
+
+
+@pytest.mark.unit
+def test_page_shows_the_arm_table_before_any_horizon_is_reached(tmp_path):
+    paths = Paths(tmp_path / "data")
+    _write(paths, "2026-11-09", [
+        {"ticker": "ADBE", "rating": "Overweight", "error": None, "price": 100.0,
+         "intrinsic_value": 120.0, "agent_round": "independent", "missing_data_lines": 1},
+        {"ticker": "CI", "rating": "Sell", "error": None, "price": 50.0,
+         "intrinsic_value": 40.0, "agent_round": "current", "missing_data_lines": 0}])
+    r = _web(tmp_path, paths).get("/calibration")
+    assert r.status_code == 200
+    assert "No decisions old enough yet" in r.text
+    assert "By review arm" in r.text and "independent" in r.text and "current" in r.text
+    assert "Adoption rule" in r.text and "n/a" in r.text
+    assert "not yet readable" not in r.text
+
+
+@pytest.mark.unit
+def test_page_and_cli_show_the_arm_table_and_the_rule(tmp_path, monkeypatch, capsys):
+    paths = Paths(tmp_path / "data")
+    _write(paths, "2025-01-10", [
+        {"ticker": "ADBE", "rating": "Overweight", "error": None, "lane": "compounder",
+         "price": 100.0, "intrinsic_value": 120.0, "scenarios": _scen(80.0, 120.0, 150.0),
+         "agent_round": "independent", "blind_value": 115.0, "missing_data_lines": 1},
+        {"ticker": "CI", "rating": "Sell", "error": None, "lane": "value", "price": 50.0,
+         "intrinsic_value": 40.0, "agent_round": "current", "missing_data_lines": 0}])
+    (paths.cache / "prices").mkdir(parents=True)
+    (paths.cache / "prices" / "ADBE.json").write_text(json.dumps(
+        {"2025-02-09": 105.0, "2025-04-10": 110.0, "2025-07-09": 125.0, "2026-01-10": 130.0}))
+    r = _web(tmp_path, paths).get("/calibration")
+    assert r.status_code == 200
+    assert "independent" in r.text and "Adoption rule" in r.text
+    assert "the A/B continues" in r.text
+
+    monkeypatch.setattr(market_data, "closes_between",
+                        lambda ticker, start, end=None: pd.Series(
+                            [PRICES.get(ticker, 30.0)], index=[date.fromisoformat(end)]))
+    cli.main(["--data-dir", str(paths.root), "calibration"])
+    out = capsys.readouterr().out
+    assert "Arm" in out and "Adoption rule" in out and "independent" in out

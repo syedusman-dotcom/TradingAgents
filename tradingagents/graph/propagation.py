@@ -18,6 +18,7 @@ class Propagator:
         past_context: str = "",
         instrument_context: str = "",
         portfolio_context: str = "",
+        agent_round: str = "current",
     ) -> dict[str, Any]:
         """Create the initial state for the agent graph.
 
@@ -63,6 +64,10 @@ class Propagator:
             "sentiment_report": "",
             "news_report": "",
             "premortem": "",
+            "agent_round": agent_round,
+            "blind_valuation": "",
+            "base_rates": "",
+            "judge_order": "",
         }
 
     def get_graph_args(self, callbacks: list | None = None) -> dict[str, Any]:

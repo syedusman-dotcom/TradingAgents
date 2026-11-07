@@ -403,20 +403,39 @@ def test_sensitivity_grid_moves_with_rate_and_growth():
     assert v["grid"]["r"][2] > v["grid"]["r"][0]
 
 
-def test_growth_base_rates_pick_the_cohort_and_cap():
-    br = vm.growth_base_rates(8e9)
-    assert br["cohort"] == "$5–25B" and 0 < br["share_achieving"][0.10] < br["share_achieving"][0.05]
-    assert br["cap"] in br["share_achieving"] and vm.growth_base_rates(None) is None
-    assert vm.growth_base_rates(0) is None
-    assert vm.growth_base_rates(5e8)["cohort"] == "<$1B" and vm.growth_base_rates(1e11)["cohort"] == ">$25B"
+def test_growth_base_rates_pick_the_cohort_and_interpolated_cap():
+    br = vm.growth_base_rates(1.35 * 10e9)
+    assert br["cohort"] == "$7–12B" and br["median"] == 0.032
+    assert br["cap"] == pytest.approx(0.070, abs=0.0005)
+    assert vm.growth_base_rates(None) is None and vm.growth_base_rates(0) is None
+    assert vm.growth_base_rates(1.35 * 1e8)["cohort"] == "<$325M"
+    assert vm.growth_base_rates(1.35 * 1e11)["cohort"] == ">$50B"
+
+
+def test_growth_base_rates_caps_match_the_spec_table():
+    expected = [("<$325M", 2e8, 16.8), ("$325–700M", 5e8, 10.0), ("$700M–1.25B", 1e9, 9.7),
+                ("$1.25–2B", 1.5e9, 9.1), ("$2–3B", 2.5e9, 8.4), ("$3–4.5B", 4e9, 7.9),
+                ("$4.5–7B", 6e9, 7.5), ("$7–12B", 1e10, 7.0), ("$12–25B", 2e10, 6.3),
+                ("$25–50B", 4e10, 5.7), (">$50B", 1e11, 4.5)]
+    for label, rev, cap in expected:
+        br = vm.growth_base_rates(1.35 * rev)
+        assert br["cohort"] == label
+        assert br["cap"] == pytest.approx(cap / 100, abs=6e-4), label
 
 
 def test_base_rate_note_names_the_level_the_implied_growth_reaches():
-    note = vm.base_rate_note(0.079, 8e9)
-    assert note == ("Implied growth 7.9%/yr: base rate — about 30% of companies with revenue $5–25B "
-                    "sustained 7% or more for 10 years.")
+    note = vm.base_rate_note(0.12, 1.35 * 1.5e9)
+    assert "companies with revenue $1.25–2B (2015 dollars) sustained" in note
+    assert "19%" in note and "10%" in note
     assert "0% or more" in vm.base_rate_note(-0.02, 8e9)
     assert vm.base_rate_note(None, 8e9) is None and vm.base_rate_note(0.05, None) is None
+
+
+def test_base_rate_block_renders_the_cohort_and_the_fixed_sentences():
+    block = vm.base_rate_block(1.35 * 1.5e9)
+    for text in ("sales of $1.25–2B (2015 dollars)", "5.1%", "19%", "23% of companies shrank", "18 to 9 points", "0.72"):
+        assert text in block
+    assert vm.base_rate_block(None) is None and vm.base_rate_block(0) is None
 
 
 def test_worksheet_renders_epv_grid_and_base_rate_note():
@@ -487,7 +506,7 @@ def test_report_places_yen_revenue_in_the_dollar_cohort():
     years = [_year(revenue=1.5e12), _year(revenue=1.4e12)]
     m = vm.company_metrics(years, price=20, market_cap=2000, shares=100, revenue_usd=1.5e12 * 0.0064)
     text = vm.render_report("7203.T", "2026-10-23", m, currency="JPY")
-    assert "companies with revenue $5–25B" in text  # 1.5e12 yen is $9.6B; raw it would be >$25B
+    assert "companies with revenue $7–12B" in text  # 1.5e12 yen is $9.6B; raw it would be >$50B
 
 
 @pytest.mark.unit
@@ -819,15 +838,15 @@ def test_roic_including_goodwill_adds_it_to_capital():
 def test_earned_growth_is_the_revenue_cagr_held_to_the_cohort_cap():
     years = [_year(fiscal_year_end=f"{2025 - i}-12-31", revenue=1000 * 1.12 ** (10 - i)) for i in range(11)]
     small = vm.company_metrics(years, 20, 2000, 100)
-    assert small["record"]["earned_growth"] == pytest.approx(0.10)        # under $1B the cap is 10%
-    large = vm.company_metrics(years, 20, 2000, 100, revenue_usd=30e9)
-    assert large["record"]["earned_growth"] == pytest.approx(0.05)        # over $25B: 5%
+    assert small["record"]["earned_growth"] == pytest.approx(0.12)        # under $325M the cap is 16.8%: the CAGR stands
+    large = vm.company_metrics(years, 20, 2000, 100, revenue_usd=100e9)
+    assert large["record"]["earned_growth"] == pytest.approx(0.045, abs=5e-4)  # over $50B: 4.5%
     slow = [_year(fiscal_year_end=f"{2025 - i}-12-31", revenue=1000 * 1.04 ** (10 - i)) for i in range(11)]
     assert vm.company_metrics(slow, 20, 2000, 100)["record"]["earned_growth"] == pytest.approx(0.04)
     assert vm.company_metrics([_year(), _year()], 20, 2000, 100)["record"]["earned_growth"] is None
     assert vm.earned_growth(0.12, None) == pytest.approx(vm.ER_MAX_GROWTH)    # unknown cohort
     report = vm.render_report("X", "2026-10-23", large)
-    assert "- Earned growth 5.0%" in report
+    assert "- Earned growth 4.5%" in report
 
 
 @pytest.mark.unit

@@ -11,9 +11,11 @@ free-text generation and the rating is read from that text.
 from __future__ import annotations
 
 from tradingagents.agents.context import (
+    arm_of,
     get_instrument_context_from_state,
     get_language_instruction,
     get_portfolio_context_from_state,
+    judge_order,
 )
 from tradingagents.agents.decision_math import (
     consensus_excerpt,
@@ -25,8 +27,45 @@ from tradingagents.agents.decision_math import (
     worksheet_price,
 )
 from tradingagents.agents.rating import parse_rating
-from tradingagents.agents.schemas import PortfolioDecision, render_pm_decision
+from tradingagents.agents.schemas import PortfolioDecision, blind_values, render_pm_decision
 from tradingagents.agents.structured import NO_EXTERNAL_TOOLS, bind_structured, invoke_structured
+
+_SCENARIO_RULE = (
+    "Start the base scenario's growth at the cohort median (add about two points for inflation). "
+    "The bull scenario may not assume a rate that fewer than 10% of the cohort reached unless the "
+    "basis names the reason. The bear scenario's probability may not be below the cohort's share "
+    "that shrank. Name the base rate used in each scenario's basis."
+)
+
+
+def _num(x: float | None) -> str:
+    return f"{x:.2f}" if x is not None else "n/a"
+
+
+def _pct(x: float | None) -> str:
+    return f"{x:.1%}" if x is not None else "n/a"
+
+
+def _blind_block(text: str, base: float | None, price: float | None) -> str:
+    """The price-blind value against the worksheet base and the price, or why there is none."""
+    v = blind_values(text)
+    if v is None:
+        text = (text or "").strip()
+        reason = text.removeprefix("skipped:").strip() if text.startswith("skipped:") else ""
+        return f"No price-blind valuation ({reason or 'not produced'}).\n"
+    return (
+        f"**Price-blind valuation** (made without the price): {_num(v['value'])} per share, "
+        f"range {_num(v['low'])}–{_num(v['high'])}, growth {_pct(v['growth'])}, "
+        f"discount {_pct(v['discount'])}. The worksheet base is {_num(base)}; the price is "
+        f"{_num(price)}. Treat the blind value and the worksheet base as two independent "
+        "estimates: your base scenario value must lie between them or you must say which one "
+        "you reject and why.\n"
+    )
+
+
+def _base_rate_block(text: str) -> str:
+    """The cohort's base rates and the scenario rule; "cohort unknown" without them."""
+    return f"**Base rates**\n{(text or '').strip() or 'cohort unknown'}\n{_SCENARIO_RULE}\n"
 
 
 def create_portfolio_manager(llm):
@@ -38,6 +77,17 @@ def create_portfolio_manager(llm):
 
         history = state["risk_debate_state"]["history"]
         risk_debate_state = state["risk_debate_state"]
+        if arm_of(state) == "independent":
+            # Three independent statements, each under its own heading, in a seeded order.
+            order = judge_order(state["company_of_interest"], state.get("trade_date", ""), "risk")
+            views = "\n\n".join(
+                f"**{name.capitalize()} view**\n"
+                f"{(risk_debate_state.get(f'{name}_history') or '').strip() or '(not filed)'}"
+                for name in order
+            )
+            risk_section = f"**Risk views**\n\n{views}"
+        else:
+            risk_section = f"**Risk Analysts Debate History:**\n{history}"
         research_plan = state["investment_plan"]
         trader_plan = state["trader_investment_plan"]
 
@@ -74,6 +124,12 @@ def create_portfolio_manager(llm):
         ) + (f"**Record and inflection (the lanes' numbers):**\n{record}\n" if record else "") + (
             f"**Innovation and reinvestment:**\n{innovation}\n" if innovation else "") + (
             f"**Consensus (Yahoo estimates):**\n{consensus}\n" if consensus else "")
+        # The independent arm also reconciles the price-blind value and starts from base rates.
+        independent_blocks = (
+            _blind_block(state.get("blind_valuation", ""), base, price)
+            + _base_rate_block(state.get("base_rates", ""))
+            if arm_of(state) == "independent" else ""
+        )
 
         prompt = f"""As the Portfolio Manager, synthesize the risk analysts' debate and deliver the final trading decision.
 
@@ -94,9 +150,8 @@ def create_portfolio_manager(llm):
 - Research Manager's investment plan: **{research_plan}**
 - Trader's transaction proposal: **{trader_plan}**
 {lessons_line}
-**Risk Analysts Debate History:**
-{history}
-{premortem_block}{worksheet_block}
+{risk_section}
+{premortem_block}{worksheet_block}{independent_blocks}
 ---
 
 Ground every conclusion in specific evidence from the analysts. Decide as a disciplined value investor, scoring the company on four tests: Good business, Good management, Still investing, Cheap (margin of safety).
@@ -112,6 +167,7 @@ Lanes: pick the lane the evidence supports: value first; compounder when the rec
 - Inflection (demand accelerating now, which trailing averages understate): good business and good management pass, no red flag, TTM EBIT at least 1.5× its five-year average, revenue growth in the latest quarter at least 10 points above the last fiscal year's, incremental ROIC of at least 20%, demand evidence the news report marks verified (customer capex, backlog, bookings or pricing, with a source) quoted in the lane evidence as "verified: …", a run-rate value (the worksheet's, growth for three years then the worksheet's 3% base growth) giving a probability-weighted margin of safety of at least 20% and an upside/downside of at least 2, not in FREEFALL, a bear case (growth stops now) of at least 30% probability, and a kill criterion on a demand indicator (orders, backlog, customer capex).
 When the instrument context's pipeline note names a dislocation hint, the Investment Thesis states the news report's cause classification of the fall (company-specific deterioration, sector-wide sentiment or macro) and what it means for the thesis.
 Think in a 1-3 year horizon. Conflicting arguments alone are not a reason to Hold; the debate always contains conflict, so decide which side the evidence supports. Prefer doing nothing over frequent trading: only change the rating from a previous decision on this ticker if the facts changed, not because the price moved. For a stock already held, buying and selling have different bars: a margin of safety that has shrunk but is still positive means stop adding (Hold), not sell; rate a holding Underweight or Sell only when the price is above intrinsic value or the thesis is broken. Weigh the analysts on their merits, independent of speaking order.{premortem_instruction}
+If kill criteria are on record for this holding, check each one: met, not met or unknown. A met criterion means Underweight or Sell unless the note is a rebuttal that says why the thesis survives; a rebuttal holds for one review cycle only.
 Express entry conditions as prices and verifiable facts. Use the earnings date only when the print is genuinely binary and say why. If you would buy at today's price after a clean print, say so and give the entry price. Upside/downside is measured at today's price, not the entry price. Do not propose position sizes, starter positions or tranches; the pipeline's rules and the investment committee size positions. The entry price is the only price condition. Start the value bridge from the worksheet's formula value and justify any growth above the base rate. The bear case may not assume more than 0.8× the target multiple and zero growth unless you say why.
 
 ## Output
@@ -127,6 +183,7 @@ Write these sections, in this order, starting with the rating on its own line:
 - **Lane**: "value" alone for the value lane (its bars are the checklist and scenarios); compounder or inflection, then the numbers it rests on, e.g. "compounder — ROIC incl. goodwill ≥ 15% 5/5 years; revenue 11.2%/yr 10y; FCF 9.0%/yr 4y; earned growth 10.0%; implied growth 6%; expected return 13%; price 1.08× base"
 - **Red Flags**: one "- " bullet per serious red flag, or "none"
 - **Kill Criteria**: 3 to 6 numbered, verifiable facts that would prove the thesis wrong
+- **Kill Criteria Check**: only when kill criteria are on record for this holding, one numbered line per criterion, "1. criterion — met: note", "2. criterion — not met: note" or "3. criterion — unknown"
 - **Entry Price**: the price at or below which to buy, as one number (required unless the rating is Sell)
 - **Scenarios**: three lines "Bear 25%: 42.00 — basis", "Base 50%: …", "Bull 25%: …" with probabilities summing to 100%, then "Expected value: 56.00", which should equal the price target
 - **Value Bridge**: "Formula value 80.33" from the worksheet, one line per adjustment with its sign ("-12.00 reason"), then "= Price Target 56.00"; the adjustments must sum to the price target
