@@ -246,6 +246,21 @@ class Scenarios(BaseModel):
     bull: Scenario
 
 
+class KillCheck(BaseModel):
+    """One kill criterion on record for a holding, checked against today's evidence."""
+
+    criterion: str = Field(description="The kill criterion on record, as given.")
+    status: Literal["met", "not met", "unknown"] = Field(
+        description="Whether today's evidence meets the criterion.")
+    note: str = Field(
+        default="",
+        description=(
+            "The evidence; for a met criterion on a Buy, Overweight or Hold, the rebuttal that says "
+            "why the thesis survives (it holds for one review cycle only)."
+        ),
+    )
+
+
 class PortfolioDecision(BaseModel):
     """Structured output produced by the Portfolio Manager.
 
@@ -317,6 +332,13 @@ class PortfolioDecision(BaseModel):
         description=(
             "3 to 6 verifiable facts that would prove the thesis wrong and mean selling, "
             "e.g. 'ROIC below 12% for two years'."
+        ),
+    )
+    kill_criteria_check: list[KillCheck] = Field(
+        default_factory=list,
+        description=(
+            "For a holding with kill criteria on record, each one checked: met, not met or unknown. "
+            "Empty when none are on record."
         ),
     )
     entry_price: float | None = Field(
@@ -435,6 +457,10 @@ def render_pm_decision(decision: PortfolioDecision, price: float | None = None) 
     parts.extend(["", "**Red Flags**:" + ("\n" + "\n".join(flags) if flags else " none")])
     kills = [f"{i}. {k}" for i, k in enumerate(decision.kill_criteria, 1)]
     parts.extend(["", "**Kill Criteria**:" + ("\n" + "\n".join(kills) if kills else " not provided")])
+    if decision.kill_criteria_check:
+        checks = [f"{i}. {c.criterion} — {c.status}" + (f": {c.note}" if c.note else "")
+                  for i, c in enumerate(decision.kill_criteria_check, 1)]
+        parts.extend(["", "**Kill Criteria Check**:\n" + "\n".join(checks)])
     entry = decision.entry_price if decision.entry_price is not None else "not provided"
     parts.extend(["", f"**Entry Price**: {entry}"])
     parts.extend(["", "**Scenarios**:" + ("\n" + _render_scenarios(decision, price) if decision.scenarios

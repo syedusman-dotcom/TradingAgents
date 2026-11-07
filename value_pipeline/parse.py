@@ -97,6 +97,16 @@ def kill_criteria(decision: str) -> list[str]:
     return [m.group(1).strip() for m in re.finditer(r"^\s*\d+[.)]\s+(.+)$", section(decision, "Kill Criteria"), re.M)]
 
 
+_KILL_CHECK = re.compile(
+    r"^\s*\d+[.)]\s+(.+?)\s+[—–-]\s+(not met|met|unknown)\b\s*(?::\s*(.*))?$", re.M | re.I)
+
+
+def kill_criteria_check(decision: str) -> list[dict]:
+    """The Kill Criteria Check lines, [{"criterion", "status", "note"}]; [] when absent."""
+    return [{"criterion": m.group(1).strip(), "status": m.group(2).lower(), "note": (m.group(3) or "").strip()}
+            for m in _KILL_CHECK.finditer(section(decision, "Kill Criteria Check"))]
+
+
 _CHECKS = {"good business": "good_business", "good management": "good_management",
            "still investing": "still_investing", "cheap": "cheap"}
 

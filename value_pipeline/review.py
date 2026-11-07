@@ -683,6 +683,7 @@ def _run(paths: Paths, cfg: dict, *, yes: bool, dry_run: bool, today: str | None
          if screen_row.get(r.ticker) else None,
          "currency": fx[r.ticker][0], "fx_to_usd": fx[r.ticker][1],
          "entry_price": parse.entry_price(r.decision), "kill_criteria": parse.kill_criteria(r.decision),
+         "kill_criteria_check": parse.kill_criteria_check(r.decision),
          "checklist": parse.checklist(r.decision), "scenarios": scenarios[r.ticker],
          "value_bridge": parse.value_bridge(r.decision), "red_flags": parse.red_flags(r.decision),
          "lane": parse.lane(r.decision), "lane_evidence": parse.lane_evidence(r.decision),

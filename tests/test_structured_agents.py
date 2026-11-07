@@ -1014,3 +1014,18 @@ def test_still_investing_round_trip():
     assert description.startswith("Still investing: the company is building its next decade")
     assert description.endswith("judge on growth capex, acquisitions and the filings' product evidence; "
                                 "n/a is not a FAIL.")
+
+
+@pytest.mark.unit
+def test_kill_criteria_check_defaults_empty_and_takes_three_statuses():
+    from pydantic import ValidationError
+
+    from tradingagents.agents.schemas import KillCheck, PortfolioDecision, PortfolioRating
+
+    d = PortfolioDecision(rating=PortfolioRating.HOLD, executive_summary="s", investment_thesis="t")
+    assert d.kill_criteria_check == []
+    assert {KillCheck(criterion="c", status=s).status for s in ("met", "not met", "unknown")} == {
+        "met", "not met", "unknown"}
+    assert KillCheck(criterion="c", status="met").note == ""
+    with pytest.raises(ValidationError):
+        KillCheck(criterion="c", status="maybe")

@@ -293,3 +293,20 @@ def test_cli_passes_a_valid_portfolio_into_the_run(tmp_path, monkeypatch):
 
     assert result.exit_code == 0
     assert ran[0]["portfolio"].position_in("AAPL").quantity == 120
+
+
+@pytest.mark.unit
+def test_to_context_carries_a_holdings_kill_criteria_into_the_render():
+    from value_pipeline.portfolio import Portfolio, Position
+
+    pf = Portfolio(cash=100.0, positions=[
+        Position(ticker="HRB", shares=10, avg_price=40.0, first_bought="2026-01-05",
+                 kill_criteria=["Revenue falls two years running", "Dividend cut"]),
+        Position(ticker="KO", shares=5, avg_price=60.0, first_bought="2026-01-05"),
+    ])
+    context = pf.to_context()
+    assert context.position_in("HRB").kill_criteria == ["Revenue falls two years running", "Dividend cut"]
+    assert context.position_in("KO").kill_criteria == []
+    text = context.render("HRB")
+    assert "Kill criteria on record: 1. Revenue falls two years running 2. Dividend cut" in text
+    assert "Kill criteria on record" not in context.render("KO")

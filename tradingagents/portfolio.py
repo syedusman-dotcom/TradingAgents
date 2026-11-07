@@ -28,6 +28,8 @@ class Position(BaseModel):
     ticker: str = Field(description="Instrument symbol, e.g. AAPL")
     quantity: float = Field(description="Signed units held; negative is short")
     average_price: float | None = Field(default=None, description="Average entry price per unit")
+    kill_criteria: list[str] = Field(
+        default_factory=list, description="Verifiable facts on record that would void the thesis")
 
 
 class PortfolioContext(BaseModel):
@@ -58,6 +60,9 @@ class PortfolioContext(BaseModel):
             spelled = position.ticker.strip().upper()
             listed = f" (listed as {position.ticker})" if spelled != symbol else ""
             lines.append(f"- Current position in {symbol}: {position.quantity:,.4g} units{price}{listed}")
+            if position.kill_criteria:
+                listed_criteria = " ".join(f"{i}. {c}" for i, c in enumerate(position.kill_criteria, 1))
+                lines.append(f"  Kill criteria on record: {listed_criteria}")
         if not held:
             lines.append(f"- No current position in {symbol}")
         if self.cash is not None:

@@ -934,6 +934,19 @@ def test_results_json_carries_the_checklist_fields(tmp_path, monkeypatch):
     assert row["scenarios"]["expected_value"] == pytest.approx(56.0)
     assert row["value_bridge"][1] == {"reason": "net debt", "amount": -12.33}
     assert row["red_flags"] == []
+    assert row["kill_criteria_check"] == []
+
+
+@pytest.mark.unit
+def test_results_json_carries_the_kill_criteria_check(tmp_path, monkeypatch):
+    from tests.test_decision_math import _decision
+    from tradingagents.agents.schemas import KillCheck
+
+    decision = _decision(kill_criteria_check=[KillCheck(criterion="Dividend cut", status="not met",
+                                                        note="raised in May")])
+    row, _ = _review_one(tmp_path, monkeypatch, decision, 50.0)
+    assert row["kill_criteria_check"] == [{"criterion": "Dividend cut", "status": "not met",
+                                           "note": "raised in May"}]
 
 
 @pytest.mark.unit

@@ -671,3 +671,44 @@ def test_still_investing_required_only_for_compounder():
                                None, None, worksheet=infl)
     assert not any("Still investing" in p for p in problems)
     assert decision_checks(_decision(still_investing=harvesting), None, None) == []   # value lane
+
+
+@pytest.mark.unit
+def test_kill_criteria_check_renders_after_kill_criteria_and_parses_back():
+    from tradingagents.agents.schemas import KillCheck
+
+    text = render_pm_decision(_decision(kill_criteria_check=[
+        KillCheck(criterion="ROIC below 12% two years running", status="not met", note="ROIC 18%"),
+        KillCheck(criterion="net debt above 3x EBIT", status="unknown"),
+    ]))
+    assert "**Kill Criteria Check**:\n1. ROIC below 12% two years running — not met: ROIC 18%\n" \
+           "2. net debt above 3x EBIT — unknown" in text
+    assert text.index("**Kill Criteria**:") < text.index("**Kill Criteria Check**:") < text.index("**Scenarios**:")
+    assert parse.kill_criteria_check(text) == [
+        {"criterion": "ROIC below 12% two years running", "status": "not met", "note": "ROIC 18%"},
+        {"criterion": "net debt above 3x EBIT", "status": "unknown", "note": ""},
+    ]
+    assert len(parse.kill_criteria(text)) == 3                       # the criteria list is unchanged
+    assert parse.scenarios(text)["expected_value"] == pytest.approx(56.0)
+
+
+@pytest.mark.unit
+def test_a_decision_without_checks_renders_no_kill_criteria_check():
+    text = render_pm_decision(_good_decision())
+    assert "Kill Criteria Check" not in text and parse.kill_criteria_check(text) == []
+
+
+@pytest.mark.unit
+def test_a_met_kill_criterion_needs_a_rebuttal_unless_the_rating_cuts():
+    from tradingagents.agents.schemas import KillCheck
+
+    met = [KillCheck(criterion="ROIC below 12% two years running", status="met")]
+    problem = "Kill criterion met without a rebuttal: ROIC below 12% two years running"
+    assert decision_checks(_decision(rating=PortfolioRating.HOLD, kill_criteria_check=met),
+                           80.33, 50) == [problem]
+    assert decision_checks(_decision(rating=PortfolioRating.UNDERWEIGHT, kill_criteria_check=met),
+                           80.33, 50) == []
+    rebutted = [KillCheck(criterion="ROIC below 12% two years running", status="met",
+                          note="a one-off write-down; ROIC ex-charge is 17%")]
+    assert decision_checks(_decision(rating=PortfolioRating.HOLD, kill_criteria_check=rebutted),
+                           80.33, 50) == []

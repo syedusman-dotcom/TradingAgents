@@ -109,6 +109,14 @@ def test_portfolio_manager_prompt_states_constraint():
         "trader_investment_plan": "trader plan",
     })
     assert NO_EXTERNAL_TOOLS in _prompt_text(captured["prompt"])
+    assert KILL_CHECK_PARAGRAPH in _prompt_text(captured["prompt"])
+
+
+KILL_CHECK_PARAGRAPH = (
+    "If kill criteria are on record for this holding, check each one: met, not met or unknown. "
+    "A met criterion means Underweight or Sell unless the note is a rebuttal that says why the "
+    "thesis survives; a rebuttal holds for one review cycle only."
+)
 
 
 @pytest.mark.unit
