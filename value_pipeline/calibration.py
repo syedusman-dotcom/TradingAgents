@@ -35,6 +35,19 @@ PAPER_EXCESS = 0.03          # mean dollar return ahead of SPY, as a fraction
 PAPER_AHEAD = 0.55           # share of paper Buys ahead of SPY
 PAPER_OVER_BASELINE = 0.02   # and this far ahead of every reviewed stock
 EPS = 1e-9
+ARMS = ("current", "independent")
+# The spec's adoption rule, verbatim; the page and the command line print it under the arm table.
+ADOPTION_RULE = (
+    "Counting only rows that carry an arm, with at least 30 resolved decisions per arm at 180 "
+    "days (early read) or 365 days (verdict): the independent arm becomes the default "
+    "(`agent_round: independent`) if both its bear and bull Brier skills are at or above the "
+    "current arm's and its median `missing_data_lines` is not higher; it is retired "
+    "(`agent_round: current`) if both skills are lower by 0.05 or more; otherwise the A/B "
+    "continues. The reading is made by Claude in the Saturday review after the count is "
+    "reached and recorded in the ledger before any config change.")
+ARM_TABLE_HEADER = ("| Arm | Decisions | 365 days | 180 days | Median margin of safety "
+                    "| Median missing-data lines | Ratings | Blind value vs price "
+                    "| Agents' value vs price |")
 
 
 def _num(x) -> float | None:
@@ -144,6 +157,9 @@ def rows(paths: Paths, today: date | None = None, price_fn=None) -> list[dict]:
                "bull_probability": _leg(sc, "bull", "probability"),
                "entry_price": entry, "expected_return": _num(r.get("expected_return")),
                "paper": paper.flags(r), "currency": r.get("currency"),
+               "margin_of_safety": _num(r.get("margin_of_safety")),
+               "agent_round": r.get("agent_round"), "blind_value": _num(r.get("blind_value")),
+               "missing_data_lines": _num(r.get("missing_data_lines")),
                "reached": [n for n in HORIZONS if reviewed + timedelta(days=n) <= today]}
         for n in HORIZONS:
             at = reviewed + timedelta(days=n)
@@ -243,7 +259,7 @@ def _brier_text(name: str, g: dict) -> str:
             f"stated {g['stated']:.0%} vs realised {g['realised']:.0%}")
 
 
-def brier(rs: list[dict], horizon: int = 365) -> dict | None:
+def brier(rs: list[dict], horizon: int = 365, arm: str | None = None) -> dict | None:
     """Brier scores of the stated bear and bull probabilities at one horizon.
 
     Over the rows with ``h{horizon}`` and a scenario value and probability for the leg, the bear
@@ -258,8 +274,11 @@ def brier(rs: list[dict], horizon: int = 365) -> dict | None:
     the realised frequency by more than 10 points for either leg, uninformative otherwise.
     Before 30 rows the reading is "not yet readable (n of 30 at 365 days)". The same rule
     labels the 180-day read, which is an early read.
+
+    With ``arm``, only the rows whose ``agent_round`` is that arm count (rows written before
+    arms were recorded have none and count only in the overall score).
     """
-    have = [r for r in rs if r.get(f"h{horizon}")]
+    have = [r for r in rs if r.get(f"h{horizon}") and (arm is None or r.get("agent_round") == arm)]
     out: dict = {"horizon": horizon}
     legs = {}
     for leg, hit in (("bear", lambda price, ref: price <= ref), ("bull", lambda price, ref: price >= ref)):
@@ -296,6 +315,64 @@ def brier_view(rs: list[dict], scores: dict) -> list[dict]:
             text = f"not yet readable ({n} of {MIN_BRIER_ROWS} at {h} days)"
         view.append({"label": label, "text": text})
     return view
+
+
+def _gap(rs: list[dict], key: str) -> float | None:
+    """The median of |key - price| / price over the rows with both."""
+    return _median([abs(r[key] - r["price"]) / r["price"] for r in rs
+                    if r.get(key) is not None and r.get("price")])
+
+
+def arms(rs: list[dict]) -> list[dict]:
+    """One summary per review arm present (rows without ``agent_round`` belong to none): count,
+    the arm's Brier scores at 365 and 180 days (``brier`` with ``arm``), median margin of safety,
+    median missing-data lines, ratings, and the median gap of the blind value and of the agents'
+    value from the price. ``ADOPTION_RULE`` reads these."""
+    present = [a for a in ARMS if any(r.get("agent_round") == a for r in rs)]
+    present += sorted({r["agent_round"] for r in rs if r.get("agent_round")} - set(ARMS))
+    out = []
+    for a in present:
+        mine = [r for r in rs if r.get("agent_round") == a]
+        ratings: dict[str, int] = {}
+        for r in mine:
+            ratings[r.get("rating") or "(none)"] = ratings.get(r.get("rating") or "(none)", 0) + 1
+        out.append({"arm": a, "n": len(mine),
+                    "brier_365": brier(rs, 365, arm=a), "brier_180": brier(rs, 180, arm=a),
+                    "median_mos": _median([r["margin_of_safety"] for r in mine
+                                           if r.get("margin_of_safety") is not None]),
+                    "median_missing": _median([r["missing_data_lines"] for r in mine
+                                               if r.get("missing_data_lines") is not None]),
+                    "ratings": dict(sorted(ratings.items())),
+                    "median_blind_gap": _gap(mine, "blind_value"),
+                    "median_value_gap": _gap(mine, "value")})
+    return out
+
+
+def _arm_brier(rs: list[dict], a: dict, h: int) -> str:
+    b = a[f"brier_{h}"]
+    if b:
+        return f"bear skill {_skill(b['bear'])}, bull skill {_skill(b['bull'])} ({b['n']})"
+    n = min(sum(1 for r in rs if r.get("agent_round") == a["arm"] and r.get(f"h{h}")
+                and r.get(leg) is not None and r.get(f"{leg}_probability") is not None)
+            for leg in ("bear", "bull"))
+    return f"not yet readable ({n} of {MIN_BRIER_ROWS})"
+
+
+def _skill(g: dict) -> str:
+    return "–" if g["skill"] is None else f"{g['skill']:+.2f}"
+
+
+def arm_view(rs: list[dict], scores: dict) -> list[dict]:
+    """The arm table's cells, one dict per arm, as text."""
+    def num(x):
+        return "–" if x is None else f"{x:g}"
+    return [{"arm": a["arm"], "n": a["n"], "brier_365": _arm_brier(rs, a, 365),
+             "brier_180": _arm_brier(rs, a, 180), "median_mos": _pct(a["median_mos"], False),
+             "median_missing": num(a["median_missing"]),
+             "ratings": ", ".join(f"{k} {v}" for k, v in a["ratings"].items()) or "–",
+             "median_blind_gap": _pct(a["median_blind_gap"], False),
+             "median_value_gap": _pct(a["median_value_gap"], False)}
+            for a in scores["arms"]]
 
 
 def _decisions(n: int) -> str:
@@ -337,6 +414,7 @@ def score(rs: list[dict]) -> dict:
             "median_value_gap": _median(gaps),
             "calibrated_probabilities": _calibrated(rs),
             "brier": {"365": brier(rs, 365), "180": brier(rs, 180)},
+            "arms": arms(rs), "adoption_rule": ADOPTION_RULE,
             "verdicts": [_verdict(lane, lanes[lane], by_lane[lane]) for lane in by_lane]}
 
 
@@ -556,6 +634,16 @@ def markdown(rs: list[dict], scores: dict, horizon: int = 180) -> str:
                      f"(needs {MIN_CALIBRATION_ROWS}).")
     lines += ["", "### Brier scores", ""]
     lines += [f"- {v['label']}: {v['text']}" for v in brier_view(rs, scores)]
+    lines += ["", "### By review arm", ""]
+    view = arm_view(rs, scores)
+    if view:
+        lines += [ARM_TABLE_HEADER, "|---|--:|---|---|--:|--:|---|--:|--:|"]
+        lines += [f"| {v['arm']} | {v['n']} | {v['brier_365']} | {v['brier_180']} "
+                  f"| {v['median_mos']} | {v['median_missing']} | {v['ratings']} "
+                  f"| {v['median_blind_gap']} | {v['median_value_gap']} |" for v in view]
+    else:
+        lines.append("No review has recorded an arm yet.")
+    lines += ["", f"**Adoption rule.** {scores['adoption_rule']}"]
     lines += ["", "## Paper Buys", "",
               "Tracked only: no money follows these. Each rule is applied in code to what a "
               "review recorded.", ""]

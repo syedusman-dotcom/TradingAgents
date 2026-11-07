@@ -338,6 +338,18 @@ days the probabilities are informative when both skill scores are above 0, over-
 stated mean exceeds the realised frequency by more than 10 points for either leg, uninformative
 otherwise; before 30 rows they are not yet readable.
 
+By review arm: under the Brier scores, the page and `calibration` show one row per
+`review.agent_round` arm present (`current`, `independent`): decisions, the arm's own Brier skill
+scores at 365 and 180 days (only rows carrying that arm count; rows written before arms were
+recorded count in the overall score and in no arm), median margin of safety, median
+`missing_data_lines`, ratings, and the median gap of the blind value and of the agents' value
+from the price. The adoption rule printed under the table is fixed in advance: counting only rows
+that carry an arm, with at least 30 resolved decisions per arm at 180 days (early read) or 365
+days (verdict), the independent arm becomes the default if both its bear and bull skills are at
+or above the current arm's and its median `missing_data_lines` is not higher; it is retired if
+both skills are lower by 0.05 or more; otherwise the A/B continues. Claude makes the reading in
+the Saturday review and records it in the ledger before any config change.
+
 Paper Buys: the Calibration page, `calibration` and each review's `ACTIONS.md` also show
 what a looser Buy rule would have done. A paper Buy is a decision the agents rated Hold or
 better, with a good business and good management, priced at or below their own value. The

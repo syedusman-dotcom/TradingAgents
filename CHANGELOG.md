@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Changes that need action when upgrading are listed under "Upgrading from" in their release.
 
+## [Unreleased]
+
+### Added
+
+- Value pipeline agent round: `review.agent_round` (`current`, `independent` or `ab`) assigns each review to an arm and records it with `missing_data_lines` in `results.json`. The independent arm adds a price-blind valuer, bull and bear cases made independently (the bear with its own evidence pack) and judged in random order, and a Portfolio Manager that reconciles the blind value and starts its scenarios from Base Rate Book sales-growth cohorts; in both arms the kill criteria reach the agents and the Portfolio Manager checks them. The calibration page and `calibration` show Brier scores per arm and the adoption rule, fixed in advance, that decides which arm becomes the default.
+
 ## [0.7.1] — 2026-10-27
 
 Decisions are scored only on final closes and settle across long market holidays, a model's unpadded date no longer reads filings made after the run date, and fixes to portfolios, prices, SEC statements, reports, Azure and Claude settings.
