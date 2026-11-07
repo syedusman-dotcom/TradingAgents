@@ -165,7 +165,7 @@ def test_the_independent_arm_files_a_blind_valuation(tmp_path, monkeypatch, offl
 
     current, _ = _graph(tmp_path / "c", monkeypatch, ScriptedModel(structured=True)).propagate(
         "NVDA", TRADE_DATE)
-    assert current["blind_valuation"] == ""
+    assert current["blind_valuation"] == current["base_rates"] == ""
     write_report_tree(current, "NVDA", tmp_path / "current")
     assert not (tmp_path / "current" / "1_analysts" / "blind_valuation.md").exists()
 

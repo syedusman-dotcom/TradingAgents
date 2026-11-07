@@ -2,8 +2,8 @@
 
 It runs from START beside the analysts. In the independent arm it makes one structured call on
 the quick tier, with no tools, over ``blind_fundamentals_text``; the value comes back in the
-statement currency and is converted here to the quote unit. In the current arm it calls no model.
-Both arms get the base-rate block for the company's size in ``base_rates``.
+statement currency and is converted here to the quote unit, and ``base_rates`` gets the base-rate
+block for the company's size. In the current arm it fetches nothing and calls no model.
 
 It reads none of the shared context (the instrument context carries the pipeline note, with price
 moves): its prompt names the company and gives the accounts, nothing else.
@@ -50,17 +50,15 @@ def create_blind_valuer(llm, inputs_fn=None):
     structured_llm = bind_structured(llm, BlindValuation, "Blind Valuer")
 
     def blind_valuer_node(state) -> dict:
+        if arm_of(state) != "independent":
+            return {"blind_valuation": "", "base_rates": ""}
         ticker, day = state["company_of_interest"], state["trade_date"]
         try:
-            inputs, failure = (inputs_fn or blind_inputs)(ticker, day), None
+            inputs = (inputs_fn or blind_inputs)(ticker, day)
         except Exception as exc:  # noqa: BLE001 - the review goes on without a blind value
-            inputs, failure = None, _reason(exc)
-            logger.info("Blind Valuer: no inputs for %s: %s", ticker, failure)
-        base_rates = (base_rate_block(inputs.get("revenue_usd")) if inputs else None) or ""
-        if arm_of(state) != "independent":
-            return {"blind_valuation": "", "base_rates": base_rates}
-        if inputs is None:
-            return {"blind_valuation": f"skipped: {failure}", "base_rates": base_rates}
+            logger.info("Blind Valuer: no inputs for %s: %s", ticker, _reason(exc))
+            return {"blind_valuation": f"skipped: {_reason(exc)}", "base_rates": ""}
+        base_rates = base_rate_block(inputs.get("revenue_usd")) or ""
         try:
             accounts = blind_fundamentals_text(inputs)
         except ValueError as exc:

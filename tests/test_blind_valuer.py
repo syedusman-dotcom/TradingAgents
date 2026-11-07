@@ -169,11 +169,12 @@ def _state(arm=None):
 
 @pytest.mark.unit
 @pytest.mark.parametrize("arm", [None, "current"])
-def test_the_current_arm_calls_no_model(sek_inputs, arm):
-    node = blind_valuer.create_blind_valuer(_Scripted(fail=True), inputs_fn=lambda t, d: sek_inputs)
-    out = node(_state(arm))
-    assert out["blind_valuation"] == ""
-    assert "Base rates" in out["base_rates"]
+def test_the_current_arm_fetches_nothing_and_calls_no_model(arm):
+    def never(t, d):
+        raise AssertionError("the current arm fetches no inputs")
+
+    node = blind_valuer.create_blind_valuer(_Scripted(fail=True), inputs_fn=never)
+    assert node(_state(arm)) == {"blind_valuation": "", "base_rates": ""}
 
 
 @pytest.mark.unit
