@@ -475,7 +475,8 @@ def base_rate_note(implied_growth: float | None, revenue: float | None) -> str |
         return None
     level = max((g for g in br["share_achieving"] if g <= implied_growth), default=0.0)
     return (f"Implied growth {implied_growth:.1%}/yr: base rate — about {br['share_achieving'][level]:.0%} of "
-            f"companies with revenue {br['cohort']} sustained {level:.0%} or more for 10 years.")
+            f"companies with revenue {br['cohort']} (2015 dollars) sustained {level:.0%} or more "
+            "for 10 years.")
 
 
 def base_rate_block(revenue_usd: float | None) -> str | None:

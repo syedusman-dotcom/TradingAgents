@@ -53,7 +53,10 @@ def _check_basis(inputs: dict) -> None:
 
 def blind_fundamentals_text(inputs: dict) -> str:
     """The accounts of ``inputs`` (``blind_inputs``) as prompt text, free of anything priced.
-    Raises ValueError (the reason) when per-share figures could not be put in the quote unit."""
+    Raises ValueError (the reason) when per-share figures could not be put in the quote unit.
+
+    Limit: the revenue CAGR uses the Yahoo statements only (``record`` without the worksheet's SEC
+    revenue history), so its span and figure can differ from the worksheet's."""
     _check_basis(inputs)
     years, cur = inputs["years"], inputs["reported"]
     sector = f" ({inputs['sector']})" if inputs.get("sector") else ""

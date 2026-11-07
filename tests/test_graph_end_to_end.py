@@ -147,6 +147,31 @@ def test_the_arm_reaches_the_final_state(tmp_path, monkeypatch, offline):
 
 
 @pytest.mark.unit
+def test_a_blind_valuer_crash_is_a_skip_and_the_review_goes_on(tmp_path, monkeypatch, offline):
+    def boom(t, d):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(blind_valuer, "blind_inputs", boom)
+    state, _ = _graph(tmp_path, monkeypatch, ScriptedModel(structured=True)).propagate(
+        "NVDA", TRADE_DATE, agent_round="independent")
+    assert state["blind_valuation"] == "skipped: RuntimeError: boom"
+    assert state["final_trade_decision"]
+
+    def type_error(inputs):
+        raise TypeError("odd statements")
+
+    inputs = {"name": "NVIDIA", "sector": "Technology", "reported": "USD", "quote": "USD",
+              "cross": 1.0, "factor": 1.0, "same_basis": True, "statement_shares": 1e9,
+              "revenue_usd": 1e11, "discount_rate": 0.09, "years": []}
+    monkeypatch.setattr(blind_valuer, "blind_inputs", lambda t, d: inputs)
+    monkeypatch.setattr(blind_valuer, "blind_fundamentals_text", type_error)
+    state, _ = _graph(tmp_path / "b", monkeypatch, ScriptedModel(structured=True)).propagate(
+        "NVDA", TRADE_DATE, agent_round="independent")
+    assert state["blind_valuation"] == "skipped: TypeError: odd statements"
+    assert state["final_trade_decision"]
+
+
+@pytest.mark.unit
 def test_the_independent_arm_files_a_blind_valuation(tmp_path, monkeypatch, offline):
     from tradingagents.reporting import write_report_tree
 

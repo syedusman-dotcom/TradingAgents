@@ -53,23 +53,22 @@ def create_blind_valuer(llm, inputs_fn=None):
         if arm_of(state) != "independent":
             return {"blind_valuation": "", "base_rates": ""}
         ticker, day = state["company_of_interest"], state["trade_date"]
+        base_rates = ""
         try:
             inputs = (inputs_fn or blind_inputs)(ticker, day)
-        except Exception as exc:  # noqa: BLE001 - the review goes on without a blind value
-            logger.info("Blind Valuer: no inputs for %s: %s", ticker, _reason(exc))
-            return {"blind_valuation": f"skipped: {_reason(exc)}", "base_rates": ""}
-        base_rates = base_rate_block(inputs.get("revenue_usd")) or ""
-        try:
+            base_rates = base_rate_block(inputs.get("revenue_usd")) or ""
             accounts = blind_fundamentals_text(inputs)
-        except ValueError as exc:
-            return {"blind_valuation": f"skipped: {_reason(exc)}", "base_rates": base_rates}
-        result = invoke_structured(structured_llm, _prompt(ticker, inputs, accounts), "Blind Valuer")
-        if result is None:
-            return {"blind_valuation": "skipped: the model returned no structured valuation",
+            result = invoke_structured(structured_llm, _prompt(ticker, inputs, accounts),
+                                       "Blind Valuer")
+            if result is None:
+                return {"blind_valuation": "skipped: the model returned no structured valuation",
+                        "base_rates": base_rates}
+            # cross is statement units per major quote unit; factor 100 for a minor-unit quote.
+            quote_per_statement = inputs.get("factor", 1.0) / inputs["cross"]
+            return {"blind_valuation": render_blind_valuation(result, quote_per_statement),
                     "base_rates": base_rates}
-        # cross is statement units per major quote unit; factor 100 for a minor-unit quote.
-        quote_per_statement = inputs.get("factor", 1.0) / inputs["cross"]
-        return {"blind_valuation": render_blind_valuation(result, quote_per_statement),
-                "base_rates": base_rates}
+        except Exception as exc:  # noqa: BLE001 - the review goes on without a blind value
+            logger.info("Blind Valuer skipped for %s: %s", ticker, _reason(exc))
+            return {"blind_valuation": f"skipped: {_reason(exc)}", "base_rates": base_rates}
 
     return blind_valuer_node

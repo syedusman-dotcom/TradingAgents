@@ -760,6 +760,22 @@ def test_rows_carry_the_arm_fields_and_legacy_rows_give_none(tmp_path):
 
 
 @pytest.mark.unit
+def test_page_shows_the_arm_table_before_any_horizon_is_reached(tmp_path):
+    paths = Paths(tmp_path / "data")
+    _write(paths, "2026-11-09", [
+        {"ticker": "ADBE", "rating": "Overweight", "error": None, "price": 100.0,
+         "intrinsic_value": 120.0, "agent_round": "independent", "missing_data_lines": 1},
+        {"ticker": "CI", "rating": "Sell", "error": None, "price": 50.0,
+         "intrinsic_value": 40.0, "agent_round": "current", "missing_data_lines": 0}])
+    r = _web(tmp_path, paths).get("/calibration")
+    assert r.status_code == 200
+    assert "No decisions old enough yet" in r.text
+    assert "By review arm" in r.text and "independent" in r.text and "current" in r.text
+    assert "Adoption rule" in r.text and "n/a" in r.text
+    assert "not yet readable" not in r.text
+
+
+@pytest.mark.unit
 def test_page_and_cli_show_the_arm_table_and_the_rule(tmp_path, monkeypatch, capsys):
     paths = Paths(tmp_path / "data")
     _write(paths, "2025-01-10", [

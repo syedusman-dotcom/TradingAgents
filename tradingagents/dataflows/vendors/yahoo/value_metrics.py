@@ -298,7 +298,10 @@ def blind_inputs(ticker: str, as_of_date: str | None = None) -> dict:
 
     The price and market cap never enter the result; they are read only as their ratio, the quoted
     share count ``same_basis`` compares with the statements'. Raises ValueError for a past date:
-    the statements are not dated by filing, as in ``get_value_metrics``."""
+    the statements are not dated by filing, as in ``get_value_metrics``.
+
+    Limit: ``same_basis`` compares share counts only when the quote and statement currencies
+    differ, so an ADR quoted in its statement currency (e.g. a USD ADS of two shares) passes."""
     canonical = normalize_symbol(ticker)
     if is_historical(as_of_date):
         raise ValueError(f"no price-blind inputs for the past date {as_of_date}: the statements "

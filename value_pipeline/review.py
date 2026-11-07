@@ -71,9 +71,14 @@ def arm_for(ticker: str, date: str, setting: str) -> str:
 _MISSING = re.compile(r"not provided|not retrieved|returned nothing|could not retrieve|unavailable", re.I)
 
 
+_ENTRY_PRICE = "**Entry Price**"  # the label render_pm_decision writes ("not provided" on a Sell)
+
+
 def missing_data_lines(text: str) -> int:
-    """How many places the decision text says some data was missing."""
-    return len(_MISSING.findall(text or ""))
+    """How many places the decision text says some data was missing, not counting the rendered
+    **Entry Price** line (every Sell renders it as "not provided")."""
+    return sum(len(_MISSING.findall(line)) for line in (text or "").splitlines()
+               if not line.lstrip().startswith(_ENTRY_PRICE))
 
 
 # --- running the agents ---------------------------------------------------------
@@ -179,7 +184,7 @@ def run_agents(ta, ticker: str, day: str, portfolio_ctx, out_dir: Path, tally=No
                              final_state.get("final_trade_decision", ""), f"{ticker}/complete_report.html",
                              tokens_in=used.get("tokens_in", 0), tokens_out=used.get("tokens_out", 0),
                              nominal_cost_usd=used.get("nominal_cost_usd", 0.0), name=name,
-                             agent_round=arm,
+                             agent_round=final_state.get("agent_round") or arm,
                              blind_value=parse.blind_value(final_state.get("blind_valuation", "")),
                              judge_order=final_state.get("judge_order") or None)
         except Exception as exc:  # noqa: BLE001 - one failed ticker must not stop the review

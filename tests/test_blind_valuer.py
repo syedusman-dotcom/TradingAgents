@@ -219,3 +219,40 @@ def test_the_valuer_is_skipped_when_its_inputs_fail(sek_inputs):
 def test_a_structured_miss_is_a_skip(sek_inputs):
     node = blind_valuer.create_blind_valuer(_Scripted(None), inputs_fn=lambda t, d: sek_inputs)
     assert node(_state("independent"))["blind_valuation"].startswith("skipped: ")
+
+
+class _Raising(_Scripted):
+    """A model whose structured call raises."""
+
+    def invoke(self, prompt):
+        self.prompts.append(prompt)
+        raise RuntimeError("model boom")
+
+
+@pytest.mark.unit
+def test_any_failure_after_the_arm_check_is_a_skip(monkeypatch, sek_inputs):
+    def boom(t, d):
+        raise RuntimeError("boom")
+
+    out = blind_valuer.create_blind_valuer(_Scripted(fail=True), inputs_fn=boom)(_state("independent"))
+    assert out == {"blind_valuation": "skipped: RuntimeError: boom", "base_rates": ""}
+    out = blind_valuer.create_blind_valuer(_Raising(), inputs_fn=lambda t, d: sek_inputs)(
+        _state("independent"))
+    assert out["blind_valuation"].startswith("skipped: ") and out["base_rates"].startswith("Base rates")
+
+    def type_error(inputs):
+        raise TypeError("odd statements")
+
+    monkeypatch.setattr(blind_valuer, "blind_fundamentals_text", type_error)
+    out = blind_valuer.create_blind_valuer(_Scripted(fail=True), inputs_fn=lambda t, d: sek_inputs)(
+        _state("independent"))
+    assert out["blind_valuation"] == "skipped: TypeError: odd statements"
+    assert out["base_rates"].startswith("Base rates")
+
+    def bad_base_rates(revenue):
+        raise ZeroDivisionError("no size")
+
+    monkeypatch.setattr(blind_valuer, "base_rate_block", bad_base_rates)
+    out = blind_valuer.create_blind_valuer(_Scripted(fail=True), inputs_fn=lambda t, d: sek_inputs)(
+        _state("independent"))
+    assert out == {"blind_valuation": "skipped: ZeroDivisionError: no size", "base_rates": ""}

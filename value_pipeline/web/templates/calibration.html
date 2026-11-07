@@ -22,15 +22,6 @@
 </div>
 <h2>Brier scores</h2>
 <ul>{% for v in brier_view %}<li><b>{{ v.label }}</b>: {{ v.text }}</li>{% endfor %}</ul>
-<h3>By review arm</h3>
-{% if arm_view %}
-<div class="table"><table>
-<thead><tr><th>Arm</th><th class="num">Decisions</th><th>365 days</th><th>180 days</th><th class="num">Median margin of safety</th><th class="num">Median missing-data lines</th><th>Ratings</th><th class="num">Blind value vs price</th><th class="num">Agents' value vs price</th></tr></thead>
-<tbody>{% for a in arm_view %}<tr><td>{{ a.arm }}</td><td class="num">{{ a.n }}</td><td>{{ a.brier_365 }}</td><td>{{ a.brier_180 }}</td><td class="num">{{ a.median_mos }}</td><td class="num">{{ a.median_missing }}</td><td>{{ a.ratings }}</td><td class="num">{{ a.median_blind_gap }}</td><td class="num">{{ a.median_value_gap }}</td></tr>{% endfor %}</tbody></table></div>
-{% else %}
-<p class="muted">No review has recorded an arm yet.</p>
-{% endif %}
-<p><b>Adoption rule.</b> {{ scores.adoption_rule }}</p>
 {% for title, key in (("By rating", "by_rating"), ("By lane", "by_lane")) %}
 <h2>{{ title }}</h2>
 <div class="cards">
@@ -41,6 +32,15 @@
 </div>
 {% endfor %}
 {% endif %}
+<h2>By review arm</h2>
+{% if arm_view %}
+<div class="table"><table>
+<thead><tr><th>Arm</th><th class="num">Decisions</th><th>365 days</th><th>180 days</th><th class="num">Median margin of safety</th><th class="num">Median missing-data lines</th><th>Ratings</th><th class="num">Blind value vs price</th><th class="num">Agents' value vs price</th></tr></thead>
+<tbody>{% for a in arm_view %}<tr><td>{{ a.arm }}</td><td class="num">{{ a.n }}</td><td>{{ a.brier_365 if has_horizons else "n/a" }}</td><td>{{ a.brier_180 if has_horizons else "n/a" }}</td><td class="num">{{ a.median_mos }}</td><td class="num">{{ a.median_missing }}</td><td>{{ a.ratings }}</td><td class="num">{{ a.median_blind_gap }}</td><td class="num">{{ a.median_value_gap }}</td></tr>{% endfor %}</tbody></table></div>
+{% else %}
+<p class="muted">No review has recorded an arm yet.</p>
+{% endif %}
+<p><b>Adoption rule.</b> {{ scores.adoption_rule }}</p>
 <h2>Paper Buys</h2>
 <p class="muted">Tracked only: no money follows these. Each rule is applied in code to what a review recorded.</p>
 <ul>{% for name, g in scores.paper.rules.items() %}<li><b>{{ name }}</b>: {{ g.description }}</li>{% endfor %}</ul>

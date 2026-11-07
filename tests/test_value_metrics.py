@@ -425,14 +425,15 @@ def test_growth_base_rates_caps_match_the_spec_table():
 
 def test_base_rate_note_names_the_level_the_implied_growth_reaches():
     note = vm.base_rate_note(0.12, 1.35 * 1.5e9)
-    assert "$1.25–2B" in note and "19%" in note and "10%" in note
+    assert "companies with revenue $1.25–2B (2015 dollars) sustained" in note
+    assert "19%" in note and "10%" in note
     assert "0% or more" in vm.base_rate_note(-0.02, 8e9)
     assert vm.base_rate_note(None, 8e9) is None and vm.base_rate_note(0.05, None) is None
 
 
 def test_base_rate_block_renders_the_cohort_and_the_fixed_sentences():
     block = vm.base_rate_block(1.35 * 1.5e9)
-    for text in ("$1.25–2B", "5.1%", "19%", "23% of companies shrank", "18 to 9 points", "0.72"):
+    for text in ("sales of $1.25–2B (2015 dollars)", "5.1%", "19%", "23% of companies shrank", "18 to 9 points", "0.72"):
         assert text in block
     assert vm.base_rate_block(None) is None and vm.base_rate_block(0) is None
 

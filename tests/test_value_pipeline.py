@@ -683,6 +683,25 @@ def test_run_agents_reads_the_blind_value_from_the_final_state(tmp_path, monkeyp
 
 
 @pytest.mark.unit
+def test_run_agents_records_the_arm_the_graph_ran(tmp_path, monkeypatch):
+    from value_pipeline import review
+
+    monkeypatch.setattr(review, "_company_name", lambda t: t)
+
+    class Resumed:
+        """A resumed run: the checkpoint's arm, not the one requested."""
+
+        def propagate(self, ticker, day, portfolio=None, agent_round="current"):
+            return {"final_trade_decision": "**Rating**: Hold", "agent_round": "independent"}, "Hold"
+
+        def save_reports(self, state, ticker, save_path, html):
+            pass
+
+    r = review.run_agents(Resumed(), "HRB", "2026-11-09", None, tmp_path, arm="current")
+    assert r.agent_round == "independent"
+
+
+@pytest.mark.unit
 def test_pipeline_note_from_the_screen_row():
     from value_pipeline import review
 
@@ -1999,6 +2018,14 @@ def test_missing_data_lines_counts_the_gaps_in_a_decision():
 
     assert missing_data_lines("News not provided. Altman Z not retrieved.") == 2
     assert missing_data_lines("All good.") == 0
+
+
+@pytest.mark.unit
+def test_missing_data_lines_skips_the_rendered_entry_price_line():
+    from value_pipeline.review import missing_data_lines
+
+    text = "**Rating**: Sell\n\n**Entry Price**: not provided\n\nNews not retrieved."
+    assert missing_data_lines(text) == 1
 
 
 @pytest.mark.unit
