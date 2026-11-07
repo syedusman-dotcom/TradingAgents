@@ -422,28 +422,48 @@ def formula_value(years: list[dict], price, shares, net_debt, rate: float = DISC
     return out
 
 
-# Share of companies that sustained at least each ten-year sales growth rate, by starting
-# revenue. Approximate: read off the charts in Credit Suisse's "Base Rate Book"
-# (Mauboussin, 2016), not taken from a table. (label, upper revenue bound, {growth: share}).
+# Ten-year real sales growth by base-year sales (2015 dollars): Mauboussin, Callahan and Majd,
+# "The Base Rate Book" (Credit Suisse, 2016), Exhibit 4. (label, upper sales bound or None,
+# ten-year median, {growth: cumulative share of companies at or above that rate}).
+DOLLARS_2015 = 1.35  # US CPI 2015 -> 2026, rounded
 BASE_RATE_COHORTS = (
-    ("<$1B", 1e9, {0.0: 0.80, 0.03: 0.60, 0.05: 0.48, 0.07: 0.38, 0.10: 0.27, 0.15: 0.15}),
-    ("$1–5B", 5e9, {0.0: 0.85, 0.03: 0.62, 0.05: 0.47, 0.07: 0.35, 0.10: 0.22, 0.15: 0.10}),
-    ("$5–25B", 25e9, {0.0: 0.88, 0.03: 0.62, 0.05: 0.45, 0.07: 0.30, 0.10: 0.17, 0.15: 0.06}),
-    (">$25B", None, {0.0: 0.90, 0.03: 0.60, 0.05: 0.40, 0.07: 0.24, 0.10: 0.11, 0.15: 0.03}),
+    ("<$325M", 325000000.0, 0.098, {0.0: 0.95, 0.05: 0.78, 0.10: 0.49, 0.15: 0.29, 0.20: 0.18}),
+    ("$325–700M", 700000000.0, 0.067, {0.0: 0.81, 0.05: 0.57, 0.10: 0.25, 0.15: 0.10, 0.20: 0.05}),
+    ("$700M–1.25B", 1250000000.0, 0.057, {0.0: 0.87, 0.05: 0.55, 0.10: 0.23, 0.15: 0.08, 0.20: 0.04}),
+    ("$1.25–2B", 2000000000.0, 0.051, {0.0: 0.87, 0.05: 0.51, 0.10: 0.19, 0.15: 0.07, 0.20: 0.03}),
+    ("$2–3B", 3000000000.0, 0.045, {0.0: 0.85, 0.05: 0.45, 0.10: 0.16, 0.15: 0.06, 0.20: 0.02}),
+    ("$3–4.5B", 4500000000.0, 0.041, {0.0: 0.81, 0.05: 0.41, 0.10: 0.13, 0.15: 0.04, 0.20: 0.01}),
+    ("$4.5–7B", 7000000000.0, 0.037, {0.0: 0.79, 0.05: 0.38, 0.10: 0.12, 0.15: 0.04, 0.20: 0.01}),
+    ("$7–12B", 12000000000.0, 0.032, {0.0: 0.75, 0.05: 0.35, 0.10: 0.10, 0.15: 0.03, 0.20: 0.01}),
+    ("$12–25B", 25000000000.0, 0.027, {0.0: 0.72, 0.05: 0.30, 0.10: 0.10, 0.15: 0.03, 0.20: 0.01}),
+    ("$25–50B", 50000000000.0, 0.018, {0.0: 0.65, 0.05: 0.28, 0.10: 0.07, 0.15: 0.01, 0.20: 0.00}),
+    (">$50B", None, 0.011, {0.0: 0.59, 0.05: 0.21, 0.10: 0.04, 0.15: 0.01, 0.20: 0.00}),
 )
 BASE_RATE_CAP_SHARE = 0.25
 
 
+def _cap_growth(shares: dict[float, float]) -> float:
+    """The growth rate that BASE_RATE_CAP_SHARE of the cohort reached (interpolated)."""
+    pts = sorted(shares.items())
+    if pts[0][1] < BASE_RATE_CAP_SHARE:
+        return 0.0
+    for (g0, s0), (g1, s1) in zip(pts, pts[1:], strict=False):
+        if s1 < BASE_RATE_CAP_SHARE:
+            return g0 + (g1 - g0) * (s0 - BASE_RATE_CAP_SHARE) / (s0 - s1)
+    return pts[-1][0]
+
+
 def growth_base_rates(revenue: float | None) -> dict | None:
-    """The cohort's historical odds of sustaining each growth rate for ten years, and the
-    highest rate at least a quarter of that cohort reached (``cap``)."""
+    """The cohort's historical odds of sustaining each real growth rate for ten years, and
+    the rate a quarter of that cohort reached (``cap``). Revenue is deflated to 2015 dollars."""
     revenue = num(revenue)
     if revenue is None or revenue <= 0:
         return None
-    for label, upper, shares in BASE_RATE_COHORTS:
-        if upper is None or revenue < upper:
-            cap = max((g for g, s in shares.items() if s >= BASE_RATE_CAP_SHARE), default=0.0)
-            return {"cohort": label, "share_achieving": dict(shares), "cap": cap}
+    real = revenue / DOLLARS_2015
+    for label, upper, med, shares in BASE_RATE_COHORTS:
+        if upper is None or real < upper:
+            return {"cohort": label, "median": med, "share_achieving": dict(shares),
+                    "cap": _cap_growth(shares)}
     return None
 
 
@@ -456,6 +476,20 @@ def base_rate_note(implied_growth: float | None, revenue: float | None) -> str |
     level = max((g for g in br["share_achieving"] if g <= implied_growth), default=0.0)
     return (f"Implied growth {implied_growth:.1%}/yr: base rate — about {br['share_achieving'][level]:.0%} of "
             f"companies with revenue {br['cohort']} sustained {level:.0%} or more for 10 years.")
+
+
+def base_rate_block(revenue_usd: float | None) -> str | None:
+    """The base-rate facts for a company's size, as prompt text; None without revenue."""
+    br = growth_base_rates(revenue_usd)
+    if br is None:
+        return None
+    shares = "; ".join(f"{s:.0%} sustained {g:.0%} or more" for g, s in br["share_achieving"].items())
+    return (f"Base rates (Mauboussin, The Base Rate Book): companies with sales of {br['cohort']} "
+            f"(2015 dollars) had a ten-year median real sales growth of {br['median']:.1%} a year. "
+            f"Share of the cohort at or above each ten-year rate: {shares}. "
+            "23% of companies shrank in real terms over three years and 20% over five. "
+            "The return-on-capital spread between the top and bottom quintile halves within ten "
+            "years (18 to 9 points); operating margin's five-year correlation is 0.72.")
 
 
 # --- the analyst's verified report ----------------------------------------------------
