@@ -36,6 +36,7 @@ def test_write_report_tree_creates_files(tmp_path):
     assert (tmp_path / "2_research" / "manager.md").read_text() == "RM PLAN"
     assert (tmp_path / "3_trading" / "trader.md").read_text() == "TRADE"
     assert (tmp_path / "5_portfolio" / "decision.md").read_text() == "PM DECISION"
+    assert not (tmp_path / "1_analysts" / "blind_valuation.md").exists()   # empty: not written
     complete = out.read_text()
     assert "Trading Analysis Report: AAPL" in complete
     assert "MKT" in complete and "PM DECISION" in complete
@@ -173,3 +174,11 @@ def test_the_header_names_the_analysts_as_users_select_them(tmp_path):
     page = (tmp_path / "complete_report.html").read_text(encoding="utf-8")
     fields = re.findall(r'<span class="field">([^<]*)</span>', page)
     assert {"market", "sentiment", "news"} <= set(fields) and "social" not in page
+
+
+@pytest.mark.unit
+def test_the_blind_valuation_is_filed_with_the_analysts(tmp_path):
+    state = dict(_state(), blind_valuation="**Value per share**: 1.00 (range 0.80–1.20) in the quote unit")
+    out = write_report_tree(state, "AAPL", tmp_path)
+    assert (tmp_path / "1_analysts" / "blind_valuation.md").read_text() == state["blind_valuation"]
+    assert "### Blind Valuer" in out.read_text()

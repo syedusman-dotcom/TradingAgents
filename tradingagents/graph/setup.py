@@ -21,6 +21,7 @@ from tradingagents.agents import (
     create_sentiment_analyst,
     create_trader,
 )
+from tradingagents.agents.analysts.blind_valuer import create_blind_valuer
 from tradingagents.agents.analysts.turn import WRAP_UP
 from tradingagents.agents.state import AgentState
 
@@ -147,6 +148,9 @@ class GraphSetup:
             workflow.add_node(spec.agent_node,
                               _analyst_graph(spec, analyst_factories[spec.key](), self.max_tool_rounds))
 
+        # The price-blind valuer works beside the analysts (it calls a model only in the
+        # independent arm) and joins the same edge into the research debate.
+        workflow.add_node("Blind Valuer", create_blind_valuer(self.quick_thinking_llm))
         workflow.add_node("Bull Researcher", bull_researcher_node)
         workflow.add_node("Bear Researcher", bear_researcher_node)
         workflow.add_node("Research Manager", research_manager_node)
@@ -160,7 +164,7 @@ class GraphSetup:
         # The analysts work at the same time; the research debate starts once
         # every one of them has filed its report. The memory log settles past
         # decisions alongside them: only the Portfolio Manager reads its lessons.
-        first_steps = [spec.agent_node for spec in plan.specs]
+        first_steps = [spec.agent_node for spec in plan.specs] + ["Blind Valuer"]
         if memory_node is not None:
             workflow.add_node("Memory Log", memory_node)
             first_steps.append("Memory Log")

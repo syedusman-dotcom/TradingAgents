@@ -665,6 +665,24 @@ def test_run_agents_passes_the_pipeline_note(tmp_path):
 
 
 @pytest.mark.unit
+def test_run_agents_reads_the_blind_value_from_the_final_state(tmp_path, monkeypatch):
+    from value_pipeline import review
+
+    monkeypatch.setattr(review, "_company_name", lambda t: t)
+    blind = "**Value per share**: 42.50 (range 34.00–51.00) in the quote unit\n\n**Method**: m"
+
+    class Graph:
+        def propagate(self, ticker, day, portfolio=None, agent_round="current"):
+            return {"final_trade_decision": "**Rating**: Hold", "blind_valuation": blind}, "Hold"
+
+        def save_reports(self, state, ticker, save_path, html):
+            pass
+
+    r = review.run_agents(Graph(), "HRB", "2026-11-09", None, tmp_path, arm="independent")
+    assert r.blind_value == 42.5 and r.agent_round == "independent"
+
+
+@pytest.mark.unit
 def test_pipeline_note_from_the_screen_row():
     from value_pipeline import review
 

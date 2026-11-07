@@ -18,6 +18,7 @@ so that:
 
 from __future__ import annotations
 
+import re
 from enum import StrEnum
 from typing import Literal
 
@@ -586,3 +587,72 @@ def render_sentiment_report(report: SentimentReport) -> str:
         "",
         report.narrative,
     ])
+
+
+# ---------------------------------------------------------------------------
+# Blind Valuer (independent arm)
+# ---------------------------------------------------------------------------
+
+BLIND_METHOD_MAX = 400
+
+
+class BlindValuation(BaseModel):
+    """A per-share value made from the accounts alone, without the price."""
+
+    value_per_share: float = Field(
+        description="Your base value per share, in the statement currency, on the share count given.",
+    )
+    low: float = Field(description="Low end of the value range per share, statement currency.")
+    high: float = Field(description="High end of the value range per share, statement currency.")
+    growth_5y: float = Field(
+        description="The revenue or owner-earnings growth you assume for five years, as a fraction "
+        "(0.05 for 5%).",
+    )
+    discount_rate: float = Field(description="The discount rate you used, as a fraction (0.09 for 9%).")
+    method: str = Field(
+        description=f"The valuation method and its inputs, at most {BLIND_METHOD_MAX} characters.",
+    )
+    reasoning: str = Field(description="Why this growth rate and this value, from the accounts.")
+
+    @field_validator("method", mode="before")
+    @classmethod
+    def _cut_method(cls, value):
+        # A long method is cut rather than rejected: a rejected call loses the whole valuation.
+        return value[:BLIND_METHOD_MAX] if isinstance(value, str) else value
+
+
+def render_blind_valuation(v: BlindValuation, quote_per_statement: float) -> str:
+    """The valuation as markdown, its per-share figures multiplied by ``quote_per_statement``
+    (quote units per statement-currency unit: 100 for pence over pound statements, 1 / rate for
+    another currency) so they read in the quote unit."""
+    q = quote_per_statement
+    return "\n".join([
+        f"**Value per share**: {v.value_per_share * q:.2f} (range {v.low * q:.2f}–{v.high * q:.2f}) "
+        "in the quote unit",
+        "",
+        f"**Growth assumed**: {v.growth_5y:.1%}",
+        "",
+        f"**Discount rate**: {v.discount_rate:.1%}",
+        "",
+        f"**Method**: {v.method}",
+        "",
+        f"**Reasoning**: {v.reasoning}",
+    ])
+
+
+_BLIND_VALUE = re.compile(r"\*\*Value per share\*\*:\s*(-?\d+(?:\.\d+)?)\s*\(range\s*"
+                          r"(-?\d+(?:\.\d+)?)\s*[–-]\s*(-?\d+(?:\.\d+)?)\)")
+_BLIND_PCT = r"\*\*{}\*\*:\s*(-?\d+(?:\.\d+)?)%"
+
+
+def blind_values(text: str) -> dict | None:
+    """``value``, ``low``, ``high`` (quote unit), ``growth`` and ``discount`` (fractions) from a
+    ``render_blind_valuation`` text; None when there is no value line (a skipped valuer)."""
+    m = _BLIND_VALUE.search(text or "")
+    if not m:
+        return None
+    out = {"value": float(m.group(1)), "low": float(m.group(2)), "high": float(m.group(3))}
+    for key, label in (("growth", "Growth assumed"), ("discount", "Discount rate")):
+        p = re.search(_BLIND_PCT.format(re.escape(label)), text)
+        out[key] = float(p.group(1)) / 100 if p else None
+    return out

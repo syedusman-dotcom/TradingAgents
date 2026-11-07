@@ -179,7 +179,8 @@ def run_agents(ta, ticker: str, day: str, portfolio_ctx, out_dir: Path, tally=No
                              final_state.get("final_trade_decision", ""), f"{ticker}/complete_report.html",
                              tokens_in=used.get("tokens_in", 0), tokens_out=used.get("tokens_out", 0),
                              nominal_cost_usd=used.get("nominal_cost_usd", 0.0), name=name,
-                             agent_round=arm, blind_value=None,
+                             agent_round=arm,
+                             blind_value=parse.blind_value(final_state.get("blind_valuation", "")),
                              judge_order=final_state.get("judge_order") or None)
         except Exception as exc:  # noqa: BLE001 - one failed ticker must not stop the review
             error = f"{type(exc).__name__}: {exc}"

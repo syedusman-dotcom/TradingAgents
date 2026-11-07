@@ -19,7 +19,7 @@ from langchain_core.runnables import RunnableLambda
 from pydantic import Field
 
 from tradingagents.agents import context, schemas
-from tradingagents.agents.analysts import sentiment_analyst
+from tradingagents.agents.analysts import blind_valuer, sentiment_analyst
 from tradingagents.dataflows import router
 from tradingagents.dataflows.vendors.yahoo import market as yahoo_market, snapshot
 from tradingagents.default_config import DEFAULT_CONFIG
@@ -41,6 +41,9 @@ STRUCTURED = {
         investment_thesis="Street consensus rating: Buy (28 of 35 analysts)."),
     schemas.SentimentReport: schemas.SentimentReport(
         overall_band=schemas.SentimentBand.NEUTRAL, overall_score=5.0, confidence="low", narrative="n"),
+    schemas.BlindValuation: schemas.BlindValuation(
+        value_per_share=10.0, low=8.0, high=12.0, growth_5y=0.04, discount_rate=0.09,
+        method="m", reasoning="r"),
 }
 
 ARGS = {"symbol": "NVDA", "ticker": "NVDA", "curr_date": TRADE_DATE, "start_date": "2026-01-02",
@@ -136,7 +139,35 @@ def test_the_arm_reaches_the_final_state(tmp_path, monkeypatch, offline):
     state, _ = _graph(tmp_path / "b", monkeypatch, ScriptedModel()).propagate(
         "NVDA", TRADE_DATE, agent_round="independent")
     assert state["agent_round"] == "independent"
-    assert state["blind_valuation"] == state["base_rates"] == state["judge_order"] == ""
+    # A past-dated run has no blind inputs (the statements are not dated by filing).
+    assert state["blind_valuation"].startswith("skipped: ")
+    assert state["base_rates"] == state["judge_order"] == ""
+
+
+@pytest.mark.unit
+def test_the_independent_arm_files_a_blind_valuation(tmp_path, monkeypatch, offline):
+    from tradingagents.reporting import write_report_tree
+
+    inputs = {"name": "NVIDIA", "sector": "Technology", "reported": "USD", "quote": "USD",
+              "cross": 1.0, "factor": 1.0, "same_basis": True, "statement_shares": 1e9,
+              "revenue_usd": 1e11, "discount_rate": 0.09,
+              "years": [{"fiscal_year_end": "2025-12-31", "revenue": 1e11, "free_cash_flow": 5e10,
+                         "shares": 1e9}]}
+    monkeypatch.setattr(blind_valuer, "blind_inputs", lambda t, d: inputs)
+    model = ScriptedModel(structured=True)
+    state, _ = _graph(tmp_path, monkeypatch, model).propagate(
+        "NVDA", TRADE_DATE, agent_round="independent")
+    assert state["blind_valuation"].startswith("**Value per share**: 10.00 (range 8.00–12.00)")
+    assert state["base_rates"].startswith("Base rates")
+    write_report_tree(state, "NVDA", tmp_path / "report")
+    saved = (tmp_path / "report" / "1_analysts" / "blind_valuation.md").read_text()
+    assert saved == state["blind_valuation"]
+
+    current, _ = _graph(tmp_path / "c", monkeypatch, ScriptedModel(structured=True)).propagate(
+        "NVDA", TRADE_DATE)
+    assert current["blind_valuation"] == ""
+    write_report_tree(current, "NVDA", tmp_path / "current")
+    assert not (tmp_path / "current" / "1_analysts" / "blind_valuation.md").exists()
 
 
 @pytest.mark.unit

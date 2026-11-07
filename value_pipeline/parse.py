@@ -47,6 +47,15 @@ def intrinsic_value(decision: str) -> float | None:
     return (_dollar_amount(base.group(1)) if base else None) or _dollar_amount(window)
 
 
+def blind_value(text: str) -> float | None:
+    """The price-blind value per share (quote unit) from the Blind Valuer's first line; None when
+    the valuer was skipped or did not run."""
+    from tradingagents.agents.schemas import blind_values
+
+    values = blind_values((text or "").strip().split("\n", 1)[0])
+    return values["value"] if values else None
+
+
 def margin_of_safety(decision: str) -> float | None:
     """'Margin of safety: 32%' as 0.32.
 
