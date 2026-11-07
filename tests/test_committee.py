@@ -365,3 +365,14 @@ def test_payload_uses_the_whole_thesis_when_present_else_the_short_one():
     _, summary = plan(decisions, pf.cash, SIZING)
     stocks = {s["ticker"]: s for s in build_payload(decisions, results, pf, summary, SIZING)["stocks"]}
     assert stocks["HRB"]["thesis"] == "short and whole" and stocks["AAPL"]["thesis"] == "old short"
+
+
+@pytest.mark.unit
+def test_committee_prompt_carries_the_position_and_sector_caps():
+    from value_pipeline.committee import committee_prompt
+
+    prompt = committee_prompt({**SIZING, "max_position_weight": 0.05, "max_sector_weight": 0.25})
+    assert "never more than 5% in one stock or 25% in one sector" in prompt
+    assert "10% in one stock" not in prompt
+    default = committee_prompt({})
+    assert "never more than 10% in one stock or 30% in one sector" in default

@@ -13,7 +13,8 @@ from value_pipeline.actions import Action, Decision
 
 PROMPT = (
     "You are the investment committee of a concentrated long-term value portfolio (5–10 stocks, "
-    "1–3 year horizon, never more than 10% in one stock or 30% in one sector). Rank every reviewed "
+    "1–3 year horizon, never more than {position_cap:.0%} in one stock or {sector_cap:.0%} in one "
+    "sector). Rank every reviewed "
     "stock by expected annual return adjusted for the probability-weighted downside and any accounting "
     "or distress red flags; propose the allocation under those caps; propose a swap only when a "
     "candidate's expected return exceeds a holding's by at least 5 percentage points; name "
@@ -32,11 +33,15 @@ PROMPT = (
 
 
 def committee_prompt(sizing: dict) -> str:
-    """``PROMPT`` with the lane caps from ``sizing["lane_caps"]`` (the defaults when absent)."""
+    """``PROMPT`` with the position, sector and lane caps from ``sizing`` (the defaults when absent)."""
     from value_pipeline.config import DEFAULTS
 
-    caps = {**DEFAULTS["sizing"]["lane_caps"], **(sizing.get("lane_caps") or {})}
-    return PROMPT.format(compounder_cap=caps["compounder"], inflection_cap=caps["inflection"])
+    base = DEFAULTS["sizing"]
+    caps = {**base["lane_caps"], **(sizing.get("lane_caps") or {})}
+    return PROMPT.format(
+        position_cap=sizing.get("max_position_weight") or base["max_position_weight"],
+        sector_cap=sizing.get("max_sector_weight") or base["max_sector_weight"],
+        compounder_cap=caps["compounder"], inflection_cap=caps["inflection"])
 
 _BUYS = {"BUY", "ADD"}
 
