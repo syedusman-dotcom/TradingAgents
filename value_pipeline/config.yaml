@@ -87,18 +87,24 @@ review:
   committee: true
 
 sizing:
-  max_position_weight: 0.10   # never target more than 10% of the portfolio per stock
+  max_position_weight: 0.05   # never target more than 5% of the portfolio per stock (2026-11-07: half the
+                              # earlier 10%, until the paper-Buy verdict and the Brier reading)
   min_holdings: 5             # equal weight assumes at least this many holdings
   overweight_size_factor: 0.5 # Overweight gets half the target size
   min_trade_amount: 25        # don't suggest buys smaller than this (USD)
   max_sector_weight: 0.30     # buys and adds stop at 30% of the portfolio in one sector
-  max_stock_share: 1.0        # buys and adds stop when stock positions would exceed this share of the account (the index fund does not count); 1.0 = no cap
+  max_stock_share: 0.2        # buys and adds stop when stock positions would exceed this share of the account
+                              # (the index fund does not count); 1.0 = no cap. 2026-11-07: 20% until the
+                              # satellite has a record (paper Buys mid-2027, Brier late 2027).
   lane_caps: {compounder: 0.30, inflection: 0}          # buys and adds stop at these shares per lane
   lane_size_factor: {compounder: 0.5, inflection: 0.5}  # a lane buy is this fraction of the target size
   # Lanes that buy and add on a Buy rating only; their Overweights are watched, not sized. The
   # 2026-10-24 backtest: compounder Buys (price <= 1.15x base, return >= 12%) beat SPY in 4 of 8
   # years by +10 points on average; compounder Overweights (1.25x, 10%) lost by 2.5 points.
-  lane_buy_only: [compounder]
+  # 2026-11-07: compounder Overweights allowed again at half size inside max_stock_share; the
+  # quarterly runs since are mixed (1-year -2.0, 3-year +5.6, hold-out +16.8) and the cap bounds
+  # the cost of being wrong.
+  lane_buy_only: []
 
 # Investment lanes beyond value (compounder, inflection) and the dislocation scan: where
 # discovery looks, and how many candidates of each it adds to a review.

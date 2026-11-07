@@ -167,3 +167,14 @@ Correction to A1: the compounder Overweight block (`lane_buy_only`) was set on 2
 
 ## Z — final report drafted and sent 2026-11-07 04:10 CET: `~/Desktop/ValueTrading/reports/Weekend research 2026-11-08.md`. Website restarted on the new code (calibration page 200, Brier section renders). Pullback study rerun on the S&P 500 picks ("earns its keep", 4 of 4) and on the leaver-corrected picks (inconclusive: 3 rules fit "costs money", 4 "earns its keep"); the two runs overwrote each other's report (same-day filename; follow-up noted).
 Remaining before the loop ends: check the Saturday 09:00 scheduled review (first live run with F1/F5/F6/F7 in the agents' tools) and note the outcome; update the memory file; then the promise. Ruling: the loop stays open until that review has run, because a data-route fix that breaks the agents would be worse than no fix.
+
+## Decisions of 2026-11-07 08:30 (the user delegated them: "Any you decide based on the goal")
+
+The goal is the most money over the coming years, measured against SPY on 2027-10-24. Decided on the weekend's evidence:
+
+1. **Satellite cap applied.** `sizing.max_stock_share: 0.2`, `sizing.max_position_weight: 0.05` (was 1.0 and 0.10). The satellite has no evidenced edge (S1, S3, S4, A1), so the cap costs nothing in expectation and bounds the loss if the process is wrong; it lifts when the paper Buys (mid-2027) and the Brier reading (late 2027) say more.
+2. **Compounder Overweights allowed at half size.** `sizing.lane_buy_only: []` (was `[compounder]`, the user's 2026-10-24 choice). The evidence is mixed and thin (1-year −2.0, 3-year +5.6, hold-out +16.8); with the cap, the cost of being wrong is bounded, and the live record then holds the process's own best ideas (A1: Deckers).
+3. **European momentum ETF: yes, at 10% of the account.** CEMR, with the pre-registered sell rule (trails MSCI Europe by > 5 points over any rolling three years from purchase, or MSCI's 10-year factsheet edge below +1 point). The user trades manually and records it like any ticker. Ruling: the low end of 10–15% — the evidenced edge is over MSCI Europe, not over SPY, so against the benchmark it is a diversification position with a factor premium, not a return bet.
+4. **Next agent round: go.** Built behind a config flag, A/B measured by Brier against the unchanged graph (D1 §6). Spec and plan follow in this ledger.
+
+Ruling: the sizing changes went live before the Saturday 09:00 review; they touch `actions` only, not the agents, so the data-route check on that review is unaffected.
