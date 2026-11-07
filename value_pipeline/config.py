@@ -46,6 +46,7 @@ DEFAULTS: dict = {
         "min_run_rate": 0.8,
         "candidate_countries": [],
         "candidate_markets": [],
+        "agent_round": "current",
     },
     "watch": {"buy_margin_of_safety": 0.30, "max_rating_age_days": 120},
     "daily": {"enabled": True, "scope": "holdings", "max_reviews": 3, "cooldown_days": 5, "big_move": 0.15,
@@ -126,6 +127,8 @@ def _merge(base: dict, override: dict) -> dict:
     return out
 
 
+AGENT_ROUNDS = ("current", "independent", "ab")
+
 # Numbers that disable a safeguard at zero: the cost cap would never block, sizes would be nothing.
 _POSITIVE = {"cost_per_run", "max_cost_per_review", "max_position_weight", "max_sector_weight", "max_stock_share", "min_holdings",
              "max_reviews", "min_daily_value", "big_move", "positions", "check_positions", "equity"}
@@ -160,6 +163,9 @@ def validate_config(cfg: dict) -> None:
         if not isinstance(country, str) or not country.strip():
             raise ValueError(f"review.candidate_countries entries must be country names, not {country!r}")
     _validate_candidate_markets(cfg["review"]["candidate_markets"])
+    if cfg["review"]["agent_round"] not in AGENT_ROUNDS:
+        raise ValueError(f"review.agent_round must be one of {', '.join(AGENT_ROUNDS)}, "
+                         f"not {cfg['review']['agent_round']!r}")
     share = cfg["parking"]["share"]
     if not 0 <= share <= 1:
         raise ValueError(f"parking.share must be between 0 and 1 (a share of the idle money), not {share!r}")

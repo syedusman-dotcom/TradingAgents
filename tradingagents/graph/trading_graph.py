@@ -174,11 +174,12 @@ class TradingAgentsGraph:
         ])
 
     def propagate(self, company_name, trade_date, asset_type: str = "stock", portfolio=None,
-                  context_note: str = ""):
+                  context_note: str = "", agent_round: str = "current"):
         """Run the trading agents graph for a company on a specific date.
 
         ``context_note`` is appended to the instrument context every agent reads (the value
-        pipeline passes its screen figures for the ticker).
+        pipeline passes its screen figures for the ticker). ``agent_round`` names the review
+        arm (``current`` or ``independent``); it travels in the state only.
 
         ``asset_type`` selects between the stock pipeline (default) and the
         crypto pipeline (``"crypto"``) shipped in #567 — the CLI auto-detects
@@ -200,6 +201,7 @@ class TradingAgentsGraph:
             return self._run_graph(
                 company_name, trade_date, asset_type=asset_type,
                 checkpoint_thread_id=thread_id_value, portfolio=portfolio, context_note=context_note,
+                agent_round=agent_round,
             )
 
     def begin_checkpoint(self, company_name, trade_date, asset_type: str = "stock", portfolio=None) -> str | None:
@@ -307,7 +309,7 @@ class TradingAgentsGraph:
         return Path(self.config["results_dir"]) / "reports" / f"{safe_ticker_component(ticker)}_{stamp}"
 
     def create_run_state(self, company_name, trade_date, asset_type: str = "stock", portfolio=None,
-                         context_note: str = ""):
+                         context_note: str = "", agent_round: str = "current"):
         """Build a run's initial state; propagate() and the CLI both start here.
 
         Injects the resolved instrument identity for every agent (#814). The
@@ -322,6 +324,7 @@ class TradingAgentsGraph:
             instrument_context=self.resolve_instrument_context(company_name, asset_type, trade_date,
                                                                note=context_note),
             portfolio_context=portfolio.render(company_name) if portfolio is not None else "",
+            agent_round=agent_round,
         )
 
     def _memory_step(self, state):
@@ -397,11 +400,12 @@ class TradingAgentsGraph:
                 set_context(company_name, trade_date, self.config.get("tool_vendors"))
 
     def _run_graph(self, company_name, trade_date, asset_type: str = "stock",
-                   checkpoint_thread_id: str | None = None, portfolio=None, context_note: str = ""):
+                   checkpoint_thread_id: str | None = None, portfolio=None, context_note: str = "",
+                   agent_round: str = "current"):
         """Execute the graph and write the resulting state to disk and memory log."""
         self.tell_models(company_name, trade_date)
         init_agent_state = self.create_run_state(company_name, trade_date, asset_type, portfolio,
-                                                 context_note=context_note)
+                                                 context_note=context_note, agent_round=agent_round)
         args = self.propagator.get_graph_args()
 
         # Inject the checkpoint thread_id (from checkpoint_scope) so the same

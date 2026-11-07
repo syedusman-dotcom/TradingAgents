@@ -192,6 +192,11 @@ def build_instrument_context(
     return context
 
 
+def arm_of(state: Mapping[str, Any]) -> str:
+    """The review arm of this run: ``independent`` or (also when the field is missing) ``current``."""
+    return state.get("agent_round") or "current"
+
+
 def get_instrument_context_from_state(state: Mapping[str, Any]) -> str:
     """Return the instrument context for the current run.
 

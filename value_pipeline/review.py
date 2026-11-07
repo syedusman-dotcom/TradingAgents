@@ -3,8 +3,10 @@ then write the action list. Positions and cash are never changed here."""
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import re
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -52,6 +54,26 @@ class RunResult:
     name: str | None = None         # the company's name, for ACTIONS
     earnings_date: str | None = None  # the next earnings date (ISO) when the review ran
     nominal_cost_usd: float = 0.0   # what the calls would have cost at API prices (measured, not the estimate)
+    agent_round: str = "current"    # the review arm that produced it
+    blind_value: float | None = None  # the price-blind valuation, independent arm
+    judge_order: str | None = None  # which case the Research Manager read first, independent arm
+
+
+def arm_for(ticker: str, date: str, setting: str) -> str:
+    """The review arm for ``review.agent_round``: fixed, or for ``ab`` drawn from a hash of the
+    ticker and date, so a resumed run gets the same arm."""
+    if setting != "ab":
+        return setting
+    even = int(hashlib.sha256(f"{ticker}:{date}".encode()).hexdigest(), 16) % 2 == 0
+    return "independent" if even else "current"
+
+
+_MISSING = re.compile(r"not provided|not retrieved|returned nothing|could not retrieve|unavailable", re.I)
+
+
+def missing_data_lines(text: str) -> int:
+    """How many places the decision text says some data was missing."""
+    return len(_MISSING.findall(text or ""))
 
 
 # --- running the agents ---------------------------------------------------------
@@ -137,7 +159,7 @@ def pipeline_note(row: dict | None) -> str:
 
 
 def run_agents(ta, ticker: str, day: str, portfolio_ctx, out_dir: Path, tally=None,
-               note: str = "") -> RunResult:
+               note: str = "", arm: str = "current") -> RunResult:
     """One TradingAgents run, retried once; a second failure is reported, not raised. ``note``
     (``pipeline_note``) is appended to the instrument context every agent reads."""
     from tradingagents.agents.rating import is_review
@@ -147,6 +169,7 @@ def run_agents(ta, ticker: str, day: str, portfolio_ctx, out_dir: Path, tally=No
         tally.reset()  # once: a failed attempt's tokens were still spent
     name = _company_name(ticker)
     extra = {"context_note": note} if note else {}
+    extra["agent_round"] = arm
     for attempt in (1, 2):
         try:
             final_state, rating = ta.propagate(ticker, day, portfolio=portfolio_ctx, **extra)
@@ -155,13 +178,16 @@ def run_agents(ta, ticker: str, day: str, portfolio_ctx, out_dir: Path, tally=No
             return RunResult(ticker, "REVIEW" if is_review(rating) else rating,
                              final_state.get("final_trade_decision", ""), f"{ticker}/complete_report.html",
                              tokens_in=used.get("tokens_in", 0), tokens_out=used.get("tokens_out", 0),
-                             nominal_cost_usd=used.get("nominal_cost_usd", 0.0), name=name)
+                             nominal_cost_usd=used.get("nominal_cost_usd", 0.0), name=name,
+                             agent_round=arm, blind_value=None,
+                             judge_order=final_state.get("judge_order") or None)
         except Exception as exc:  # noqa: BLE001 - one failed ticker must not stop the review
             error = f"{type(exc).__name__}: {exc}"
             log.warning("%s run %d failed: %s", ticker, attempt, error)
     used = tally.snapshot() if tally else {}
     return RunResult(ticker, "REVIEW", error=error, tokens_in=used.get("tokens_in", 0),
-                     tokens_out=used.get("tokens_out", 0), nominal_cost_usd=used.get("nominal_cost_usd", 0.0), name=name)
+                     tokens_out=used.get("tokens_out", 0), nominal_cost_usd=used.get("nominal_cost_usd", 0.0), name=name,
+                     agent_round=arm)
 
 
 _FAKE_HELD = ("Buy", "Hold", "Underweight", "Sell", "Overweight")
@@ -568,6 +594,8 @@ def _run(paths: Paths, cfg: dict, *, yes: bool, dry_run: bool, today: str | None
     usage = None
     if dry_run:
         results = [fake_run(t, i, t in owned, prices[t]) for i, t in enumerate(tickers)]
+        for r in results:
+            r.agent_round = arm_for(r.ticker, today, rcfg["agent_round"])
     else:
         if ta is None:
             ta, tally = _graph(rcfg)
@@ -576,7 +604,8 @@ def _run(paths: Paths, cfg: dict, *, yes: bool, dry_run: bool, today: str | None
         ctx = pf.to_context()
         for i, t in enumerate(tickers, 1):
             print(f"[{i}/{len(tickers)}] {t}...", flush=True)
-            results.append(run_agents(ta, t, today, ctx, out_dir, tally, note=pipeline_note(screen_row.get(t))))
+            results.append(run_agents(ta, t, today, ctx, out_dir, tally, note=pipeline_note(screen_row.get(t)),
+                                     arm=arm_for(t, today, rcfg["agent_round"])))
         usage = {key: sum(getattr(r, key) for r in results) + scan_usage.get(key, 0)
                  for key in ("tokens_in", "tokens_out", "nominal_cost_usd")}
         usage = {**usage,
@@ -642,6 +671,8 @@ def _run(paths: Paths, cfg: dict, *, yes: bool, dry_run: bool, today: str | None
     trends = {d.ticker: d.trend for d in decisions}
     rows = [
         {"ticker": r.ticker, "name": r.name, "rating": r.rating, "error": r.error, "report": r.report,
+         "agent_round": r.agent_round, "missing_data_lines": missing_data_lines(r.decision),
+         "blind_value": r.blind_value, "judge_order": r.judge_order,
          "earnings_date": r.earnings_date, "trend": trends.get(r.ticker),
          "tokens_in": r.tokens_in, "tokens_out": r.tokens_out, "nominal_cost_usd": round(r.nominal_cost_usd, 4),
          "intrinsic_value": parse.intrinsic_value(r.decision), "margin_of_safety": parse.margin_of_safety(r.decision),

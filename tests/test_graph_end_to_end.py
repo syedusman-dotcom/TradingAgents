@@ -129,6 +129,17 @@ def _graph(tmp_path, monkeypatch, model, debug=False, **config):
 
 
 @pytest.mark.unit
+def test_the_arm_reaches_the_final_state(tmp_path, monkeypatch, offline):
+    graph = _graph(tmp_path, monkeypatch, ScriptedModel())
+    state, _ = graph.propagate("NVDA", TRADE_DATE)
+    assert state["agent_round"] == "current"
+    state, _ = _graph(tmp_path / "b", monkeypatch, ScriptedModel()).propagate(
+        "NVDA", TRADE_DATE, agent_round="independent")
+    assert state["agent_round"] == "independent"
+    assert state["blind_valuation"] == state["base_rates"] == state["judge_order"] == ""
+
+
+@pytest.mark.unit
 @pytest.mark.parametrize("structured", [False, True], ids=["free-text", "structured"])
 def test_a_full_run_reaches_a_logged_decision(tmp_path, monkeypatch, offline, structured):
     graph = _graph(tmp_path, monkeypatch, ScriptedModel(structured=structured))

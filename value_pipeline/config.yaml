@@ -85,6 +85,10 @@ review:
   # allocation and swaps, and names concentration risks; ACTIONS shows where it disagrees with
   # the rules (it can never buy a stock its own review rated Sell). false to skip it.
   committee: true
+  # Which review process runs: current, independent, or ab (each ticker and date is assigned to
+  # one arm at random, the arm recorded in results.json). See
+  # docs/superpowers/specs/2026-11-07-agent-round-design.md.
+  agent_round: ab
 
 sizing:
   max_position_weight: 0.05   # never target more than 5% of the portfolio per stock (2026-11-07: half the

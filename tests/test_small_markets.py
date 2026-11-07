@@ -310,3 +310,15 @@ def test_an_sp600_only_backtest_has_no_join_dates(tmp_path, monkeypatch):
     assert result["joins_known"] is False and result["survivorship"] == {}
     text = backtest.markdown(result)
     assert backtest.NO_JOINS in text and backtest.SURVIVORSHIP not in text
+
+
+@pytest.mark.unit
+def test_agent_round_is_validated_and_ships_as_ab():
+    assert DEFAULTS["review"]["agent_round"] == "current"
+    cfg = copy.deepcopy(DEFAULTS)
+    cfg["review"]["agent_round"] = "both"
+    with pytest.raises(ValueError, match="agent_round"):
+        validate_config(cfg)
+    shipped = config.load_config()
+    validate_config(shipped)
+    assert shipped["review"]["agent_round"] == "ab"
