@@ -34,6 +34,27 @@ def latest_watch(paths: Paths) -> tuple[str, str] | None:
 
 
 _COST = re.compile(r"Cost of this review: ~?(\$[\d,.]+)")
+_SIDE = {"BUY": "BUY", "ADD": "BUY", "TRIM": "SELL", "SELL": "SELL"}
+
+
+def actions_needed(paths: Paths) -> dict | None:
+    """The newest review's trades to place, each marked done when a trade of the same side in that
+    ticker was recorded on or after the review's date. None without a review that wrote the list."""
+    for folder in reviewmod.review_dirs(paths):
+        f = folder / "actions.json"
+        if not f.exists():
+            continue
+        todo = json.loads(f.read_text(encoding="utf-8"))
+        trades = pfmod.read_trades(paths)
+        items = []
+        for item in todo["items"]:
+            side = _SIDE.get(item["action"])
+            done = any(t["ticker"] == item["ticker"] and t["action"] == side and t["date"] >= todo["date"]
+                       for t in trades)
+            items.append({**item, "done": done})
+        return {"date": todo["date"], "folder": folder.name, "items": items,
+                "open": sum(1 for i in items if not i["done"])}
+    return None
 
 
 def _results(folder: Path) -> list[dict]:

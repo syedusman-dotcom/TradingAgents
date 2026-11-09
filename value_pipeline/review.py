@@ -725,6 +725,7 @@ def _run(paths: Paths, cfg: dict, *, yes: bool, dry_run: bool, today: str | None
     (out_dir / "ACTIONS.html").write_text(render.actions_html(md, f"Value review {today}"), encoding="utf-8")
     # Written whole: the website reads these files while a review may be finishing.
     _write_whole(out_dir / "results.json", rows)
+    _write_whole(out_dir / "actions.json", actions_todo(today, actions, summary.get("parking"), fund))
     if committee:
         _write_whole(out_dir / "committee.json", {**committee[0].model_dump(), "notes": committee[1]})
 
@@ -776,6 +777,19 @@ def _parking(p, fund: str, price: float | None, fx: tuple[str | None, float | No
     currency = fx[0] or (p.currency if p is not None else None)
     return held_value, settings, {"ticker": fund, "value": held_value, "priced": price_usd is not None,
                                   "currency": currency, "fx": rate if price_usd is not None else None}
+
+
+def actions_todo(today: str, actions: list, move: dict | None, fund: str | None) -> dict:
+    """The trades a review asks the user to place, for the dashboard's "Actions needed": every
+    ADD/TRIM/SELL/BUY action and the index-fund move, in ACTIONS order. KEEP and SKIP are not
+    actions."""
+    items = [{"ticker": a.ticker, "action": a.action, "shares": a.shares, "amount": a.amount,
+              "reason": a.reason} for a in actions if a.action in ("ADD", "TRIM", "SELL", "BUY")]
+    if move and fund:
+        park = move["action"] == "PARK"
+        items.append({"ticker": fund, "action": "BUY" if park else "SELL", "shares": move.get("shares"),
+                      "amount": move["amount"], "reason": "park the idle money" if park else "fund the buys"})
+    return {"date": today, "items": items}
 
 
 def _write_whole(path: Path, data) -> None:

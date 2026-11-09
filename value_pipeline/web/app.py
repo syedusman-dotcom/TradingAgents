@@ -119,7 +119,7 @@ def create_app(paths: Paths, *, config_path: Path = CONFIG_PATH, price_fn=market
                                   {"Portfolio": [s["portfolio"] for s in series],
                                    "SPY, same cash flows": [s["spy"] for s in series]})
         return render(request, "dashboard.html", view=view, chart=chart, watch=views.latest_watch(paths),
-                      next_review=views.next_review_date(date.today()))
+                      actions=views.actions_needed(paths), next_review=views.next_review_date(date.today()))
 
     @app.post("/start")
     async def start(request: Request):

@@ -10,6 +10,24 @@
   {% endif %}
   <div class="card"><span class="muted">Next review</span><b>{{ next_review.strftime("%a %d %b") }}</b></div>
 </div>
+{% if actions %}
+<h2>Actions needed</h2>
+<p class="muted">From the review of {{ actions.date }} (<a href="/reports/{{ actions.folder }}/ACTIONS.md">ACTIONS</a>). Nothing is traded for you: place each order at your broker, then <a href="/trade">record the fill</a>.</p>
+{% if actions.open %}
+<div class="table"><table>
+<tr><th>Ticker</th><th>Action</th><th class="num">Shares</th><th class="num">Amount</th><th>Reason</th></tr>
+{% for a in actions["items"] if not a.done %}
+<tr>
+  <td><a href="/stock/{{ a.ticker }}">{{ a.ticker }}</a></td>
+  <td>{{ a.action }}</td>
+  <td class="num">{{ "{:g}".format(a.shares) if a.shares is not none else "–" }}</td>
+  <td class="num">{{ "{:,.2f}".format(a.amount) if a.amount is not none else "–" }}</td>
+  <td>{{ a.reason }}</td>
+</tr>
+{% endfor %}
+</table></div>
+{% else %}<p class="muted">Every action of that review is recorded.</p>{% endif %}
+{% endif %}
 {% if chart %}<h2>Value over time</h2>{{ chart | safe }}{% endif %}
 <h2>Holdings</h2>
 {% if view.positions %}

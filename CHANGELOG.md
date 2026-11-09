@@ -10,6 +10,7 @@ Changes that need action when upgrading are listed under "Upgrading from" in the
 
 ### Added
 
+- **Actions needed on the dashboard.** A review writes `actions.json` (the trades it asks for); the dashboard lists the ones not yet recorded as fills, with a link to the ACTIONS page and the Trade page.
 - Value pipeline agent round: `review.agent_round` (`current`, `independent` or `ab`) assigns each review to an arm and records it with `missing_data_lines` in `results.json`. The independent arm adds a price-blind valuer, bull and bear cases made independently (the bear with its own evidence pack) and judged in random order, and a Portfolio Manager that reconciles the blind value and starts its scenarios from Base Rate Book sales-growth cohorts; in both arms the kill criteria reach the agents and the Portfolio Manager checks them. The calibration page and `calibration` show Brier scores per arm and the adoption rule, fixed in advance, that decides which arm becomes the default.
 
 ## [0.7.1] — 2026-10-27

@@ -752,3 +752,69 @@ def test_backtest_page_links_the_momentum_report(tmp_path):
     assert "momentum_2026-10-01" not in r.text
     assert 'href="/reports/backtest/trend_2026-11-05.html"' in r.text
     assert client.get("/reports/backtest/momentum_2026-11-05.html").text == "<html>momentum</html>"
+
+
+@pytest.mark.unit
+def test_actions_todo_lists_the_trades_a_review_asks_for():
+    from value_pipeline.actions import Action
+    from value_pipeline.review import actions_todo
+
+    actions = [Action("HRB", True, "Overweight", "TRIM", "above the cap", amount=72.41, shares=1.3742),
+               Action("ADBE", False, "Buy", "BUY", "cheap", amount=500.0, shares=2.0),
+               Action("DECK", False, "Hold", "SKIP", "not cheap"),
+               Action("FICO", True, "Hold", "KEEP", "thesis intact")]
+    move = {"action": "PARK", "amount": 8672.83, "shares": 316.3}
+    todo = actions_todo("2026-11-07", actions, move, "0P0001K6NL.ST")
+    assert todo["date"] == "2026-11-07"
+    assert [(i["ticker"], i["action"]) for i in todo["items"]] == [
+        ("HRB", "TRIM"), ("ADBE", "BUY"), ("0P0001K6NL.ST", "BUY")]
+    assert todo["items"][0]["shares"] == 1.3742 and todo["items"][0]["amount"] == 72.41
+    assert todo["items"][2]["reason"] == "park the idle money"
+    unpark = actions_todo("2026-11-07", [], {"action": "UNPARK", "amount": 100.0, "shares": None}, "F")
+    assert unpark["items"] == [{"ticker": "F", "action": "SELL", "shares": None, "amount": 100.0,
+                                "reason": "fund the buys"}]
+    assert actions_todo("2026-11-07", [], None, None)["items"] == []
+
+
+@pytest.mark.unit
+def test_actions_needed_marks_recorded_fills_done(tmp_path):
+    paths = Paths(tmp_path / "data")
+    ops.init_portfolio(paths, 1000.0)
+    ops.record_buy(paths, "HRB", 3, 40.0)          # a buy is not the trim the review asks for
+    folder = paths.reports / "2026-11-07"
+    folder.mkdir(parents=True)
+    (folder / "actions.json").write_text(json.dumps({"date": "2026-11-07", "items": [
+        {"ticker": "HRB", "action": "TRIM", "shares": 1.0, "amount": 44.0, "reason": "above the cap"},
+        {"ticker": "ADBE", "action": "BUY", "shares": 2.0, "amount": 480.0, "reason": "cheap"},
+        {"ticker": "F", "action": "BUY", "shares": None, "amount": 300.0, "reason": "park the idle money"}]}))
+    assert views.actions_needed(paths)["open"] == 3
+    ops.record_sell(paths, "HRB", 1, 44.0)
+    ops.record_buy(paths, "F", 10, 30.0)
+    needed = views.actions_needed(paths)
+    assert needed["date"] == "2026-11-07" and needed["folder"] == "2026-11-07" and needed["open"] == 1
+    done = {i["ticker"]: i["done"] for i in needed["items"]}
+    assert done == {"HRB": True, "ADBE": False, "F": True}
+    # an older review's list is not shown once a newer review exists
+    newer = paths.reports / "2026-11-14"
+    newer.mkdir()
+    (newer / "actions.json").write_text(json.dumps({"date": "2026-11-14", "items": []}))
+    assert views.actions_needed(paths)["open"] == 0
+    assert views.actions_needed(Paths(tmp_path / "empty")) is None
+
+
+@pytest.mark.unit
+def test_dashboard_shows_the_actions_still_to_record(tmp_path):
+    client, app, paths = _client(tmp_path)
+    ops.init_portfolio(paths, 1000.0)
+    folder = paths.reports / "2026-11-07"
+    folder.mkdir(parents=True)
+    (folder / "actions.json").write_text(json.dumps({"date": "2026-11-07", "items": [
+        {"ticker": "HRB", "action": "TRIM", "shares": 1.3742, "amount": 72.41, "reason": "above the cap"}]}))
+    (folder / "ACTIONS.md").write_text("# Value review 2026-11-07")
+    ops.record_buy(paths, "HRB", 3, 40.0)
+    r = client.get("/")
+    assert "Actions needed" in r.text and "TRIM" in r.text and "1.3742" in r.text and "above the cap" in r.text
+    assert "/reports/2026-11-07/ACTIONS.md" in r.text
+    ops.record_sell(paths, "HRB", 2, 44.0)
+    r = client.get("/")
+    assert "Actions needed" in r.text and "recorded" in r.text and "above the cap" not in r.text
