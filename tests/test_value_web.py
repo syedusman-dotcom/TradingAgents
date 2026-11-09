@@ -814,7 +814,20 @@ def test_dashboard_shows_the_actions_still_to_record(tmp_path):
     ops.record_buy(paths, "HRB", 3, 40.0)
     r = client.get("/")
     assert "Actions needed" in r.text and "TRIM" in r.text and "1.3742" in r.text and "above the cap" in r.text
-    assert "/reports/2026-11-07/ACTIONS.md" in r.text
+    assert "/reports/2026-11-07/ACTIONS.html" in r.text
     ops.record_sell(paths, "HRB", 2, 44.0)
     r = client.get("/")
     assert "Actions needed" in r.text and "recorded" in r.text and "above the cap" not in r.text
+
+
+@pytest.mark.unit
+def test_markdown_reports_are_served_as_pages(tmp_path):
+    client, app, paths = _client(tmp_path)
+    folder = paths.reports / "2026-11-07"
+    folder.mkdir(parents=True)
+    (folder / "ACTIONS.md").write_text("# Value review 2026-11-07\n\n## Holdings\n\n| Ticker | Action |\n|---|---|\n| HRB | TRIM |\n")
+    r = client.get("/reports/2026-11-07/ACTIONS.md")
+    assert r.status_code == 200 and r.headers["content-type"].startswith("text/html")
+    assert "<h2>Holdings</h2>" in r.text and "<td>HRB</td>" in r.text
+    (folder / "results.json").write_text("[]")
+    assert client.get("/reports/2026-11-07/results.json").headers["content-type"].startswith("application/json")

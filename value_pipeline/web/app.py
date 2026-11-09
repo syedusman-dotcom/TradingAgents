@@ -27,6 +27,7 @@ from value_pipeline import (
     momentum,
     operations as ops,
     portfolio as pfmod,
+    render as render_mod,
     review as reviewmod,
     superinvestors,
     trend,
@@ -224,6 +225,10 @@ def create_app(paths: Paths, *, config_path: Path = CONFIG_PATH, price_fn=market
         target = views.safe_report_path(paths, rel)
         if target is None:
             return HTMLResponse("Not found", status_code=404)
+        if target.suffix == ".md":      # a Markdown report reads as a page, not as source
+            text = target.read_text(encoding="utf-8")
+            title = text.splitlines()[0].lstrip("# ").strip() if text.strip() else target.stem
+            return HTMLResponse(render_mod.actions_html(text, title))
         return FileResponse(target)
 
     @app.get("/stock/{ticker}", response_class=HTMLResponse)
