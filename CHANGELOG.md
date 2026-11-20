@@ -8,6 +8,10 @@ Changes that need action when upgrading are listed under "Upgrading from" in the
 
 ## [Unreleased]
 
+### Fixed
+
+- **A hanging price refresh no longer parks a run.** Each refresh has a 60-second deadline and after five failures in a row the rest of the run serves cached prices; the scheduled run of 2026-11-20 sat in one Yahoo socket poll for twelve hours.
+
 ### Added
 
 - **Actions needed on the dashboard.** A review writes `actions.json` (the trades it asks for); the dashboard lists the ones not yet recorded as fills, with a link to the ACTIONS page and the Trade page.

@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -312,6 +313,48 @@ def _price_is_stale(data: dict, price_days: int) -> bool:
         return True
 
 
+# A price refresh that has not answered in this many seconds is given up (the record is served as
+# cached); the thread it ran in is left to finish on its own. On 2026-11-20 one Yahoo call sat in a
+# socket poll for twelve hours and parked the scheduled run.
+REFRESH_DEADLINE = 60.0
+# After this many refresh failures in a row the rest of the run serves cached prices without
+# asking Yahoo again: a dead connection costs one deadline, not one per ticker.
+REFRESH_BREAKER = 5
+_refresh_failures = 0
+
+
+def reset_refresh_breaker() -> None:
+    global _refresh_failures
+    _refresh_failures = 0
+
+
+def _refresh_with_deadline(ticker: str, data: dict) -> dict:
+    """``_refresh_price`` under ``REFRESH_DEADLINE`` and the breaker. Raises ``DataUnavailable``
+    when the breaker is open or the deadline passes; re-raises the refresh's own errors. The call
+    runs in a daemon thread so a call that never returns cannot hold the process at exit either."""
+    global _refresh_failures
+    if _refresh_failures >= REFRESH_BREAKER:
+        raise DataUnavailable(f"skipped: {_refresh_failures} refreshes failed in a row")
+    box: dict = {}
+
+    def work():
+        try:
+            box["out"] = _refresh_price(ticker, data)
+        except Exception as exc:  # noqa: BLE001 - handed back to the caller
+            box["exc"] = exc
+    worker = threading.Thread(target=work, name=f"price-refresh-{ticker}", daemon=True)
+    worker.start()
+    worker.join(REFRESH_DEADLINE)
+    if worker.is_alive():
+        _refresh_failures += 1
+        raise DataUnavailable(f"no answer after {REFRESH_DEADLINE:.0f}s")
+    if "exc" in box:
+        _refresh_failures += 1
+        raise box["exc"]
+    _refresh_failures = 0
+    return box["out"]
+
+
 def _refresh_price(ticker: str, data: dict) -> dict:
     """``data`` with today's price (the last close), closes and ``price_at`` from one Yahoo call.
     Market cap and enterprise value move with the price, in the units the record already has;
@@ -355,7 +398,7 @@ def fundamentals(ticker: str, paths: Paths, cache_days: int = 7, price_days: int
         if fresh and data.get("schema") == CACHE_SCHEMA and "quarters" in data:
             if price_days is not None and _price_is_stale(data, price_days):
                 try:
-                    refreshed = _refresh_price(ticker, data)
+                    refreshed = _refresh_with_deadline(ticker, data)
                     _write_cache(cache, refreshed)
                 except Exception as exc:  # noqa: BLE001 - Yahoo raises many types
                     log.warning("price refresh failed for %s: %s", ticker, exc)

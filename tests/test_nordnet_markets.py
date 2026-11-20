@@ -814,3 +814,38 @@ def test_an_unreadable_cache_file_is_fetched_again_and_replaced(tmp_path, monkey
     assert data["price"] == 20.0 and not data.get("from_cache")
     assert json.loads((paths.cache / "ABC.json").read_text())["price"] == 20.0
     assert not list(paths.cache.glob("*.tmp"))
+
+
+@pytest.mark.unit
+def test_a_hanging_price_refresh_serves_the_cached_record(tmp_path, monkeypatch):
+    import time as _time
+    paths = Paths(tmp_path)
+    _cached_record(paths)
+    monkeypatch.setattr(market_data, "REFRESH_DEADLINE", 0.05)
+    monkeypatch.setattr(market_data, "closes", lambda t, days=400: _time.sleep(1) or [])
+    market_data.reset_refresh_breaker()
+    data = market_data.fundamentals("ABC", paths, cache_days=7, price_days=1)
+    assert data["price"] == 10.0 and data["from_cache"] is True and "price_refreshed" not in data
+    assert json.loads((paths.cache / "ABC.json").read_text())["price"] == 10.0
+
+
+@pytest.mark.unit
+def test_repeated_refresh_failures_trip_a_breaker(tmp_path, monkeypatch):
+    paths = Paths(tmp_path)
+    calls = []
+
+    def failing(t, days=400):
+        calls.append(t)
+        raise RuntimeError("boom")
+    monkeypatch.setattr(market_data, "closes", failing)
+    monkeypatch.setattr(market_data, "REFRESH_BREAKER", 3)
+    market_data.reset_refresh_breaker()
+    for i in range(5):
+        _cached_record(paths)
+        (paths.cache / f"T{i}.json").write_text((paths.cache / "ABC.json").read_text(), encoding="utf-8")
+        data = market_data.fundamentals(f"T{i}", paths, cache_days=7, price_days=1)
+        assert data["from_cache"] is True and "price_refreshed" not in data
+    assert calls == ["T0", "T1", "T2"]      # after three failures in a row no refresh is attempted
+    market_data.reset_refresh_breaker()
+    _fake_yahoo(monkeypatch)
+    assert market_data.fundamentals("ABC", paths, cache_days=7, price_days=1)["price_refreshed"] is True
