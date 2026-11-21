@@ -205,3 +205,7 @@ A2 status 09:35: built on branch `agent-round` (11 commits, 2,504 tests, ruff cl
 
 ## Z — done 2026-11-07 12:00 CET
 Final report updated with the Saturday outcome, the committee fix and the A2 section; re-sent. Memory file updated. Open follow-ups unchanged (`missing_data_lines` counts other rendered "not provided" lines; ADR in statement currency not skipped by the Blind Valuer; blind revenue CAGR without SEC history; same-day report filename collisions; EDGAR mapping for 217 leavers; random-sell counterfactual; ESAP API July 2027).
+
+## Follow-up noted 2026-11-21 01:50 CET — Blind Valuer growth above the base-rate cap
+
+In the independent arm the Blind Valuer's values run well above the Portfolio Manager's and the formula's for growing companies (two Nordic reviews on 2026-11-14 and 2026-11-20 came out two to three times the PM's value). Checked: not a unit or share-count error. The valuer took 20% nominal growth for five years against an 11.8% base rate, citing the accounts, and 9% against 7.7% in the second case, so the interpolated-75th-percentile cap in the prompt is not binding on the blind pass. Measured only, never acted on; no change to either arm before the 180-day read. Candidate fix for after the read: pass the cohort cap as a hard ceiling in the Blind Valuer prompt and record when the valuer argues above it.
